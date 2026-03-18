@@ -4,7 +4,7 @@ import sys
 import wave
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from core import analyze_wav_file
+from core import analyze_wav_file, load_rms_series
 from helpers import workspace_tempdir, write_test_wav
 
 
@@ -60,6 +60,25 @@ class AudioProcessingTests(unittest.TestCase):
             self.assertAlmostEqual(result.duration_sec, 1.0, places=2)
             self.assertAlmostEqual(result.leading_silence_end_sec, 1.0, places=2)
             self.assertAlmostEqual(result.trailing_silence_start_sec, 0.0, places=2)
+
+    def test_rms_series_is_generated_from_wav(self) -> None:
+        with workspace_tempdir("audio_rms") as tmp_dir:
+            wav_path = tmp_dir / "rms.wav"
+            write_test_wav(
+                wav_path,
+                sample_rate=44100,
+                lead_sec=0.1,
+                speech_sec=0.4,
+                trail_sec=0.1,
+            )
+
+            rms = load_rms_series(str(wav_path), window_ms=25.0, hop_ms=10.0, smoothing_frames=3)
+
+            self.assertGreater(len(rms.times_sec), 0)
+            self.assertEqual(len(rms.times_sec), len(rms.values))
+            self.assertTrue(all(t2 >= t1 for t1, t2 in zip(rms.times_sec, rms.times_sec[1:])))
+            self.assertTrue(all(0.0 <= value <= 1.0 for value in rms.values))
+            self.assertAlmostEqual(rms.duration_sec, 0.6, places=2)
 
 
 if __name__ == "__main__":

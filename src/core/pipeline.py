@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-from core.audio_processing import WavAnalysisResult, analyze_wav_file
+from core.audio_processing import RmsSeriesData, WavAnalysisResult, analyze_wav_file, load_rms_series
 from core.text_processing import text_to_vowel_sequence
 from core.whisper_timing import (
     SpeechTimingAnchor,
@@ -14,6 +14,11 @@ from core.whisper_timing import (
 from vmd_writer import VowelTimelinePoint, write_morph_vmd
 
 _MIN_EVENT_DURATION_SEC = 1e-6
+_RMS_BOUNDARY_SEARCH_SEC = 0.08
+_RMS_THRESHOLD_RATIO = 0.35
+_RMS_ABS_MIN_THRESHOLD = 0.01
+_RMS_MIN_REFINED_DURATION_SEC = 0.03
+_RMS_MAX_ADJACENT_OVERLAP_SEC = 0.02
 
 
 class PipelineError(ValueError):
@@ -188,6 +193,12 @@ def build_vowel_timing_plan(
         speech_start_sec=wav_analysis.speech_start_sec,
         speech_end_sec=wav_analysis.speech_end_sec,
     )
+    timeline = _refine_timeline_intervals_with_rms(
+        timeline=timeline,
+        wav_path=wav_path,
+        speech_start_sec=wav_analysis.speech_start_sec,
+        speech_end_sec=wav_analysis.speech_end_sec,
+    )
 
     return VowelTimingPlan(
         vowels=vowels,
@@ -353,6 +364,315 @@ def _allocate_vowels_to_anchors(
 
 def _timeline_has_non_positive_duration(timeline: Sequence[VowelTimelinePoint]) -> bool:
     return any(point.duration_sec <= 0 for point in timeline)
+
+
+def _refine_timeline_intervals_with_rms(
+    *,
+    timeline: Sequence[VowelTimelinePoint],
+    wav_path: str | Path,
+    speech_start_sec: float,
+    speech_end_sec: float,
+) -> list[VowelTimelinePoint]:
+    if not timeline:
+        return []
+
+    try:
+        rms_series = load_rms_series(str(wav_path), stereo_mode="average")
+    except (ValueError, OSError, EOFError):
+        return list(timeline)
+
+    return _refine_intervals_by_rms_series(
+        timeline=timeline,
+        rms_series=rms_series,
+        speech_start_sec=speech_start_sec,
+        speech_end_sec=speech_end_sec,
+    )
+
+
+def _refine_intervals_by_rms_series(
+    *,
+    timeline: Sequence[VowelTimelinePoint],
+    rms_series: RmsSeriesData,
+    speech_start_sec: float,
+    speech_end_sec: float,
+) -> list[VowelTimelinePoint]:
+    if not timeline:
+        return []
+    if not rms_series.times_sec or not rms_series.values:
+        return list(timeline)
+
+    if speech_end_sec < speech_start_sec:
+        speech_start_sec, speech_end_sec = speech_end_sec, speech_start_sec
+
+    refined: list[VowelTimelinePoint] = []
+    for point in timeline:
+        base_start_sec = (
+            point.start_sec
+            if point.start_sec is not None
+            else (point.time_sec - (point.duration_sec * 0.5))
+        )
+        base_end_sec = (
+            point.end_sec
+            if point.end_sec is not None
+            else (point.time_sec + (point.duration_sec * 0.5))
+        )
+        if base_end_sec < base_start_sec:
+            base_end_sec = base_start_sec
+
+        search_start_sec = max(speech_start_sec, base_start_sec - _RMS_BOUNDARY_SEARCH_SEC)
+        search_end_sec = min(speech_end_sec, base_end_sec + _RMS_BOUNDARY_SEARCH_SEC)
+        local_peak = _rms_local_peak(
+            times_sec=rms_series.times_sec,
+            values=rms_series.values,
+            start_sec=search_start_sec,
+            end_sec=search_end_sec,
+        )
+        if local_peak <= _RMS_ABS_MIN_THRESHOLD:
+            refined.append(
+                VowelTimelinePoint(
+                    time_sec=point.time_sec,
+                    vowel=point.vowel,
+                    value=point.value,
+                    duration_sec=point.duration_sec,
+                    start_sec=base_start_sec,
+                    end_sec=base_end_sec,
+                )
+            )
+            continue
+
+        threshold = max(local_peak * _RMS_THRESHOLD_RATIO, _RMS_ABS_MIN_THRESHOLD)
+        start_candidate = _first_rms_above(
+            times_sec=rms_series.times_sec,
+            values=rms_series.values,
+            start_sec=search_start_sec,
+            end_sec=point.time_sec,
+            threshold=threshold,
+        )
+        end_candidate = _last_rms_above(
+            times_sec=rms_series.times_sec,
+            values=rms_series.values,
+            start_sec=point.time_sec,
+            end_sec=search_end_sec,
+            threshold=threshold,
+        )
+
+        refined_start_sec = base_start_sec if start_candidate is None else start_candidate
+        refined_end_sec = base_end_sec if end_candidate is None else end_candidate
+        refined_start_sec = min(refined_start_sec, point.time_sec)
+        refined_end_sec = max(refined_end_sec, point.time_sec)
+        refined_start_sec = max(speech_start_sec, refined_start_sec)
+        refined_end_sec = min(speech_end_sec, refined_end_sec)
+        refined_start_sec, refined_end_sec = _ensure_min_interval(
+            start_sec=refined_start_sec,
+            end_sec=refined_end_sec,
+            center_sec=point.time_sec,
+            min_duration_sec=_RMS_MIN_REFINED_DURATION_SEC,
+            lower_bound_sec=speech_start_sec,
+            upper_bound_sec=speech_end_sec,
+        )
+
+        refined.append(
+            VowelTimelinePoint(
+                time_sec=point.time_sec,
+                vowel=point.vowel,
+                value=point.value,
+                duration_sec=refined_end_sec - refined_start_sec,
+                start_sec=refined_start_sec,
+                end_sec=refined_end_sec,
+            )
+        )
+
+    return _resolve_adjacent_interval_conflicts(
+        timeline=refined,
+        speech_start_sec=speech_start_sec,
+        speech_end_sec=speech_end_sec,
+    )
+
+
+def _rms_local_peak(
+    *,
+    times_sec: Sequence[float],
+    values: Sequence[float],
+    start_sec: float,
+    end_sec: float,
+) -> float:
+    peak = 0.0
+    for time_sec, value in zip(times_sec, values):
+        if time_sec < start_sec or time_sec > end_sec:
+            continue
+        if value > peak:
+            peak = value
+    return peak
+
+
+def _first_rms_above(
+    *,
+    times_sec: Sequence[float],
+    values: Sequence[float],
+    start_sec: float,
+    end_sec: float,
+    threshold: float,
+) -> float | None:
+    if end_sec < start_sec:
+        return None
+    for time_sec, value in zip(times_sec, values):
+        if time_sec < start_sec:
+            continue
+        if time_sec > end_sec:
+            break
+        if value >= threshold:
+            return time_sec
+    return None
+
+
+def _last_rms_above(
+    *,
+    times_sec: Sequence[float],
+    values: Sequence[float],
+    start_sec: float,
+    end_sec: float,
+    threshold: float,
+) -> float | None:
+    if end_sec < start_sec:
+        return None
+    last: float | None = None
+    for time_sec, value in zip(times_sec, values):
+        if time_sec < start_sec:
+            continue
+        if time_sec > end_sec:
+            break
+        if value >= threshold:
+            last = time_sec
+    return last
+
+
+def _ensure_min_interval(
+    *,
+    start_sec: float,
+    end_sec: float,
+    center_sec: float,
+    min_duration_sec: float,
+    lower_bound_sec: float,
+    upper_bound_sec: float,
+) -> tuple[float, float]:
+    if end_sec < start_sec:
+        end_sec = start_sec
+
+    start_sec = min(start_sec, center_sec)
+    end_sec = max(end_sec, center_sec)
+    duration_sec = end_sec - start_sec
+    if duration_sec >= min_duration_sec:
+        return start_sec, end_sec
+
+    half = min_duration_sec * 0.5
+    expanded_start = center_sec - half
+    expanded_end = center_sec + half
+
+    if expanded_start < lower_bound_sec:
+        shift = lower_bound_sec - expanded_start
+        expanded_start += shift
+        expanded_end += shift
+    if expanded_end > upper_bound_sec:
+        shift = expanded_end - upper_bound_sec
+        expanded_start -= shift
+        expanded_end -= shift
+
+    expanded_start = max(lower_bound_sec, expanded_start)
+    expanded_end = min(upper_bound_sec, expanded_end)
+    expanded_start = min(expanded_start, center_sec)
+    expanded_end = max(expanded_end, center_sec)
+    if expanded_end < expanded_start:
+        expanded_end = expanded_start
+    return expanded_start, expanded_end
+
+
+def _event_interval(point: VowelTimelinePoint) -> tuple[float, float]:
+    start_sec = point.start_sec
+    end_sec = point.end_sec
+    if start_sec is None and end_sec is None:
+        half = max(point.duration_sec, 0.0) * 0.5
+        return (point.time_sec - half, point.time_sec + half)
+    if start_sec is None:
+        end_sec = float(end_sec)
+        return (min(point.time_sec, end_sec), end_sec)
+    if end_sec is None:
+        start_sec = float(start_sec)
+        return (start_sec, max(point.time_sec, start_sec))
+    return (float(start_sec), float(end_sec))
+
+
+def _resolve_adjacent_interval_conflicts(
+    *,
+    timeline: Sequence[VowelTimelinePoint],
+    speech_start_sec: float,
+    speech_end_sec: float,
+) -> list[VowelTimelinePoint]:
+    if not timeline:
+        return []
+
+    first_start_sec, first_end_sec = _event_interval(timeline[0])
+    resolved: list[VowelTimelinePoint] = [
+        VowelTimelinePoint(
+            time_sec=timeline[0].time_sec,
+            vowel=timeline[0].vowel,
+            value=timeline[0].value,
+            duration_sec=timeline[0].duration_sec,
+            start_sec=max(speech_start_sec, first_start_sec),
+            end_sec=min(speech_end_sec, first_end_sec),
+        )
+    ]
+
+    for point in timeline[1:]:
+        prev = resolved[-1]
+        prev_start, prev_end = _event_interval(prev)
+        curr_start, curr_end = _event_interval(point)
+        min_curr_start = prev.end_sec - _RMS_MAX_ADJACENT_OVERLAP_SEC
+
+        if curr_start < min_curr_start:
+            if point.time_sec >= min_curr_start:
+                curr_start = min_curr_start
+            else:
+                prev_end = min(prev_end, point.time_sec + _RMS_MAX_ADJACENT_OVERLAP_SEC)
+                prev_end = max(prev.time_sec, prev_end)
+                resolved[-1] = VowelTimelinePoint(
+                    time_sec=prev.time_sec,
+                    vowel=prev.vowel,
+                    value=prev.value,
+                    duration_sec=prev_end - prev_start,
+                    start_sec=prev_start,
+                    end_sec=prev_end,
+                )
+                min_curr_start = resolved[-1].end_sec - _RMS_MAX_ADJACENT_OVERLAP_SEC
+                curr_start = max(curr_start, min(min_curr_start, point.time_sec))
+
+        curr_start = max(speech_start_sec, min(curr_start, point.time_sec))
+        curr_end = min(speech_end_sec, max(curr_end, point.time_sec))
+        curr_start, curr_end = _ensure_min_interval(
+            start_sec=curr_start,
+            end_sec=curr_end,
+            center_sec=point.time_sec,
+            min_duration_sec=_RMS_MIN_REFINED_DURATION_SEC,
+            lower_bound_sec=speech_start_sec,
+            upper_bound_sec=speech_end_sec,
+        )
+
+        if curr_start < resolved[-1].end_sec - _RMS_MAX_ADJACENT_OVERLAP_SEC:
+            curr_start = resolved[-1].end_sec - _RMS_MAX_ADJACENT_OVERLAP_SEC
+            curr_start = min(curr_start, point.time_sec)
+            curr_end = max(curr_end, point.time_sec)
+
+        resolved.append(
+            VowelTimelinePoint(
+                time_sec=point.time_sec,
+                vowel=point.vowel,
+                value=point.value,
+                duration_sec=curr_end - curr_start,
+                start_sec=curr_start,
+                end_sec=curr_end,
+            )
+        )
+
+    return resolved
 
 
 def _infer_durations_from_midpoints(

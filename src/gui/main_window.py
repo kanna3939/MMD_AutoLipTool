@@ -2,6 +2,7 @@ from pathlib import Path
 
 from core import (
     PipelineError,
+    RmsSeriesData,
     TextProcessingError,
     VowelTimingPlan,
     WavAnalysisResult,
@@ -9,6 +10,7 @@ from core import (
     build_vowel_timing_plan,
     generate_vmd_from_text_wav,
     hiragana_to_vowel_string,
+    load_rms_series,
     load_waveform_preview,
     text_to_hiragana,
 )
@@ -36,6 +38,7 @@ class MainWindow(QWidget):
         self.selected_hiragana_content: str = ""
         self.selected_vowel_content: str = ""
         self.selected_wav_analysis: WavAnalysisResult | None = None
+        self.selected_rms_series: RmsSeriesData | None = None
         self.current_timing_plan: VowelTimingPlan | None = None
 
         layout = QVBoxLayout()
@@ -156,6 +159,7 @@ class MainWindow(QWidget):
             wav_info = analyze_wav_file(file_path)
         except (ValueError, OSError, EOFError) as error:
             self.selected_wav_analysis = None
+            self.selected_rms_series = None
             self.current_timing_plan = None
             self.wav_waveform_view.clear_morph_labels()
             self.wav_waveform_view.show_placeholder("Waveform preview (load failed)")
@@ -170,6 +174,7 @@ class MainWindow(QWidget):
             waveform_preview = load_waveform_preview(file_path, max_points=3000, stereo_mode="average")
         except (ValueError, OSError, EOFError) as error:
             self.selected_wav_analysis = None
+            self.selected_rms_series = None
             self.current_timing_plan = None
             self.wav_waveform_view.clear_morph_labels()
             self.wav_waveform_view.show_placeholder("Waveform preview (load failed)")
@@ -182,6 +187,10 @@ class MainWindow(QWidget):
 
         self.selected_wav_path = file_path
         self.selected_wav_analysis = wav_info
+        try:
+            self.selected_rms_series = load_rms_series(file_path, stereo_mode="average")
+        except (ValueError, OSError, EOFError):
+            self.selected_rms_series = None
         self.current_timing_plan = None
         self.wav_path_label.setText(f"WAV: {Path(file_path).name}")
         self.wav_info_label.setText(

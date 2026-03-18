@@ -77,7 +77,7 @@ def write_morph_vmd(
     model_name: str = "AutoLipTool",
 ) -> Path:
     points = _normalize_timeline(timeline)
-    morph_frames = _build_peak_morph_frames(points)
+    morph_frames = _build_interval_morph_frames(points)
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -200,6 +200,55 @@ def _build_peak_morph_frames(
 
     expanded.sort(key=lambda x: x[0])
     return expanded
+
+
+def _build_interval_morph_frames(
+    points: list[VowelTimelinePoint],
+) -> list[tuple[int, str, float]]:
+    expanded: list[tuple[int, str, float]] = []
+    for point in points:
+        start_sec, end_sec = _event_bounds(point)
+        center_frame = _sec_to_frame(point.time_sec)
+        start_frame = _sec_to_frame(start_sec)
+        end_frame = _sec_to_frame(end_sec)
+
+        if end_frame <= start_frame:
+            expanded.extend(_build_peak_morph_frames([point]))
+            continue
+
+        rise_end_frame = min(center_frame, start_frame + PEAK_SIDE_FRAME_OFFSET)
+        fall_start_frame = max(center_frame, end_frame - PEAK_SIDE_FRAME_OFFSET)
+
+        if fall_start_frame <= rise_end_frame:
+            peak_frame = center_frame
+            if peak_frame <= start_frame:
+                peak_frame = min(start_frame + 1, end_frame)
+            if peak_frame >= end_frame:
+                peak_frame = max(end_frame - 1, start_frame)
+
+            if peak_frame <= start_frame or peak_frame >= end_frame:
+                expanded.extend(_build_peak_morph_frames([point]))
+                continue
+
+            expanded.append((start_frame, point.vowel, 0.0))
+            expanded.append((peak_frame, point.vowel, point.value))
+            expanded.append((end_frame, point.vowel, 0.0))
+            continue
+
+        expanded.append((start_frame, point.vowel, 0.0))
+        expanded.append((rise_end_frame, point.vowel, point.value))
+        expanded.append((fall_start_frame, point.vowel, point.value))
+        expanded.append((end_frame, point.vowel, 0.0))
+
+    expanded.sort(key=lambda x: x[0])
+    return expanded
+
+
+def _event_bounds(point: VowelTimelinePoint) -> tuple[float, float]:
+    if point.start_sec is not None and point.end_sec is not None:
+        return (point.start_sec, point.end_sec)
+    half = max(point.duration_sec, 0.0) * 0.5
+    return (point.time_sec - half, point.time_sec + half)
 
 
 def _sec_to_frame(time_sec: float) -> int:
