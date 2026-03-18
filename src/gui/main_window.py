@@ -2,9 +2,12 @@ from pathlib import Path
 
 from core import (
     PipelineError,
+    WavAnalysisResult,
     analyze_wav_file,
+    build_even_vowel_timeline,
     generate_vmd_from_text_wav,
     load_waveform_preview,
+    text_to_vowel_sequence,
 )
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -26,6 +29,8 @@ class MainWindow(QWidget):
 
         self.selected_text_path: str | None = None
         self.selected_wav_path: str | None = None
+        self.selected_text_content: str = ""
+        self.selected_wav_analysis: WavAnalysisResult | None = None
 
         layout = QVBoxLayout()
 
@@ -92,8 +97,10 @@ class MainWindow(QWidget):
             return
 
         self.selected_text_path = file_path
+        self.selected_text_content = text_content
         self.text_path_label.setText(f"TEXT: {Path(file_path).name}")
         self.text_preview.setPlainText(text_content)
+        self._refresh_waveform_morph_labels()
         self._set_output_status("\u51fa\u529b\u72b6\u614b: \u5165\u529b\u6e96\u5099\u4e2d")
 
     def _select_wav_file(self) -> None:
@@ -109,6 +116,8 @@ class MainWindow(QWidget):
         try:
             wav_info = analyze_wav_file(file_path)
         except (ValueError, OSError, EOFError) as error:
+            self.selected_wav_analysis = None
+            self.wav_waveform_view.clear_morph_labels()
             self.wav_waveform_view.show_placeholder("Waveform preview (load failed)")
             self._show_warning(
                 title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
@@ -120,6 +129,8 @@ class MainWindow(QWidget):
         try:
             waveform_preview = load_waveform_preview(file_path, max_points=3000, stereo_mode="average")
         except (ValueError, OSError, EOFError) as error:
+            self.selected_wav_analysis = None
+            self.wav_waveform_view.clear_morph_labels()
             self.wav_waveform_view.show_placeholder("Waveform preview (load failed)")
             self._show_warning(
                 title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
@@ -129,6 +140,7 @@ class MainWindow(QWidget):
             return
 
         self.selected_wav_path = file_path
+        self.selected_wav_analysis = wav_info
         self.wav_path_label.setText(f"WAV: {Path(file_path).name}")
         self.wav_info_label.setText(
             "WAV\u60c5\u5831: "
@@ -141,6 +153,7 @@ class MainWindow(QWidget):
             waveform_preview.samples,
             waveform_preview.duration_sec,
         )
+        self._refresh_waveform_morph_labels()
         self._set_output_status("\u51fa\u529b\u72b6\u614b: \u5165\u529b\u6e96\u5099\u4e2d")
 
     def _export_vmd(self) -> None:
@@ -208,6 +221,28 @@ class MainWindow(QWidget):
 
     def _set_output_status(self, text: str) -> None:
         self.output_status_label.setText(text)
+
+    def _refresh_waveform_morph_labels(self) -> None:
+        if not self.selected_wav_analysis or not self.selected_text_content:
+            self.wav_waveform_view.clear_morph_labels()
+            return
+
+        if not self.selected_wav_analysis.has_speech:
+            self.wav_waveform_view.clear_morph_labels()
+            return
+
+        vowels = text_to_vowel_sequence(self.selected_text_content)
+        if not vowels:
+            self.wav_waveform_view.clear_morph_labels()
+            return
+
+        timeline = build_even_vowel_timeline(
+            vowels=vowels,
+            speech_start_sec=self.selected_wav_analysis.speech_start_sec,
+            speech_end_sec=self.selected_wav_analysis.speech_end_sec,
+        )
+        labels = [(point.time_sec, point.vowel) for point in timeline]
+        self.wav_waveform_view.set_morph_labels(labels)
 
     def _show_warning(self, title: str, message: str, status: str | None = None) -> None:
         QMessageBox.warning(self, title, message)

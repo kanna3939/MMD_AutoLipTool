@@ -56,7 +56,7 @@ class PipelineAndVmdTests(unittest.TestCase):
 
             self.assertEqual(header, b"Vocaloid Motion Data 0002")
             self.assertEqual(bone_count, 0)
-            self.assertEqual(morph_count, 5)
+            self.assertEqual(morph_count, 15)
 
 
 if __name__ == "__main__":
