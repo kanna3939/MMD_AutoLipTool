@@ -45,3 +45,26 @@
   - モーフ高さの音量連動は未実装（固定 `0.5` 維持）。
 - Verification:
   - `.\.venv\Scripts\python.exe -m unittest discover -s tests` を実行し、`OK` を確認。
+
+---
+
+## Entry 2026-03-19 / Session: pre-rise-zero-guard-v0332
+
+- Date: 2026-03-19
+- Session: pre-rise-zero-guard-v0332
+- Summary:
+  - 台形モーフで同一モーフ再登場時に発生する「立ち上がり前ゼロ不足」を最小変更で補正。
+  - 同一モーフ・同一フレームの 0/非0 衝突を検出し、rise_start の 0 を 1 フレーム前へ退避。
+  - README/仕様書を Ver 0.3.3.2 の内容へ更新。
+- Modified Files:
+  - `src/vmd_writer/writer.py`: rise_start ゼロ衝突の検出・退避ロジックを追加。
+  - `README.md`: バージョンを `Ver 0.3.3.2` に更新し、ゼロ保証修正を機能欄へ追記。
+  - `Specifications_Prompt_v1.md`: 立ち上がり前ゼロ保証の仕様追補を追加。
+  - `Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - `tests/test_vmd_writer_zero_guard.py`: 同フレーム衝突時の `-1` フレーム退避と frame 0 例外のテストを追加。
+- Notes:
+  - モーフ高さの音量連動は未実装（固定値運用のまま）。
+  - GUI表示用イベント列とVMD出力用イベント列の二重化はしていない。
+- Verification:
+  - `\.\.venv\Scripts\python.exe -m unittest discover -s tests` を実行し、`OK (26 tests)` を確認。
