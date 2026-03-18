@@ -205,7 +205,7 @@ def _build_peak_morph_frames(
 def _build_interval_morph_frames(
     points: list[VowelTimelinePoint],
 ) -> list[tuple[int, str, float]]:
-    expanded: list[tuple[int, str, float]] = []
+    expanded_with_flags: list[tuple[int, str, float, bool]] = []
     for point in points:
         start_sec, end_sec = _event_bounds(point)
         center_frame = _sec_to_frame(point.time_sec)
@@ -213,7 +213,8 @@ def _build_interval_morph_frames(
         end_frame = _sec_to_frame(end_sec)
 
         if end_frame <= start_frame:
-            expanded.extend(_build_peak_morph_frames([point]))
+            for frame_no, vowel, value in _build_peak_morph_frames([point]):
+                expanded_with_flags.append((frame_no, vowel, value, False))
             continue
 
         rise_end_frame = min(center_frame, start_frame + PEAK_SIDE_FRAME_OFFSET)
@@ -227,21 +228,44 @@ def _build_interval_morph_frames(
                 peak_frame = max(end_frame - 1, start_frame)
 
             if peak_frame <= start_frame or peak_frame >= end_frame:
-                expanded.extend(_build_peak_morph_frames([point]))
+                for frame_no, vowel, value in _build_peak_morph_frames([point]):
+                    expanded_with_flags.append((frame_no, vowel, value, False))
                 continue
 
-            expanded.append((start_frame, point.vowel, 0.0))
-            expanded.append((peak_frame, point.vowel, point.value))
-            expanded.append((end_frame, point.vowel, 0.0))
+            expanded_with_flags.append((start_frame, point.vowel, 0.0, True))
+            expanded_with_flags.append((peak_frame, point.vowel, point.value, False))
+            expanded_with_flags.append((end_frame, point.vowel, 0.0, False))
             continue
 
-        expanded.append((start_frame, point.vowel, 0.0))
-        expanded.append((rise_end_frame, point.vowel, point.value))
-        expanded.append((fall_start_frame, point.vowel, point.value))
-        expanded.append((end_frame, point.vowel, 0.0))
+        expanded_with_flags.append((start_frame, point.vowel, 0.0, True))
+        expanded_with_flags.append((rise_end_frame, point.vowel, point.value, False))
+        expanded_with_flags.append((fall_start_frame, point.vowel, point.value, False))
+        expanded_with_flags.append((end_frame, point.vowel, 0.0, False))
+
+    expanded_with_flags = _shift_conflicting_rise_start_zeros(expanded_with_flags)
+    expanded = [(frame_no, vowel, value) for frame_no, vowel, value, _ in expanded_with_flags]
 
     expanded.sort(key=lambda x: x[0])
     return expanded
+
+
+def _shift_conflicting_rise_start_zeros(
+    frames: list[tuple[int, str, float, bool]],
+) -> list[tuple[int, str, float, bool]]:
+    # Resolve same-frame 0/non-zero collision only for rise-start zero keys.
+    non_zero_at_frame = {
+        (vowel, frame_no)
+        for frame_no, vowel, value, _ in frames
+        if value > 0.0
+    }
+
+    adjusted: list[tuple[int, str, float, bool]] = []
+    for frame_no, vowel, value, is_rise_start_zero in frames:
+        if is_rise_start_zero and (vowel, frame_no) in non_zero_at_frame:
+            adjusted.append((max(0, frame_no - 1), vowel, value, is_rise_start_zero))
+            continue
+        adjusted.append((frame_no, vowel, value, is_rise_start_zero))
+    return adjusted
 
 
 def _event_bounds(point: VowelTimelinePoint) -> tuple[float, float]:
