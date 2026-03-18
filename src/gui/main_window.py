@@ -1,6 +1,6 @@
-import wave
 from pathlib import Path
 
+from core import PipelineError, analyze_wav_file, generate_vmd_from_text_wav
 from PySide6.QtWidgets import (
     QFileDialog,
     QLabel,
@@ -43,9 +43,11 @@ class MainWindow(QWidget):
         )
         self.wav_preview_label.setMinimumHeight(120)
         self.wav_preview_label.setStyleSheet("border: 1px solid #888; padding: 8px;")
+        self.output_status_label = QLabel("\u51fa\u529b\u72b6\u614b: \u672a\u5b9f\u884c")
 
         self.text_button.clicked.connect(self._select_text_file)
         self.wav_button.clicked.connect(self._select_wav_file)
+        self.output_button.clicked.connect(self._export_vmd)
 
         layout.addWidget(self.text_button)
         layout.addWidget(self.text_path_label)
@@ -56,6 +58,7 @@ class MainWindow(QWidget):
         layout.addWidget(self.wav_info_label)
         layout.addWidget(self.wav_preview_label)
         layout.addWidget(self.output_button)
+        layout.addWidget(self.output_status_label)
 
         self.setLayout(layout)
 
@@ -72,23 +75,24 @@ class MainWindow(QWidget):
         try:
             text_content = Path(file_path).read_text(encoding="utf-8")
         except UnicodeDecodeError:
-            QMessageBox.warning(
-                self,
-                "\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
-                "UTF-8\u306eTEXT\u30d5\u30a1\u30a4\u30eb\u3067\u306f\u306a\u3044\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059\u3002",
+            self._show_warning(
+                title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
+                message="UTF-8\u306eTEXT\u30d5\u30a1\u30a4\u30eb\u3067\u306f\u306a\u3044\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059\u3002",
+                status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
             )
             return
         except OSError as error:
-            QMessageBox.warning(
-                self,
-                "\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
-                f"TEXT\u30d5\u30a1\u30a4\u30eb\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093: {error}",
+            self._show_warning(
+                title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
+                message=f"TEXT\u30d5\u30a1\u30a4\u30eb\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093: {error}",
+                status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
             )
             return
 
         self.selected_text_path = file_path
         self.text_path_label.setText(f"TEXT: {Path(file_path).name}")
         self.text_preview.setPlainText(text_content)
+        self._set_output_status("\u51fa\u529b\u72b6\u614b: \u5165\u529b\u6e96\u5099\u4e2d")
 
     def _select_wav_file(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
@@ -101,12 +105,12 @@ class MainWindow(QWidget):
             return
 
         try:
-            wav_info = self._load_wav_info(file_path)
-        except (wave.Error, OSError, EOFError) as error:
-            QMessageBox.warning(
-                self,
-                "\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
-                f"WAV\u30d5\u30a1\u30a4\u30eb\u3092\u89e3\u6790\u3067\u304d\u307e\u305b\u3093: {error}",
+            wav_info = analyze_wav_file(file_path)
+        except (ValueError, OSError, EOFError) as error:
+            self._show_warning(
+                title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
+                message=f"WAV\u30d5\u30a1\u30a4\u30eb\u3092\u89e3\u6790\u3067\u304d\u307e\u305b\u3093: {error}",
+                status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
             )
             return
 
@@ -115,25 +119,86 @@ class MainWindow(QWidget):
         self.wav_info_label.setText(
             "WAV\u60c5\u5831: "
             f"\u30d5\u30a1\u30a4\u30eb\u540d={Path(file_path).name} / "
-            f"\u518d\u751f\u6642\u9593={wav_info['duration_sec']:.3f}s / "
-            f"\u30b5\u30f3\u30d7\u30ea\u30f3\u30b0\u5468\u6ce2\u6570={wav_info['sample_rate_hz']}Hz"
+            f"\u518d\u751f\u6642\u9593={wav_info.duration_sec:.3f}s / "
+            f"\u30b5\u30f3\u30d7\u30ea\u30f3\u30b0\u5468\u6ce2\u6570={wav_info.sample_rate_hz}Hz / "
+            f"\u767a\u8a71={wav_info.speech_start_sec:.3f}s-{wav_info.speech_end_sec:.3f}s"
         )
         self.wav_preview_label.setText(
             "\u6ce2\u5f62\u8868\u793a\u9818\u57df\uff08\u672a\u5b9f\u88c5\uff09\n"
-            f"\u30b5\u30f3\u30d7\u30eb\u6570: {wav_info['frame_count']} / "
-            f"\u30c1\u30e3\u30f3\u30cd\u30eb\u6570: {wav_info['channel_count']}"
+            f"\u30b5\u30f3\u30d7\u30eb\u6570: {wav_info.frame_count} / "
+            f"\u30c1\u30e3\u30f3\u30cd\u30eb\u6570: {wav_info.channel_count}\n"
+            f"\u5148\u982d\u7121\u97f3\u7d42\u7aef: {wav_info.leading_silence_end_sec:.3f}s / "
+            f"\u672b\u5c3e\u7121\u97f3\u958b\u59cb: {wav_info.trailing_silence_start_sec:.3f}s"
+        )
+        self._set_output_status("\u51fa\u529b\u72b6\u614b: \u5165\u529b\u6e96\u5099\u4e2d")
+
+    def _export_vmd(self) -> None:
+        if not self._has_required_inputs():
+            self._show_warning(
+                title="\u5165\u529b\u4e0d\u8db3",
+                message="TEXT\u3068WAV\u306e\u4e21\u65b9\u3092\u8aad\u307f\u8fbc\u3093\u3067\u304b\u3089\u51fa\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+                status="\u51fa\u529b\u72b6\u614b: \u5165\u529b\u4e0d\u8db3",
+            )
+            return
+
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "VMD\u30d5\u30a1\u30a4\u30eb\u306e\u4fdd\u5b58\u5148\u3092\u9078\u629e",
+            "",
+            "VMD Files (*.vmd);;All Files (*)",
+        )
+        if not output_path:
+            self._set_output_status("\u51fa\u529b\u72b6\u614b: \u30ad\u30e3\u30f3\u30bb\u30eb")
+            return
+
+        out_path = Path(output_path)
+        if out_path.suffix.lower() != ".vmd":
+            out_path = out_path.with_suffix(".vmd")
+
+        try:
+            result = generate_vmd_from_text_wav(
+                text_path=self.selected_text_path,
+                wav_path=self.selected_wav_path,
+                output_path=out_path,
+            )
+        except PipelineError as error:
+            self._show_warning(
+                title="\u51fa\u529b\u30a8\u30e9\u30fc",
+                message=f"VMD\u306e\u51fa\u529b\u306b\u5931\u6557\u3057\u307e\u3057\u305f: {error}",
+                status="\u51fa\u529b\u72b6\u614b: \u5931\u6557",
+            )
+            return
+        except OSError as error:
+            self._show_warning(
+                title="\u51fa\u529b\u30a8\u30e9\u30fc",
+                message=f"VMD\u4fdd\u5b58\u6642\u306b\u30d5\u30a1\u30a4\u30eb\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f: {error}",
+                status="\u51fa\u529b\u72b6\u614b: \u5931\u6557",
+            )
+            return
+        except Exception as error:
+            self._show_warning(
+                title="\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc",
+                message=f"\u51e6\u7406\u4e2d\u306b\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f: {error}",
+                status="\u51fa\u529b\u72b6\u614b: \u5931\u6557",
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            "\u51fa\u529b\u5b8c\u4e86",
+            f"VMD\u3092\u51fa\u529b\u3057\u307e\u3057\u305f:\\n{result.output_path}",
+        )
+        self._set_output_status(
+            f"\u51fa\u529b\u72b6\u614b: \u6210\u529f ({result.output_path.name})"
         )
 
-    def _load_wav_info(self, file_path: str) -> dict[str, float | int]:
-        with wave.open(file_path, "rb") as wav_file:
-            sample_rate_hz = wav_file.getframerate()
-            frame_count = wav_file.getnframes()
-            channel_count = wav_file.getnchannels()
-            duration_sec = frame_count / sample_rate_hz if sample_rate_hz else 0.0
+    def _has_required_inputs(self) -> bool:
+        return bool(self.selected_text_path and self.selected_wav_path)
 
-        return {
-            "sample_rate_hz": sample_rate_hz,
-            "frame_count": frame_count,
-            "channel_count": channel_count,
-            "duration_sec": duration_sec,
-        }
+    def _set_output_status(self, text: str) -> None:
+        self.output_status_label.setText(text)
+
+    def _show_warning(self, title: str, message: str, status: str | None = None) -> None:
+        QMessageBox.warning(self, title, message)
+        if status:
+            self._set_output_status(status)
