@@ -15,6 +15,14 @@ class WavAnalysisResult:
     has_speech: bool
 
 
+@dataclass(frozen=True)
+class WaveformPreviewData:
+    sample_rate_hz: int
+    channel_count: int
+    duration_sec: float
+    samples: list[float]
+
+
 def analyze_wav_file(file_path: str, silence_threshold: float = 0.02) -> WavAnalysisResult:
     if not 0.0 <= silence_threshold <= 1.0:
         raise ValueError("silence_threshold must be between 0.0 and 1.0")
@@ -77,6 +85,52 @@ def analyze_wav_file(file_path: str, silence_threshold: float = 0.02) -> WavAnal
     )
 
 
+def load_waveform_preview(
+    file_path: str,
+    max_points: int = 3000,
+    stereo_mode: str = "average",
+) -> WaveformPreviewData:
+    if max_points <= 0:
+        raise ValueError("max_points must be > 0")
+    if stereo_mode not in ("average", "left"):
+        raise ValueError("stereo_mode must be 'average' or 'left'")
+
+    try:
+        with wave.open(file_path, "rb") as wav_file:
+            if wav_file.getcomptype() != "NONE":
+                raise ValueError("Only uncompressed PCM WAV is supported")
+
+            sample_rate_hz = wav_file.getframerate()
+            if sample_rate_hz <= 0:
+                raise ValueError("Invalid WAV sample rate")
+
+            frame_count = wav_file.getnframes()
+            channel_count = wav_file.getnchannels()
+            sample_width = wav_file.getsampwidth()
+            if sample_width not in (1, 2, 3, 4):
+                raise ValueError(f"Unsupported sample width: {sample_width} bytes")
+
+            raw_frames = wav_file.readframes(frame_count)
+    except (wave.Error, EOFError) as error:
+        raise ValueError(f"Invalid WAV file: {error}") from error
+
+    mono_samples = _decode_mono_samples(
+        raw_frames=raw_frames,
+        frame_count=frame_count,
+        channel_count=channel_count,
+        sample_width=sample_width,
+        stereo_mode=stereo_mode,
+    )
+    preview_samples = _downsample_samples(mono_samples, max_points=max_points)
+
+    return WaveformPreviewData(
+        sample_rate_hz=sample_rate_hz,
+        channel_count=channel_count,
+        duration_sec=frame_count / sample_rate_hz,
+        samples=preview_samples,
+    )
+
+
 def _detect_speech_frame_range(
     raw_frames: bytes,
     frame_count: int,
@@ -105,6 +159,61 @@ def _detect_speech_frame_range(
     if first_speech_frame is None or last_speech_frame is None:
         return None
     return first_speech_frame, last_speech_frame
+
+
+def _decode_mono_samples(
+    raw_frames: bytes,
+    frame_count: int,
+    channel_count: int,
+    sample_width: int,
+    stereo_mode: str,
+) -> list[float]:
+    frame_size = sample_width * channel_count
+    available_frames = min(frame_count, len(raw_frames) // frame_size)
+    if available_frames <= 0:
+        return []
+
+    scale = _pcm_scale(sample_width)
+    samples: list[float] = []
+    offset = 0
+
+    for _ in range(available_frames):
+        frame = raw_frames[offset : offset + frame_size]
+        offset += frame_size
+
+        channel_values: list[int] = []
+        for channel_index in range(channel_count):
+            start = channel_index * sample_width
+            end = start + sample_width
+            channel_values.append(_decode_pcm_sample(frame[start:end], sample_width=sample_width))
+
+        if channel_count == 1 or stereo_mode == "left":
+            mono = channel_values[0]
+        else:
+            mono = int(sum(channel_values) / channel_count)
+
+        normalized = mono / scale if scale else 0.0
+        if normalized > 1.0:
+            normalized = 1.0
+        if normalized < -1.0:
+            normalized = -1.0
+        samples.append(normalized)
+
+    return samples
+
+
+def _downsample_samples(samples: list[float], max_points: int) -> list[float]:
+    if len(samples) <= max_points:
+        return samples
+
+    sampled: list[float] = []
+    step = len(samples) / max_points
+    for index in range(max_points):
+        src_index = int(index * step)
+        if src_index >= len(samples):
+            src_index = len(samples) - 1
+        sampled.append(samples[src_index])
+    return sampled
 
 
 def _frame_peak(frame: bytes, channel_count: int, sample_width: int) -> float:

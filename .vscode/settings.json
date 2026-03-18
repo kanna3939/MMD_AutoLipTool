@@ -1,3 +1,6 @@
 {
-  "python.defaultInterpreterPath": "${workspaceFolder}/.venv"
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv",
+  "cSpell.words": [
+    "ver"
+  ]
 }

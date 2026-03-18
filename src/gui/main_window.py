@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from core import PipelineError, analyze_wav_file, generate_vmd_from_text_wav
+from core import (
+    PipelineError,
+    analyze_wav_file,
+    generate_vmd_from_text_wav,
+    load_waveform_preview,
+)
 from PySide6.QtWidgets import (
     QFileDialog,
     QLabel,
@@ -10,6 +15,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from gui.waveform_view import WaveformView
 
 
 class MainWindow(QWidget):
@@ -38,11 +44,7 @@ class MainWindow(QWidget):
         self.wav_info_label = QLabel(
             "WAV\u60c5\u5831: \u672a\u8aad\u307f\u8fbc\u307f"
         )
-        self.wav_preview_label = QLabel(
-            "\u6ce2\u5f62\u8868\u793a\u9818\u57df\uff08\u672a\u5b9f\u88c5\uff09"
-        )
-        self.wav_preview_label.setMinimumHeight(120)
-        self.wav_preview_label.setStyleSheet("border: 1px solid #888; padding: 8px;")
+        self.wav_waveform_view = WaveformView()
         self.output_status_label = QLabel("\u51fa\u529b\u72b6\u614b: \u672a\u5b9f\u884c")
 
         self.text_button.clicked.connect(self._select_text_file)
@@ -56,7 +58,7 @@ class MainWindow(QWidget):
         layout.addWidget(self.wav_button)
         layout.addWidget(self.wav_path_label)
         layout.addWidget(self.wav_info_label)
-        layout.addWidget(self.wav_preview_label)
+        layout.addWidget(self.wav_waveform_view)
         layout.addWidget(self.output_button)
         layout.addWidget(self.output_status_label)
 
@@ -107,9 +109,21 @@ class MainWindow(QWidget):
         try:
             wav_info = analyze_wav_file(file_path)
         except (ValueError, OSError, EOFError) as error:
+            self.wav_waveform_view.show_placeholder("Waveform preview (load failed)")
             self._show_warning(
                 title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
                 message=f"WAV\u30d5\u30a1\u30a4\u30eb\u3092\u89e3\u6790\u3067\u304d\u307e\u305b\u3093: {error}",
+                status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
+            )
+            return
+
+        try:
+            waveform_preview = load_waveform_preview(file_path, max_points=3000, stereo_mode="average")
+        except (ValueError, OSError, EOFError) as error:
+            self.wav_waveform_view.show_placeholder("Waveform preview (load failed)")
+            self._show_warning(
+                title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
+                message=f"WAV\u6ce2\u5f62\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093: {error}",
                 status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
             )
             return
@@ -123,12 +137,9 @@ class MainWindow(QWidget):
             f"\u30b5\u30f3\u30d7\u30ea\u30f3\u30b0\u5468\u6ce2\u6570={wav_info.sample_rate_hz}Hz / "
             f"\u767a\u8a71={wav_info.speech_start_sec:.3f}s-{wav_info.speech_end_sec:.3f}s"
         )
-        self.wav_preview_label.setText(
-            "\u6ce2\u5f62\u8868\u793a\u9818\u57df\uff08\u672a\u5b9f\u88c5\uff09\n"
-            f"\u30b5\u30f3\u30d7\u30eb\u6570: {wav_info.frame_count} / "
-            f"\u30c1\u30e3\u30f3\u30cd\u30eb\u6570: {wav_info.channel_count}\n"
-            f"\u5148\u982d\u7121\u97f3\u7d42\u7aef: {wav_info.leading_silence_end_sec:.3f}s / "
-            f"\u672b\u5c3e\u7121\u97f3\u958b\u59cb: {wav_info.trailing_silence_start_sec:.3f}s"
+        self.wav_waveform_view.plot_waveform(
+            waveform_preview.samples,
+            waveform_preview.duration_sec,
         )
         self._set_output_status("\u51fa\u529b\u72b6\u614b: \u5165\u529b\u6e96\u5099\u4e2d")
 
