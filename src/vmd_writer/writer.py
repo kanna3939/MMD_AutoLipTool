@@ -8,6 +8,7 @@ from typing import Iterable
 VMD_FPS = 30
 MAX_MORPH_VALUE = 0.5
 SUPPORTED_MORPHS = ("\u3042", "\u3044", "\u3046", "\u3048", "\u304a")
+PEAK_SIDE_FRAME_OFFSET = 2
 
 _VMD_HEADER = b"Vocaloid Motion Data 0002"
 
@@ -25,6 +26,7 @@ def write_morph_vmd(
     model_name: str = "AutoLipTool",
 ) -> Path:
     points = _normalize_timeline(timeline)
+    morph_frames = _build_peak_morph_frames(points)
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -35,12 +37,11 @@ def write_morph_vmd(
         # Bone keyframe count: 0 (this writer outputs morph frames only).
         fp.write(struct.pack("<I", 0))
 
-        fp.write(struct.pack("<I", len(points)))
-        for point in points:
-            frame_no = _sec_to_frame(point.time_sec)
-            fp.write(_encode_shift_jis_fixed(point.vowel, 15))
+        fp.write(struct.pack("<I", len(morph_frames)))
+        for frame_no, vowel, value in morph_frames:
+            fp.write(_encode_shift_jis_fixed(vowel, 15))
             fp.write(struct.pack("<I", frame_no))
-            fp.write(struct.pack("<f", point.value))
+            fp.write(struct.pack("<f", value))
 
         # Camera / Light / Self-shadow / IK keyframe counts: all 0.
         fp.write(struct.pack("<I", 0))
@@ -92,6 +93,23 @@ def _normalize_timeline(
 
     normalized.sort(key=lambda x: x.time_sec)
     return normalized
+
+
+def _build_peak_morph_frames(
+    points: list[VowelTimelinePoint],
+) -> list[tuple[int, str, float]]:
+    expanded: list[tuple[int, str, float]] = []
+    for point in points:
+        center_frame = _sec_to_frame(point.time_sec)
+        before_frame = max(0, center_frame - PEAK_SIDE_FRAME_OFFSET)
+        after_frame = center_frame + PEAK_SIDE_FRAME_OFFSET
+
+        expanded.append((before_frame, point.vowel, 0.0))
+        expanded.append((center_frame, point.vowel, point.value))
+        expanded.append((after_frame, point.vowel, 0.0))
+
+    expanded.sort(key=lambda x: x[0])
+    return expanded
 
 
 def _sec_to_frame(time_sec: float) -> int:
