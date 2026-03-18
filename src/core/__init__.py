@@ -1,4 +1,14 @@
-from .audio_processing import WaveformPreviewData, WavAnalysisResult, analyze_wav_file, load_waveform_preview
+from .audio_processing import (
+    RMS_HOP_MS,
+    RMS_SMOOTHING_FRAMES,
+    RMS_WINDOW_MS,
+    RmsSeriesData,
+    WaveformPreviewData,
+    WavAnalysisResult,
+    analyze_wav_file,
+    load_rms_series,
+    load_waveform_preview,
+)
 from .pipeline import (
     PipelineError,
     PipelineResult,
@@ -23,11 +33,16 @@ __all__ = [
     "PipelineResult",
     "VowelTimingPlan",
     "WaveformPreviewData",
+    "RmsSeriesData",
     "WavAnalysisResult",
     "SpeechTimingAnchor",
     "WhisperTimingError",
     "analyze_wav_file",
+    "load_rms_series",
     "load_waveform_preview",
+    "RMS_WINDOW_MS",
+    "RMS_HOP_MS",
+    "RMS_SMOOTHING_FRAMES",
     "recognize_audio",
     "recognize_audio_timing",
     "build_anchor_based_vowel_timeline",
