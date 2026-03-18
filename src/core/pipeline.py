@@ -173,6 +173,7 @@ def generate_vmd_from_text_wav(
     *,
     silence_threshold: float = 0.02,
     model_name: str = "AutoLipTool",
+    timing_plan: VowelTimingPlan | None = None,
 ) -> PipelineResult:
     text_file = Path(text_path)
     wav_file = Path(wav_path)
@@ -195,18 +196,26 @@ def generate_vmd_from_text_wav(
     except (ValueError, OSError) as error:
         raise PipelineError(f"Failed to analyze WAV file: {error}") from error
 
-    try:
-        timing_plan = build_vowel_timing_plan(
-            text_content=text_content,
-            wav_path=wav_file,
-            wav_analysis=wav_analysis,
-            whisper_model_name="small",
-        )
-    except ValueError as error:
-        raise PipelineError(f"Failed to build vowel timeline: {error}") from error
+    resolved_timing_plan = timing_plan
+    if resolved_timing_plan is None:
+        try:
+            resolved_timing_plan = build_vowel_timing_plan(
+                text_content=text_content,
+                wav_path=wav_file,
+                wav_analysis=wav_analysis,
+                whisper_model_name="small",
+            )
+        except ValueError as error:
+            raise PipelineError(f"Failed to build vowel timeline: {error}") from error
+    elif not resolved_timing_plan.timeline:
+        raise PipelineError("Provided timing plan has no timeline points.")
 
     try:
-        write_morph_vmd(output_path=out_file, timeline=timing_plan.timeline, model_name=model_name)
+        write_morph_vmd(
+            output_path=out_file,
+            timeline=resolved_timing_plan.timeline,
+            model_name=model_name,
+        )
     except OSError as error:
         raise PipelineError(f"Failed to save VMD file: {error}") from error
 
@@ -214,12 +223,12 @@ def generate_vmd_from_text_wav(
         text_path=text_file,
         wav_path=wav_file,
         output_path=out_file,
-        vowels=timing_plan.vowels,
-        timeline=timing_plan.timeline,
+        vowels=resolved_timing_plan.vowels,
+        timeline=resolved_timing_plan.timeline,
         wav_analysis=wav_analysis,
-        timing_anchors=timing_plan.anchors,
-        timing_source=timing_plan.source,
-        timing_warning=timing_plan.warning,
+        timing_anchors=resolved_timing_plan.anchors,
+        timing_source=resolved_timing_plan.source,
+        timing_warning=resolved_timing_plan.warning,
     )
 
 
@@ -304,10 +313,17 @@ def _even_time_in_interval(start_sec: float, end_sec: float, index: int, count: 
     if end_sec <= start_sec:
         return start_sec
 
-    step = (end_sec - start_sec) / count
-    time_sec = start_sec + (step * (index + 0.5))
-    if time_sec < start_sec:
-        return start_sec
-    if time_sec > end_sec:
-        return end_sec
+    span_sec = end_sec - start_sec
+    edge_margin_sec = min(0.012, span_sec * 0.2)
+    inner_start = start_sec + edge_margin_sec
+    inner_end = end_sec - edge_margin_sec
+    if inner_end <= inner_start:
+        return (start_sec + end_sec) * 0.5
+
+    step = (inner_end - inner_start) / count
+    time_sec = inner_start + (step * (index + 0.5))
+    if time_sec < inner_start:
+        return inner_start
+    if time_sec > inner_end:
+        return inner_end
     return time_sec

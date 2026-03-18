@@ -7,6 +7,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from core import (
     SpeechTimingAnchor,
+    VowelTimingPlan,
     WhisperTimingError,
     build_anchor_based_vowel_timeline,
     build_even_vowel_timeline,
@@ -15,7 +16,7 @@ from core import (
 )
 from core.audio_processing import analyze_wav_file
 from helpers import workspace_tempdir, write_test_wav
-from vmd_writer import write_dummy_morph_vmd
+from vmd_writer import VowelTimelinePoint, write_dummy_morph_vmd
 
 
 class PipelineAndVmdTests(unittest.TestCase):
@@ -106,6 +107,47 @@ class PipelineAndVmdTests(unittest.TestCase):
             self.assertEqual(header, b"Vocaloid Motion Data 0002")
             self.assertEqual(bone_count, 0)
             self.assertEqual(morph_count, 15)
+
+    def test_generate_vmd_uses_provided_timing_plan(self) -> None:
+        with workspace_tempdir("provided_plan") as tmp:
+            text_path = tmp / "input.txt"
+            wav_path = tmp / "voice.wav"
+            out_path = tmp / "out.vmd"
+
+            text_path.write_text("あいうえお", encoding="utf-8")
+            write_test_wav(
+                wav_path,
+                sample_rate=44100,
+                lead_sec=0.1,
+                speech_sec=0.6,
+                trail_sec=0.1,
+            )
+
+            provided_timeline = [
+                VowelTimelinePoint(time_sec=0.2, vowel="あ"),
+                VowelTimelinePoint(time_sec=0.35, vowel="い"),
+                VowelTimelinePoint(time_sec=0.52, vowel="う"),
+            ]
+            provided_plan = VowelTimingPlan(
+                vowels=["あ", "い", "う"],
+                timeline=provided_timeline,
+                anchors=[SpeechTimingAnchor(start_sec=0.15, end_sec=0.6, text="test")],
+                source="whisper_words",
+                warning=None,
+            )
+
+            with patch("core.pipeline.build_vowel_timing_plan", side_effect=AssertionError("not expected")):
+                result = generate_vmd_from_text_wav(
+                    text_path=text_path,
+                    wav_path=wav_path,
+                    output_path=out_path,
+                    timing_plan=provided_plan,
+                )
+
+            self.assertEqual(result.timeline, provided_timeline)
+            self.assertEqual(result.vowels, ["あ", "い", "う"])
+            self.assertEqual(result.timing_source, "whisper_words")
+            self.assertTrue(result.output_path.exists())
 
 
 if __name__ == "__main__":
