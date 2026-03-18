@@ -1,0 +1,15 @@
+# Custom Dictionary Words
+altgraph
+contourpy
+ctypes
+dateutil
+fonttools
+kiwisolver
+numpy
+pefile
+pyinstaller
+pyparsing
+pywin
+setuptools
+shiboken
+Vocaloid

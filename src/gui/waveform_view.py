@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.transforms import blended_transform_factory
 
 _JP_FONT_FAMILIES = ["Yu Gothic", "Meiryo", "MS Gothic", "sans-serif"]
+
+if TYPE_CHECKING:
+    from vmd_writer import VowelTimelinePoint
 
 
 class WaveformView(FigureCanvas):
@@ -15,7 +20,7 @@ class WaveformView(FigureCanvas):
         self._axes = self._figure.add_subplot(111)
         self._samples: list[float] = []
         self._duration_sec: float = 0.0
-        self._morph_labels: list[tuple[float, str]] = []
+        self._morph_events: list[VowelTimelinePoint] = []
         self.setMinimumHeight(140)
         self.show_placeholder("Waveform preview (not loaded)")
 
@@ -39,13 +44,24 @@ class WaveformView(FigureCanvas):
         self._figure.tight_layout()
         self.draw_idle()
 
+    def set_morph_events(self, events: list[VowelTimelinePoint]) -> None:
+        self._morph_events = list(events)
+        if self._samples:
+            self._render_waveform()
+
     def set_morph_labels(self, labels: list[tuple[float, str]]) -> None:
-        self._morph_labels = labels
+        # Backward-compatible API for callers that only have (time, vowel).
+        from vmd_writer import VowelTimelinePoint
+
+        self._morph_events = [
+            VowelTimelinePoint(time_sec=time_sec, vowel=vowel, duration_sec=0.0)
+            for time_sec, vowel in labels
+        ]
         if self._samples:
             self._render_waveform()
 
     def clear_morph_labels(self) -> None:
-        self.set_morph_labels([])
+        self.set_morph_events([])
 
     def plot_waveform(self, samples: list[float], duration_sec: float) -> None:
         self._samples = samples
@@ -77,11 +93,16 @@ class WaveformView(FigureCanvas):
         self.draw_idle()
 
     def _draw_morph_labels(self) -> None:
-        if not self._morph_labels:
+        if not self._morph_events:
             return
 
         transform = blended_transform_factory(self._axes.transData, self._axes.transAxes)
-        for time_sec, vowel in self._morph_labels:
+        for event in self._morph_events:
+            time_sec = event.time_sec
+            vowel = event.vowel
+            start_sec, end_sec = self._event_bounds(event)
+            if end_sec < 0.0 or start_sec > self._duration_sec:
+                continue
             clamped_time = min(max(time_sec, 0.0), self._duration_sec)
             self._axes.text(
                 clamped_time,
@@ -94,3 +115,9 @@ class WaveformView(FigureCanvas):
                 color="#444444",
                 fontfamily=_JP_FONT_FAMILIES,
             )
+
+    def _event_bounds(self, event: VowelTimelinePoint) -> tuple[float, float]:
+        if event.start_sec is not None and event.end_sec is not None:
+            return (event.start_sec, event.end_sec)
+        half = max(event.duration_sec, 0.0) * 0.5
+        return (event.time_sec - half, event.time_sec + half)

@@ -5,6 +5,18 @@
 		}
 	],
 	"settings": {
-		"chatgpt.openOnStartup": true
+		"chatgpt.openOnStartup": true,
+		"cSpell.words": [
+			"matplotlib",
+			"pyopenjtalk"
+		],
+		"cSpell.customDictionaries": {
+			"custom-dictionary-workspace": {
+				"name": "custom-dictionary-workspace",
+				"path": "${workspaceFolder:MMD_AutoLipTool}/.cspell/custom-dictionary-workspace.txt",
+				"addWords": true,
+				"scope": "workspace"
+			}
+		}
 	}
 }

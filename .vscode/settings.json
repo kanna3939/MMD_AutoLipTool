@@ -1,6 +1,9 @@
 {
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv",
   "cSpell.words": [
+    "matplotlib",
+    "NFKC",
+    "pyopenjtalk",
     "ver"
   ]
 }

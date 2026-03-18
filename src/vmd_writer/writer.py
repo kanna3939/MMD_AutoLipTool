@@ -18,11 +18,62 @@ class VowelTimelinePoint:
     time_sec: float
     vowel: str
     value: float = MAX_MORPH_VALUE
+    duration_sec: float = 0.0
+    start_sec: float | None = None
+    end_sec: float | None = None
+
+    def __post_init__(self) -> None:
+        time_sec = float(self.time_sec)
+        duration_sec = max(float(self.duration_sec), 0.0)
+        start_sec = self.start_sec
+        end_sec = self.end_sec
+
+        if start_sec is None and end_sec is None:
+            if duration_sec > 0.0:
+                half = duration_sec * 0.5
+                start_sec = time_sec - half
+                end_sec = time_sec + half
+            else:
+                start_sec = time_sec
+                end_sec = time_sec
+        elif start_sec is None:
+            end_sec = float(end_sec)
+            start_sec = end_sec - duration_sec if duration_sec > 0.0 else min(time_sec, end_sec)
+        elif end_sec is None:
+            start_sec = float(start_sec)
+            end_sec = start_sec + duration_sec if duration_sec > 0.0 else max(time_sec, start_sec)
+        else:
+            start_sec = float(start_sec)
+            end_sec = float(end_sec)
+
+        if end_sec < start_sec:
+            end_sec = start_sec
+        if time_sec < start_sec:
+            start_sec = time_sec
+        if time_sec > end_sec:
+            end_sec = time_sec
+
+        interval_duration_sec = end_sec - start_sec
+        if duration_sec <= 0.0:
+            duration_sec = interval_duration_sec
+        else:
+            duration_sec = interval_duration_sec
+
+        object.__setattr__(self, "time_sec", time_sec)
+        object.__setattr__(self, "duration_sec", duration_sec)
+        object.__setattr__(self, "start_sec", start_sec)
+        object.__setattr__(self, "end_sec", end_sec)
 
 
 def write_morph_vmd(
     output_path: str | Path,
-    timeline: Iterable[VowelTimelinePoint | tuple[float, str] | tuple[float, str, float]],
+    timeline: Iterable[
+        VowelTimelinePoint
+        | tuple[float, str]
+        | tuple[float, str, float]
+        | tuple[float, str, float, float]
+        | tuple[float, str, float, float, float, float]
+    ],
     model_name: str = "AutoLipTool",
 ) -> Path:
     points = _normalize_timeline(timeline)
@@ -64,7 +115,13 @@ def write_dummy_morph_vmd(output_path: str | Path, model_name: str = "AutoLipToo
 
 
 def _normalize_timeline(
-    timeline: Iterable[VowelTimelinePoint | tuple[float, str] | tuple[float, str, float]],
+    timeline: Iterable[
+        VowelTimelinePoint
+        | tuple[float, str]
+        | tuple[float, str, float]
+        | tuple[float, str, float, float]
+        | tuple[float, str, float, float, float, float]
+    ],
 ) -> list[VowelTimelinePoint]:
     normalized: list[VowelTimelinePoint] = []
     for raw_point in timeline:
@@ -76,8 +133,28 @@ def _normalize_timeline(
         elif len(raw_point) == 3:
             time_sec, vowel, value = raw_point
             point = VowelTimelinePoint(time_sec=float(time_sec), vowel=vowel, value=float(value))
+        elif len(raw_point) == 4:
+            time_sec, vowel, value, duration_sec = raw_point
+            point = VowelTimelinePoint(
+                time_sec=float(time_sec),
+                vowel=vowel,
+                value=float(value),
+                duration_sec=float(duration_sec),
+            )
+        elif len(raw_point) == 6:
+            time_sec, vowel, value, duration_sec, start_sec, end_sec = raw_point
+            point = VowelTimelinePoint(
+                time_sec=float(time_sec),
+                vowel=vowel,
+                value=float(value),
+                duration_sec=float(duration_sec),
+                start_sec=float(start_sec),
+                end_sec=float(end_sec),
+            )
         else:
-            raise ValueError("Timeline point must be VowelTimelinePoint or tuple(time_sec, vowel[, value]).")
+            raise ValueError(
+                "Timeline point must be VowelTimelinePoint or tuple(time_sec, vowel[, value[, duration_sec[, start_sec, end_sec]]])."
+            )
 
         if point.vowel not in SUPPORTED_MORPHS:
             raise ValueError(f"Unsupported vowel morph: {point.vowel}")
@@ -85,10 +162,23 @@ def _normalize_timeline(
             raise ValueError("time_sec must be >= 0")
         if point.value < 0:
             raise ValueError("value must be >= 0")
+        if point.duration_sec < 0:
+            raise ValueError("duration_sec must be >= 0")
+        if point.start_sec > point.end_sec:
+            raise ValueError("start_sec must be <= end_sec")
+        if not (point.start_sec <= point.time_sec <= point.end_sec):
+            raise ValueError("time_sec must be inside [start_sec, end_sec]")
 
         clamped_value = min(point.value, MAX_MORPH_VALUE)
         normalized.append(
-            VowelTimelinePoint(time_sec=point.time_sec, vowel=point.vowel, value=clamped_value)
+            VowelTimelinePoint(
+                time_sec=point.time_sec,
+                vowel=point.vowel,
+                value=clamped_value,
+                duration_sec=point.duration_sec,
+                start_sec=point.start_sec,
+                end_sec=point.end_sec,
+            )
         )
 
     normalized.sort(key=lambda x: x.time_sec)

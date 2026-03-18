@@ -13,6 +13,8 @@ from core.whisper_timing import (
 )
 from vmd_writer import VowelTimelinePoint, write_morph_vmd
 
+_MIN_EVENT_DURATION_SEC = 1e-6
+
 
 class PipelineError(ValueError):
     """Recoverable pipeline error for GUI-facing messaging."""
@@ -59,7 +61,22 @@ def build_even_vowel_timeline(
     timeline: list[VowelTimelinePoint] = []
     for index, vowel in enumerate(vowels):
         time_sec = speech_start_sec + (step_sec * index)
-        timeline.append(VowelTimelinePoint(time_sec=time_sec, vowel=vowel))
+        start_sec, end_sec = _even_interval_bounds(
+            start_sec=speech_start_sec,
+            end_sec=speech_end_sec,
+            index=index,
+            count=count,
+        )
+        duration_sec = _ensure_positive_duration(end_sec - start_sec)
+        timeline.append(
+            VowelTimelinePoint(
+                time_sec=time_sec,
+                vowel=vowel,
+                duration_sec=duration_sec,
+                start_sec=start_sec,
+                end_sec=end_sec,
+            )
+        )
     return timeline
 
 
@@ -101,7 +118,22 @@ def build_anchor_based_vowel_timeline(
                 index=local_index,
                 count=count,
             )
-            timeline.append(VowelTimelinePoint(time_sec=time_sec, vowel=vowels[vowel_index]))
+            start_sec, end_sec = _even_interval_bounds_with_margin(
+                start_sec=anchor.start_sec,
+                end_sec=anchor.end_sec,
+                index=local_index,
+                count=count,
+            )
+            duration_sec = _ensure_positive_duration(end_sec - start_sec)
+            timeline.append(
+                VowelTimelinePoint(
+                    time_sec=time_sec,
+                    vowel=vowels[vowel_index],
+                    duration_sec=duration_sec,
+                    start_sec=start_sec,
+                    end_sec=end_sec,
+                )
+            )
             vowel_index += 1
 
     if vowel_index != len(vowels):
@@ -209,6 +241,18 @@ def generate_vmd_from_text_wav(
             raise PipelineError(f"Failed to build vowel timeline: {error}") from error
     elif not resolved_timing_plan.timeline:
         raise PipelineError("Provided timing plan has no timeline points.")
+    elif _timeline_has_non_positive_duration(resolved_timing_plan.timeline):
+        resolved_timing_plan = VowelTimingPlan(
+            vowels=resolved_timing_plan.vowels,
+            timeline=_infer_durations_from_midpoints(
+                resolved_timing_plan.timeline,
+                speech_start_sec=wav_analysis.speech_start_sec,
+                speech_end_sec=wav_analysis.speech_end_sec,
+            ),
+            anchors=resolved_timing_plan.anchors,
+            source=resolved_timing_plan.source,
+            warning=resolved_timing_plan.warning,
+        )
 
     try:
         write_morph_vmd(
@@ -305,6 +349,110 @@ def _allocate_vowels_to_anchors(
     for index in order[:leftover]:
         allocation[index] += 1
     return allocation
+
+
+def _timeline_has_non_positive_duration(timeline: Sequence[VowelTimelinePoint]) -> bool:
+    return any(point.duration_sec <= 0 for point in timeline)
+
+
+def _infer_durations_from_midpoints(
+    timeline: Sequence[VowelTimelinePoint],
+    *,
+    speech_start_sec: float,
+    speech_end_sec: float,
+) -> list[VowelTimelinePoint]:
+    if not timeline:
+        return []
+
+    if speech_end_sec < speech_start_sec:
+        speech_start_sec, speech_end_sec = speech_end_sec, speech_start_sec
+
+    ordered = sorted(enumerate(timeline), key=lambda item: item[1].time_sec)
+    by_original_index: dict[int, VowelTimelinePoint] = {}
+
+    for ordered_index, (original_index, point) in enumerate(ordered):
+        prev_time_sec = (
+            ordered[ordered_index - 1][1].time_sec if ordered_index > 0 else None
+        )
+        next_time_sec = (
+            ordered[ordered_index + 1][1].time_sec
+            if ordered_index + 1 < len(ordered)
+            else None
+        )
+
+        left_boundary_sec = (
+            speech_start_sec
+            if prev_time_sec is None
+            else (prev_time_sec + point.time_sec) * 0.5
+        )
+        right_boundary_sec = (
+            speech_end_sec
+            if next_time_sec is None
+            else (point.time_sec + next_time_sec) * 0.5
+        )
+
+        # Keep representative time unchanged and derive only duration.
+        left_boundary_sec = min(left_boundary_sec, point.time_sec)
+        right_boundary_sec = max(right_boundary_sec, point.time_sec)
+
+        by_original_index[original_index] = VowelTimelinePoint(
+            time_sec=point.time_sec,
+            vowel=point.vowel,
+            value=point.value,
+            duration_sec=_ensure_positive_duration(right_boundary_sec - left_boundary_sec),
+            start_sec=left_boundary_sec,
+            end_sec=right_boundary_sec,
+        )
+
+    return [by_original_index[index] for index in range(len(timeline))]
+
+
+def _ensure_positive_duration(duration_sec: float) -> float:
+    if duration_sec > _MIN_EVENT_DURATION_SEC:
+        return duration_sec
+    return _MIN_EVENT_DURATION_SEC
+
+
+def _even_interval_bounds(start_sec: float, end_sec: float, index: int, count: int) -> tuple[float, float]:
+    if count <= 0:
+        return (start_sec, start_sec + _MIN_EVENT_DURATION_SEC)
+    if end_sec <= start_sec:
+        return (start_sec, start_sec + _MIN_EVENT_DURATION_SEC)
+
+    step_sec = (end_sec - start_sec) / count
+    interval_start = start_sec + (step_sec * index)
+    interval_end = start_sec + (step_sec * (index + 1))
+    if index + 1 >= count:
+        interval_end = end_sec
+    if interval_end <= interval_start:
+        interval_end = interval_start + _MIN_EVENT_DURATION_SEC
+    return (interval_start, interval_end)
+
+
+def _even_interval_bounds_with_margin(
+    start_sec: float,
+    end_sec: float,
+    index: int,
+    count: int,
+) -> tuple[float, float]:
+    if count <= 0:
+        return (start_sec, start_sec + _MIN_EVENT_DURATION_SEC)
+    if end_sec <= start_sec:
+        return (start_sec, start_sec + _MIN_EVENT_DURATION_SEC)
+
+    span_sec = end_sec - start_sec
+    edge_margin_sec = min(0.012, span_sec * 0.2)
+    inner_start = start_sec + edge_margin_sec
+    inner_end = end_sec - edge_margin_sec
+    if inner_end <= inner_start:
+        return _even_interval_bounds(start_sec=start_sec, end_sec=end_sec, index=index, count=count)
+
+    step_sec = (inner_end - inner_start) / count
+    interval_start = inner_start + (step_sec * index)
+    interval_end = inner_start + (step_sec * (index + 1))
+    if interval_end <= interval_start:
+        interval_end = interval_start + _MIN_EVENT_DURATION_SEC
+    return (interval_start, interval_end)
 
 
 def _even_time_in_interval(start_sec: float, end_sec: float, index: int, count: int) -> float:

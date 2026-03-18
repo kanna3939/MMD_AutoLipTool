@@ -326,8 +326,7 @@ class MainWindow(QWidget):
             return
 
         self.current_timing_plan = timing_plan
-        labels = [(point.time_sec, point.vowel) for point in timing_plan.timeline]
-        self.wav_waveform_view.set_morph_labels(labels)
+        self.wav_waveform_view.set_morph_events(timing_plan.timeline)
 
     def _show_warning(self, title: str, message: str, status: str | None = None) -> None:
         QMessageBox.warning(self, title, message)
