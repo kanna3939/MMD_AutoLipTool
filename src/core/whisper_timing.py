@@ -86,11 +86,29 @@ def recognize_audio_timing(
             word_timestamps=True,
         )
         word_anchors = _extract_word_anchors(result_with_words)
+        segment_anchors_from_word_run = _extract_segment_anchors(result_with_words)
         if word_anchors:
+            # If words are too sparse while segments exist, prefer segment anchors
+            # to avoid near-even distribution over a single long interval.
+            if (
+                len(word_anchors) <= 1
+                and len(segment_anchors_from_word_run) > len(word_anchors)
+            ):
+                return WhisperTimingResult(
+                    anchors=segment_anchors_from_word_run,
+                    raw_result=result_with_words,
+                    source="segments",
+                )
             return WhisperTimingResult(
                 anchors=word_anchors,
                 raw_result=result_with_words,
                 source="words",
+            )
+        if segment_anchors_from_word_run:
+            return WhisperTimingResult(
+                anchors=segment_anchors_from_word_run,
+                raw_result=result_with_words,
+                source="segments",
             )
     except Exception as error:
         first_error = error
