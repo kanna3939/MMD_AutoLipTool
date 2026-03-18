@@ -31,6 +31,12 @@ class PipelineAndVmdTests(unittest.TestCase):
         self.assertAlmostEqual(timeline[2].time_sec, 0.6, places=3)
         self.assertAlmostEqual(timeline[3].time_sec, 0.8, places=3)
         self.assertAlmostEqual(timeline[4].time_sec, 1.0, places=3)
+        self.assertTrue(all(point.duration_sec > 0 for point in timeline))
+        self.assertAlmostEqual(timeline[0].duration_sec, 0.2, places=3)
+        self.assertTrue(all(point.start_sec <= point.time_sec <= point.end_sec for point in timeline))
+        self.assertTrue(
+            all(abs((point.end_sec - point.start_sec) - point.duration_sec) < 1e-9 for point in timeline)
+        )
 
     def test_generate_vmd_from_text_and_wav(self) -> None:
         with workspace_tempdir("pipeline_vmd") as tmp:
@@ -71,6 +77,11 @@ class PipelineAndVmdTests(unittest.TestCase):
         self.assertTrue(all(0.2 <= point.time_sec <= 1.0 for point in timeline))
         self.assertTrue(all(point.time_sec < 0.4 for point in timeline[:2]))
         self.assertTrue(all(point.time_sec >= 0.6 for point in timeline[2:]))
+        self.assertTrue(all(point.duration_sec > 0 for point in timeline))
+        self.assertTrue(all(point.start_sec <= point.time_sec <= point.end_sec for point in timeline))
+        self.assertTrue(
+            all(abs((point.end_sec - point.start_sec) - point.duration_sec) < 1e-9 for point in timeline)
+        )
 
     @patch("core.pipeline.recognize_audio_timing", side_effect=WhisperTimingError("mock failure"))
     def test_timing_plan_falls_back_to_even_when_whisper_fails(self, _: object) -> None:
@@ -144,7 +155,12 @@ class PipelineAndVmdTests(unittest.TestCase):
                     timing_plan=provided_plan,
                 )
 
-            self.assertEqual(result.timeline, provided_timeline)
+            self.assertEqual(
+                [(point.time_sec, point.vowel) for point in result.timeline],
+                [(point.time_sec, point.vowel) for point in provided_timeline],
+            )
+            self.assertTrue(all(point.duration_sec > 0 for point in result.timeline))
+            self.assertTrue(all(point.start_sec <= point.time_sec <= point.end_sec for point in result.timeline))
             self.assertEqual(result.vowels, ["あ", "い", "う"])
             self.assertEqual(result.timing_source, "whisper_words")
             self.assertTrue(result.output_path.exists())
