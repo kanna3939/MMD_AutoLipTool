@@ -10,6 +10,68 @@ _O_KANA = set("おぉこごそぞとどのほぼぽもょよろを")
 
 _SMALL_COMBINERS = set("ゃゅょぁぃぅぇぉゎ")
 _SKIP_CHARS = set("っん、。 \t\r\n")
+_KANJI_EXTRA_CHARS = {"々", "〆", "〇", "ヶ"}
+
+
+class TextProcessingError(ValueError):
+    """Recoverable text-processing error for GUI and pipeline handling."""
+
+
+def _normalize_text(text: str) -> str:
+    return unicodedata.normalize("NFKC", text)
+
+
+def _strip_ignored_symbols(text: str) -> str:
+    filtered: list[str] = []
+    for char in text:
+        if char == "ー":
+            filtered.append(char)
+            continue
+
+        category = unicodedata.category(char)
+        if category.startswith("P") or category.startswith("S"):
+            continue
+        if category.startswith("Z"):
+            continue
+        if category in ("Cc", "Cf"):
+            continue
+
+        filtered.append(char)
+    return "".join(filtered)
+
+
+def _contains_kanji(text: str) -> bool:
+    for char in text:
+        code = ord(char)
+        if 0x3400 <= code <= 0x4DBF:
+            return True
+        if 0x4E00 <= code <= 0x9FFF:
+            return True
+        if 0xF900 <= code <= 0xFAFF:
+            return True
+        if char in _KANJI_EXTRA_CHARS:
+            return True
+    return False
+
+
+def _pyopenjtalk_g2p(text: str) -> str:
+    try:
+        import pyopenjtalk
+    except Exception as error:
+        raise TextProcessingError(f"Failed to import pyopenjtalk: {error}") from error
+
+    try:
+        kana = pyopenjtalk.g2p(text, kana=True)
+    except Exception as error:
+        raise TextProcessingError(f"pyopenjtalk conversion failed: {error}") from error
+
+    if not isinstance(kana, str):
+        raise TextProcessingError("pyopenjtalk returned an unexpected type.")
+
+    kana = kana.strip()
+    if not kana:
+        raise TextProcessingError("pyopenjtalk returned an empty reading.")
+    return kana
 
 
 def _katakana_to_hiragana(text: str) -> str:
@@ -22,6 +84,21 @@ def _katakana_to_hiragana(text: str) -> str:
         else:
             converted.append(char)
     return "".join(converted)
+
+
+def text_to_hiragana(text: str) -> str:
+    normalized = _normalize_text(text)
+    conversion_input = _strip_ignored_symbols(normalized)
+    if not conversion_input:
+        raise TextProcessingError(
+            "No convertible text remains after removing punctuation/symbols."
+        )
+
+    kana_text = conversion_input
+    if _contains_kanji(conversion_input):
+        kana_text = _pyopenjtalk_g2p(conversion_input)
+
+    return _katakana_to_hiragana(_normalize_text(kana_text))
 
 
 def _kana_to_vowel(kana: str) -> str | None:
@@ -38,10 +115,8 @@ def _kana_to_vowel(kana: str) -> str | None:
     return None
 
 
-def text_to_vowel_sequence(text: str) -> list[str]:
-    normalized = unicodedata.normalize("NFKC", text)
-    normalized = _katakana_to_hiragana(normalized)
-
+def hiragana_to_vowel_sequence(text: str) -> list[str]:
+    normalized = _katakana_to_hiragana(_strip_ignored_symbols(_normalize_text(text)))
     vowels: list[str] = []
     index = 0
     while index < len(normalized):
@@ -74,6 +149,15 @@ def text_to_vowel_sequence(text: str) -> list[str]:
         index += 1
 
     return vowels
+
+
+def hiragana_to_vowel_string(text: str) -> str:
+    return "".join(hiragana_to_vowel_sequence(text))
+
+
+def text_to_vowel_sequence(text: str) -> list[str]:
+    normalized = text_to_hiragana(text)
+    return hiragana_to_vowel_sequence(normalized)
 
 
 def text_to_vowel_string(text: str) -> str:

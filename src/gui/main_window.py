@@ -2,12 +2,14 @@ from pathlib import Path
 
 from core import (
     PipelineError,
+    TextProcessingError,
     WavAnalysisResult,
     analyze_wav_file,
-    build_even_vowel_timeline,
+    build_vowel_timing_plan,
     generate_vmd_from_text_wav,
+    hiragana_to_vowel_string,
     load_waveform_preview,
-    text_to_vowel_sequence,
+    text_to_hiragana,
 )
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -30,6 +32,8 @@ class MainWindow(QWidget):
         self.selected_text_path: str | None = None
         self.selected_wav_path: str | None = None
         self.selected_text_content: str = ""
+        self.selected_hiragana_content: str = ""
+        self.selected_vowel_content: str = ""
         self.selected_wav_analysis: WavAnalysisResult | None = None
 
         layout = QVBoxLayout()
@@ -46,6 +50,18 @@ class MainWindow(QWidget):
         self.text_preview.setPlaceholderText(
             "\u3053\u3053\u306bTEXT\u30d5\u30a1\u30a4\u30eb\u306e\u5168\u6587\u304c\u8868\u793a\u3055\u308c\u307e\u3059"
         )
+        self.hiragana_preview_label = QLabel("\u3072\u3089\u304c\u306a\u5909\u63db\u78ba\u8a8d")
+        self.hiragana_preview = QPlainTextEdit()
+        self.hiragana_preview.setReadOnly(True)
+        self.hiragana_preview.setPlaceholderText(
+            "\u3053\u3053\u306b\u3072\u3089\u304c\u306a\u5909\u63db\u5f8c\u306eTEXT\u304c\u8868\u793a\u3055\u308c\u307e\u3059"
+        )
+        self.vowel_preview_label = QLabel("\u6bcd\u97f3\u5909\u63db\u78ba\u8a8d")
+        self.vowel_preview = QPlainTextEdit()
+        self.vowel_preview.setReadOnly(True)
+        self.vowel_preview.setPlaceholderText(
+            "\u3053\u3053\u306b\u6bcd\u97f3\u5909\u63db\u7d50\u679c\u304c\u8868\u793a\u3055\u308c\u307e\u3059"
+        )
         self.wav_info_label = QLabel(
             "WAV\u60c5\u5831: \u672a\u8aad\u307f\u8fbc\u307f"
         )
@@ -60,6 +76,10 @@ class MainWindow(QWidget):
         layout.addWidget(self.text_path_label)
         layout.addWidget(self.text_preview_label)
         layout.addWidget(self.text_preview)
+        layout.addWidget(self.hiragana_preview_label)
+        layout.addWidget(self.hiragana_preview)
+        layout.addWidget(self.vowel_preview_label)
+        layout.addWidget(self.vowel_preview)
         layout.addWidget(self.wav_button)
         layout.addWidget(self.wav_path_label)
         layout.addWidget(self.wav_info_label)
@@ -99,7 +119,20 @@ class MainWindow(QWidget):
         self.selected_text_path = file_path
         self.selected_text_content = text_content
         self.text_path_label.setText(f"TEXT: {Path(file_path).name}")
-        self.text_preview.setPlainText(text_content)
+        try:
+            self._refresh_text_processing_views()
+        except TextProcessingError as error:
+            self.selected_hiragana_content = ""
+            self.selected_vowel_content = ""
+            self.hiragana_preview.setPlainText("(\u3072\u3089\u304c\u306a\u5909\u63db\u306b\u5931\u6557\u3057\u307e\u3057\u305f)")
+            self.vowel_preview.setPlainText("(\u6bcd\u97f3\u5909\u63db\u306f\u672a\u5b9f\u884c\u3067\u3059)")
+            self.wav_waveform_view.clear_morph_labels()
+            self._show_warning(
+                title="TEXT\u5909\u63db\u30a8\u30e9\u30fc",
+                message=f"TEXT\u3092\u304b\u306a/\u3072\u3089\u304c\u306a\u306b\u5909\u63db\u3067\u304d\u307e\u305b\u3093: {error}",
+                status="\u51fa\u529b\u72b6\u614b: TEXT\u5909\u63db\u5931\u6557",
+            )
+            return
         self._refresh_waveform_morph_labels()
         self._set_output_status("\u51fa\u529b\u72b6\u614b: \u5165\u529b\u6e96\u5099\u4e2d")
 
@@ -157,6 +190,14 @@ class MainWindow(QWidget):
         self._set_output_status("\u51fa\u529b\u72b6\u614b: \u5165\u529b\u6e96\u5099\u4e2d")
 
     def _export_vmd(self) -> None:
+        if self.selected_text_path and self.selected_wav_path and not self.selected_vowel_content:
+            self._show_warning(
+                title="\u5165\u529b\u4e0d\u8db3",
+                message="TEXT\u304b\u3089\u6709\u52b9\u306a\u3072\u3089\u304c\u306a/\u6bcd\u97f3\u5217\u3092\u751f\u6210\u3067\u304d\u3066\u3044\u307e\u305b\u3093\u3002TEXT\u3092\u898b\u76f4\u3057\u3066\u518d\u8aad\u307f\u8fbc\u307f\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+                status="\u51fa\u529b\u72b6\u614b: TEXT\u5909\u63db\u5931\u6557",
+            )
+            return
+
         if not self._has_required_inputs():
             self._show_warning(
                 title="\u5165\u529b\u4e0d\u8db3",
@@ -212,8 +253,12 @@ class MainWindow(QWidget):
             "\u51fa\u529b\u5b8c\u4e86",
             f"VMD\u3092\u51fa\u529b\u3057\u307e\u3057\u305f:\\n{result.output_path}",
         )
+        timing_label = "Whisper\u6642\u9593\u30a2\u30f3\u30ab\u30fc"
+        if not result.timing_source.startswith("whisper_"):
+            timing_label = "\u5747\u7b49\u914d\u5206(\u30d5\u30a9\u30fc\u30eb\u30d0\u30c3\u30af)"
+
         self._set_output_status(
-            f"\u51fa\u529b\u72b6\u614b: \u6210\u529f ({result.output_path.name})"
+            f"\u51fa\u529b\u72b6\u614b: \u6210\u529f ({result.output_path.name} / {timing_label})"
         )
 
     def _has_required_inputs(self) -> bool:
@@ -222,8 +267,24 @@ class MainWindow(QWidget):
     def _set_output_status(self, text: str) -> None:
         self.output_status_label.setText(text)
 
+    def _refresh_text_processing_views(self) -> None:
+        self.text_preview.setPlainText(self.selected_text_content)
+
+        self.selected_hiragana_content = text_to_hiragana(self.selected_text_content)
+        self.hiragana_preview.setPlainText(self.selected_hiragana_content)
+
+        self.selected_vowel_content = hiragana_to_vowel_string(self.selected_hiragana_content)
+        if self.selected_vowel_content:
+            self.vowel_preview.setPlainText(self.selected_vowel_content)
+        else:
+            self.vowel_preview.setPlainText("(\u6bcd\u97f3\u306e\u62bd\u51fa\u7d50\u679c\u306f\u3042\u308a\u307e\u305b\u3093)")
+
     def _refresh_waveform_morph_labels(self) -> None:
-        if not self.selected_wav_analysis or not self.selected_text_content:
+        if (
+            not self.selected_wav_analysis
+            or not self.selected_text_content
+            or not self.selected_wav_path
+        ):
             self.wav_waveform_view.clear_morph_labels()
             return
 
@@ -231,17 +292,18 @@ class MainWindow(QWidget):
             self.wav_waveform_view.clear_morph_labels()
             return
 
-        vowels = text_to_vowel_sequence(self.selected_text_content)
-        if not vowels:
+        try:
+            timing_plan = build_vowel_timing_plan(
+                text_content=self.selected_text_content,
+                wav_path=self.selected_wav_path,
+                wav_analysis=self.selected_wav_analysis,
+                whisper_model_name="small",
+            )
+        except ValueError:
             self.wav_waveform_view.clear_morph_labels()
             return
 
-        timeline = build_even_vowel_timeline(
-            vowels=vowels,
-            speech_start_sec=self.selected_wav_analysis.speech_start_sec,
-            speech_end_sec=self.selected_wav_analysis.speech_end_sec,
-        )
-        labels = [(point.time_sec, point.vowel) for point in timeline]
+        labels = [(point.time_sec, point.vowel) for point in timing_plan.timeline]
         self.wav_waveform_view.set_morph_labels(labels)
 
     def _show_warning(self, title: str, message: str, status: str | None = None) -> None:
