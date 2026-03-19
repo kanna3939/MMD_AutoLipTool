@@ -5,10 +5,13 @@ ctypes
 dateutil
 fonttools
 kiwisolver
+librosa
 numpy
+onedir
 pefile
 pyinstaller
 pyparsing
+pyproject
 pywin
 setuptools
 shiboken

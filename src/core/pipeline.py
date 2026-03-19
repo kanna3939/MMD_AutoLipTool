@@ -19,6 +19,7 @@ _RMS_THRESHOLD_RATIO = 0.35
 _RMS_ABS_MIN_THRESHOLD = 0.01
 _RMS_MIN_REFINED_DURATION_SEC = 0.03
 _RMS_MAX_ADJACENT_OVERLAP_SEC = 0.02
+_DEFAULT_MORPH_UPPER_LIMIT = 0.5
 
 
 class PipelineError(ValueError):
@@ -157,7 +158,11 @@ def build_vowel_timing_plan(
     wav_path: str | Path,
     wav_analysis: WavAnalysisResult,
     whisper_model_name: str = "small",
+    upper_limit: float = _DEFAULT_MORPH_UPPER_LIMIT,
 ) -> VowelTimingPlan:
+    if upper_limit < 0.0:
+        raise ValueError("upper_limit must be >= 0.0.")
+
     vowels = text_to_vowel_sequence(text_content)
     if not vowels:
         raise ValueError("No vowels extracted from TEXT.")
@@ -198,6 +203,7 @@ def build_vowel_timing_plan(
         wav_path=wav_path,
         speech_start_sec=wav_analysis.speech_start_sec,
         speech_end_sec=wav_analysis.speech_end_sec,
+        upper_limit=upper_limit,
     )
 
     return VowelTimingPlan(
@@ -217,6 +223,7 @@ def generate_vmd_from_text_wav(
     silence_threshold: float = 0.02,
     model_name: str = "AutoLipTool",
     timing_plan: VowelTimingPlan | None = None,
+    upper_limit: float = _DEFAULT_MORPH_UPPER_LIMIT,
 ) -> PipelineResult:
     text_file = Path(text_path)
     wav_file = Path(wav_path)
@@ -247,6 +254,7 @@ def generate_vmd_from_text_wav(
                 wav_path=wav_file,
                 wav_analysis=wav_analysis,
                 whisper_model_name="small",
+                upper_limit=upper_limit,
             )
         except ValueError as error:
             raise PipelineError(f"Failed to build vowel timeline: {error}") from error
@@ -372,20 +380,36 @@ def _refine_timeline_intervals_with_rms(
     wav_path: str | Path,
     speech_start_sec: float,
     speech_end_sec: float,
+    upper_limit: float,
 ) -> list[VowelTimelinePoint]:
     if not timeline:
         return []
 
+    clamped_upper_limit = max(0.0, upper_limit)
+
     try:
         rms_series = load_rms_series(str(wav_path), stereo_mode="average")
     except (ValueError, OSError, EOFError):
-        return list(timeline)
+        return _apply_peak_values_to_timeline(
+            timeline=timeline,
+            rms_series=None,
+            speech_start_sec=speech_start_sec,
+            speech_end_sec=speech_end_sec,
+            upper_limit=clamped_upper_limit,
+        )
 
-    return _refine_intervals_by_rms_series(
+    refined_timeline = _refine_intervals_by_rms_series(
         timeline=timeline,
         rms_series=rms_series,
         speech_start_sec=speech_start_sec,
         speech_end_sec=speech_end_sec,
+    )
+    return _apply_peak_values_to_timeline(
+        timeline=refined_timeline,
+        rms_series=rms_series,
+        speech_start_sec=speech_start_sec,
+        speech_end_sec=speech_end_sec,
+        upper_limit=clamped_upper_limit,
     )
 
 
@@ -486,6 +510,61 @@ def _refine_intervals_by_rms_series(
         timeline=refined,
         speech_start_sec=speech_start_sec,
         speech_end_sec=speech_end_sec,
+    )
+
+
+def _apply_peak_values_to_timeline(
+    *,
+    timeline: Sequence[VowelTimelinePoint],
+    rms_series: RmsSeriesData | None,
+    speech_start_sec: float,
+    speech_end_sec: float,
+    upper_limit: float,
+) -> list[VowelTimelinePoint]:
+    if not timeline:
+        return []
+
+    clamped_upper_limit = max(0.0, upper_limit)
+    if clamped_upper_limit <= 0.0:
+        return [_with_peak_value(point=point, peak_value=0.0) for point in timeline]
+
+    if rms_series is None or not rms_series.times_sec or not rms_series.values:
+        return [_with_peak_value(point=point, peak_value=clamped_upper_limit) for point in timeline]
+
+    global_peak = _rms_local_peak(
+        times_sec=rms_series.times_sec,
+        values=rms_series.values,
+        start_sec=speech_start_sec,
+        end_sec=speech_end_sec,
+    )
+    if global_peak <= 0.0:
+        return [_with_peak_value(point=point, peak_value=clamped_upper_limit) for point in timeline]
+
+    with_peak_values: list[VowelTimelinePoint] = []
+    for point in timeline:
+        interval_start_sec, interval_end_sec = _event_interval(point)
+        local_peak = _rms_local_peak(
+            times_sec=rms_series.times_sec,
+            values=rms_series.values,
+            start_sec=interval_start_sec,
+            end_sec=interval_end_sec,
+        )
+        normalized_peak = 0.0 if local_peak <= 0.0 else (local_peak / global_peak)
+        peak_value = max(0.0, min(clamped_upper_limit, round(clamped_upper_limit * normalized_peak, 4)))
+        with_peak_values.append(_with_peak_value(point=point, peak_value=peak_value))
+
+    return with_peak_values
+
+
+def _with_peak_value(*, point: VowelTimelinePoint, peak_value: float) -> VowelTimelinePoint:
+    return VowelTimelinePoint(
+        time_sec=point.time_sec,
+        vowel=point.vowel,
+        value=peak_value,
+        peak_value=peak_value,
+        duration_sec=point.duration_sec,
+        start_sec=point.start_sec,
+        end_sec=point.end_sec,
     )
 
 

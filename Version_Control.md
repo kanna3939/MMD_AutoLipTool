@@ -161,3 +161,49 @@
   - 本エントリはドキュメント更新のみを対象とし、アプリ実装コードは変更しない。
 - Verification:
   - ドキュメント差分を確認し、mdファイルのみをコミット対象に設定。
+
+---
+
+## Entry 2026-03-19 / Session: onedir-packaging-stage1
+
+- Date: 2026-03-19
+- Session: onedir-packaging-stage1
+- Summary:
+  - PyInstaller spec を `onedir` 前提に再構成し、依存データ/動的ライブラリ/hidden import を明示化。
+  - `build.ps1` に `SmokeLaunch`（dist exe起動確認）を追加し、ビルド手順を再現可能化。
+  - 第1段階として `dist\MMD_AutoLipTool\` での配布物生成と起動スモーク確認を実施。
+- Modified Files:
+  - `MMD_AutoLipTool.spec`: `COLLECT` を含む `onedir` 構成へ変更。`whisper/pyopenjtalk/tiktoken` の datas・binaries・hiddenimports を追加。
+  - `build.ps1`: `-SmokeLaunch` オプション、出力exe存在チェック、起動スモーク処理を追加。
+  - `README.md`: `onedir` ビルド方式、同梱方針、手動確認手順、補助確認手順を追記。
+  - `Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし
+- Notes:
+  - GUI の完全自動操作確認は本環境で未実施。起動確認は自動、処理導線は手動確認手順を明記。
+  - ビルドログに `numba` 経由の `tbb12.dll` 警告があるが、ビルド自体は完了し起動スモークは成功。
+- Verification:
+  - `powershell -ExecutionPolicy Bypass -File .\build.ps1 -Clean -SmokeLaunch` を実行し、`dist\MMD_AutoLipTool\MMD_AutoLipTool.exe` 起動スモーク成功を確認。
+  - `.\.venv\Scripts\python.exe` で `generate_vmd_from_text_wav` のE2Eを実行し、`dist\_smoke\smoke_output.vmd` 生成を確認。
+
+---
+
+## Entry 2026-03-19 / Session: repo-current-state-sync-and-full-commit
+
+- Date: 2026-03-19
+- Session: repo-current-state-sync-and-full-commit
+- Summary:
+  - リポジトリ現状（構成/入口/GUI候補/不足候補/最小推奨構成/未実装）を整理し、mdへ反映。
+  - `README.md` と `Specifications_Prompt_v1.md` に現状整理を追記。
+  - ユーザー指示に基づき、作業ツリー全体をコミット対象として確定。
+- Modified Files:
+  - `README.md`: 現状整理（6点）セクションを追加。
+  - `Specifications_Prompt_v1.md`: 16.12（リポジトリ現状整理）を追記。
+  - `Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし（本エントリ時点の追記対象として）
+- Notes:
+  - 本セッションの反映方針は「実装変更最小・文書更新中心」。
+- Verification:
+  - `git status --short` で対象差分を確認。
+  - 反映後に `git add -A` と `git commit` を実行。

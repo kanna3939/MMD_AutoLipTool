@@ -827,3 +827,15 @@ UIの責務分離を明確化するため、処理起動タイミングを次の
 
 注記:
 - 本追補時点では `onedir` 出力は未対応とし、次タスクで対応する。
+
+### 16.12 リポジトリ現状整理（2026-03-19 追補）
+
+- 現在の主要構成: `src/`, `tests/`, `sample/`, `build/`, `dist/`
+- エントリーポイント: `src/main.py`（本運用）, `src/test_gui.py`（補助確認）
+- GUI関連: `src/gui/main_window.py`, `src/gui/waveform_view.py`
+- 現時点の不足候補: `LICENSE`, `src/app_io/`（責務分離時の導入先）
+- 最小推奨構成: `src/main.py`, `src/core/`, `src/gui/`, `src/vmd_writer/`, `tests/`, `sample/`
+- 未実装: 強制アライメント, 高度な音響特徴量最適化, 音量連動の詳細チューニングUI
+
+注記:
+- `onedir` 配布の第1段階（`dist\MMD_AutoLipTool\`）は整備済み。

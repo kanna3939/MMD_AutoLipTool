@@ -21,9 +21,15 @@ class VowelTimelinePoint:
     duration_sec: float = 0.0
     start_sec: float | None = None
     end_sec: float | None = None
+    peak_value: float | None = None
 
     def __post_init__(self) -> None:
         time_sec = float(self.time_sec)
+        peak_value = self.peak_value
+        if peak_value is None:
+            peak_value = float(self.value)
+        else:
+            peak_value = float(peak_value)
         duration_sec = max(float(self.duration_sec), 0.0)
         start_sec = self.start_sec
         end_sec = self.end_sec
@@ -60,6 +66,8 @@ class VowelTimelinePoint:
             duration_sec = interval_duration_sec
 
         object.__setattr__(self, "time_sec", time_sec)
+        object.__setattr__(self, "value", peak_value)
+        object.__setattr__(self, "peak_value", peak_value)
         object.__setattr__(self, "duration_sec", duration_sec)
         object.__setattr__(self, "start_sec", start_sec)
         object.__setattr__(self, "end_sec", end_sec)
@@ -92,7 +100,7 @@ def write_morph_vmd(
         for frame_no, vowel, value in morph_frames:
             fp.write(_encode_shift_jis_fixed(vowel, 15))
             fp.write(struct.pack("<I", frame_no))
-            fp.write(struct.pack("<f", value))
+            fp.write(struct.pack("<f", _finalize_morph_value(value)))
 
         # Camera / Light / Self-shadow / IK keyframe counts: all 0.
         fp.write(struct.pack("<I", 0))
@@ -160,8 +168,9 @@ def _normalize_timeline(
             raise ValueError(f"Unsupported vowel morph: {point.vowel}")
         if point.time_sec < 0:
             raise ValueError("time_sec must be >= 0")
-        if point.value < 0:
-            raise ValueError("value must be >= 0")
+        point_peak_value = _point_peak_value(point)
+        if point_peak_value < 0:
+            raise ValueError("peak_value must be >= 0")
         if point.duration_sec < 0:
             raise ValueError("duration_sec must be >= 0")
         if point.start_sec > point.end_sec:
@@ -169,12 +178,13 @@ def _normalize_timeline(
         if not (point.start_sec <= point.time_sec <= point.end_sec):
             raise ValueError("time_sec must be inside [start_sec, end_sec]")
 
-        clamped_value = min(point.value, MAX_MORPH_VALUE)
+        clamped_value = point_peak_value
         normalized.append(
             VowelTimelinePoint(
                 time_sec=point.time_sec,
                 vowel=point.vowel,
                 value=clamped_value,
+                peak_value=clamped_value,
                 duration_sec=point.duration_sec,
                 start_sec=point.start_sec,
                 end_sec=point.end_sec,
@@ -190,12 +200,13 @@ def _build_peak_morph_frames(
 ) -> list[tuple[int, str, float]]:
     expanded: list[tuple[int, str, float]] = []
     for point in points:
+        peak_value = _point_peak_value(point)
         center_frame = _sec_to_frame(point.time_sec)
         before_frame = max(0, center_frame - PEAK_SIDE_FRAME_OFFSET)
         after_frame = center_frame + PEAK_SIDE_FRAME_OFFSET
 
         expanded.append((before_frame, point.vowel, 0.0))
-        expanded.append((center_frame, point.vowel, point.value))
+        expanded.append((center_frame, point.vowel, peak_value))
         expanded.append((after_frame, point.vowel, 0.0))
 
     expanded.sort(key=lambda x: x[0])
@@ -207,6 +218,7 @@ def _build_interval_morph_frames(
 ) -> list[tuple[int, str, float]]:
     expanded_with_flags: list[tuple[int, str, float, bool]] = []
     for point in points:
+        peak_value = _point_peak_value(point)
         start_sec, end_sec = _event_bounds(point)
         center_frame = _sec_to_frame(point.time_sec)
         start_frame = _sec_to_frame(start_sec)
@@ -233,13 +245,13 @@ def _build_interval_morph_frames(
                 continue
 
             expanded_with_flags.append((start_frame, point.vowel, 0.0, True))
-            expanded_with_flags.append((peak_frame, point.vowel, point.value, False))
+            expanded_with_flags.append((peak_frame, point.vowel, peak_value, False))
             expanded_with_flags.append((end_frame, point.vowel, 0.0, False))
             continue
 
         expanded_with_flags.append((start_frame, point.vowel, 0.0, True))
-        expanded_with_flags.append((rise_end_frame, point.vowel, point.value, False))
-        expanded_with_flags.append((fall_start_frame, point.vowel, point.value, False))
+        expanded_with_flags.append((rise_end_frame, point.vowel, peak_value, False))
+        expanded_with_flags.append((fall_start_frame, point.vowel, peak_value, False))
         expanded_with_flags.append((end_frame, point.vowel, 0.0, False))
 
     expanded_with_flags = _shift_conflicting_rise_start_zeros(expanded_with_flags)
@@ -273,6 +285,22 @@ def _event_bounds(point: VowelTimelinePoint) -> tuple[float, float]:
         return (point.start_sec, point.end_sec)
     half = max(point.duration_sec, 0.0) * 0.5
     return (point.time_sec - half, point.time_sec + half)
+
+
+def _point_peak_value(point: VowelTimelinePoint) -> float:
+    if point.peak_value is not None:
+        return float(point.peak_value)
+    return float(point.value)
+
+
+def _finalize_morph_value(value: float) -> float:
+    # Round only once at VMD write boundary when more than 4 decimals remain.
+    if value <= 0.0:
+        return 0.0
+    rounded = round(float(value), 4)
+    if abs(value - rounded) <= 1e-12:
+        return float(value)
+    return rounded
 
 
 def _sec_to_frame(time_sec: float) -> int:
