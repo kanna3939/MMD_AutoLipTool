@@ -109,7 +109,7 @@
   - README/仕様書へ現状挙動を反映。
 - Modified Files:
   - `src/gui/main_window.py`: 処理実行ボタン追加、wav読込時の重処理トリガー停止、上限値変更時の再解析停止、出力時の未解析ガード追加。
-  - `README.md`: バージョン `Ver 0.3.5.0` と現行挙動（処理実行導線、未解析出力中断など）を反映。
+  - `README.md`: バージョン `Ver 0.3.3.5` と現行挙動（処理実行導線、未解析出力中断など）を反映。
   - `Specifications_Prompt_v1.md`: 処理概要・GUI仕様・エラー処理・追補に「処理実行」導線と自動実行停止方針を追記。
   - `Version_Control.md`: 本エントリを追記。
 - Added Files:
@@ -279,3 +279,53 @@
 - Verification:
   - `git status --short` で全体差分を確認。
   - `.\.venv\Scripts\python.exe -m unittest discover -s tests` の既存成功結果を維持。
+
+---
+
+## Entry 2026-03-19 / Session: ms4-phase1-to-6-and-docs-sync
+
+- Date: 2026-03-19
+- Session: ms4-phase1-to-6-and-docs-sync
+- Summary:
+  - MS4（実行中状態の可視化）をフェーズ1〜6で実装し、処理中フラグ/処理中ダイアログ/再入防止/操作ロック/状態表示遷移を接続。
+  - 処理終了時の復帰整合（成功/失敗共通でダイアログ終了・busy解除・UI復帰）を確認。
+  - 現セッション内容を `README.md` / `Specification_Prompt_v2.md` / `repo_milestone.md` に反映。
+- Modified Files:
+  - `src/gui/main_window.py`: MS4 フェーズ1〜6（状態管理土台、処理中表示、入口接続、操作ロック、状態表示遷移、復帰整合）を実装。
+  - `README.md`: 実装済み機能と直近更新に MS4 完了内容を追記。
+  - `Specification_Prompt_v2.md`: 6.7 節（実行中状態の可視化）を追加し、残課題から MS4 を削除。
+  - `repo_milestone.md`: 進捗メモを追加し、MS4 完了と確認結果要点を記載。
+  - `Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし
+- Notes:
+  - 本エントリ時点で、MS4 以外の新機能拡張（非同期化、進捗率表示、キャンセル）は未対応。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m py_compile src\gui\main_window.py` を実行し成功。
+  - `.\.venv\Scripts\python.exe -m unittest discover -s tests` を実行し、`OK (33 tests)` を確認。
+
+---
+
+## Entry 2026-03-19 / Session: release-v0338-repo-sync
+
+- Date: 2026-03-19
+- Session: release-v0338-repo-sync
+- Summary:
+  - リポジトリ全体の現状を再確認し、反映版を `Ver 0.3.3.8` として同期。
+  - 直近実装（MS4 フェーズ1〜6、および関連ドキュメント更新）を含めてコミット対象を確定。
+- Modified Files:
+  - `README.md`: 版数表記を `Ver 0.3.3.8` に更新。
+  - `pyproject.toml`: プロジェクトバージョンを `0.3.3.8` に更新。
+  - `src/gui/main_window.py`: Help のバージョン表示を `Ver 0.3.3.8` に更新。
+  - `Specification_Prompt_v2.md`: 文書情報に対応リリース `Ver 0.3.3.8` を追記。
+  - `repo_milestone.md`: 進捗メモへ `Ver 0.3.3.8` 同期を追記。
+  - `Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - `Specification_Prompt_v2.md`: v2 仕様書をリポジトリ管理対象として追加。
+  - `repo_milestone.md`: マイルストーン管理文書をリポジトリ管理対象として追加。
+  - `_old/Specifications_Prompt_v1.md`: 旧仕様書を退避先へ移動して管理。
+- Notes:
+  - 旧配置の `Specifications_Prompt_v1.md` は削除し、`_old/` へ移管。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m unittest discover -s tests` を実行し、`OK (33 tests)` を確認。
+
