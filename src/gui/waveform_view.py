@@ -21,6 +21,12 @@ class WaveformView(FigureCanvas):
         self._samples: list[float] = []
         self._duration_sec: float = 0.0
         self._morph_events: list[VowelTimelinePoint] = []
+        self._default_show_frame_grid = False
+        self._default_show_vowel_labels = True
+        self._default_show_event_regions = False
+        self._show_frame_grid = self._default_show_frame_grid
+        self._show_vowel_labels = self._default_show_vowel_labels
+        self._show_event_regions = self._default_show_event_regions
         self.setMinimumHeight(140)
         self.show_placeholder("Waveform preview (not loaded)")
 
@@ -63,6 +69,46 @@ class WaveformView(FigureCanvas):
     def clear_morph_labels(self) -> None:
         self.set_morph_events([])
 
+    def set_show_frame_grid(self, enabled: bool) -> None:
+        enabled_bool = bool(enabled)
+        if self._show_frame_grid == enabled_bool:
+            return
+        self._show_frame_grid = enabled_bool
+        self._refresh_after_overlay_option_changed()
+
+    def set_show_vowel_labels(self, enabled: bool) -> None:
+        enabled_bool = bool(enabled)
+        if self._show_vowel_labels == enabled_bool:
+            return
+        self._show_vowel_labels = enabled_bool
+        self._refresh_after_overlay_option_changed()
+
+    def set_show_event_regions(self, enabled: bool) -> None:
+        enabled_bool = bool(enabled)
+        if self._show_event_regions == enabled_bool:
+            return
+        self._show_event_regions = enabled_bool
+        self._refresh_after_overlay_option_changed()
+
+    def reset_overlay_visibility(self) -> None:
+        changed = (
+            self._show_frame_grid != self._default_show_frame_grid
+            or self._show_vowel_labels != self._default_show_vowel_labels
+            or self._show_event_regions != self._default_show_event_regions
+        )
+        self._show_frame_grid = self._default_show_frame_grid
+        self._show_vowel_labels = self._default_show_vowel_labels
+        self._show_event_regions = self._default_show_event_regions
+        if changed:
+            self._refresh_after_overlay_option_changed()
+
+    def overlay_visibility(self) -> tuple[bool, bool, bool]:
+        return (
+            self._show_frame_grid,
+            self._show_vowel_labels,
+            self._show_event_regions,
+        )
+
     def plot_waveform(self, samples: list[float], duration_sec: float) -> None:
         self._samples = samples
         self._duration_sec = duration_sec
@@ -81,7 +127,7 @@ class WaveformView(FigureCanvas):
             self._axes.plot(x_values, self._samples, linewidth=0.8, color="#2c7fb8")
             self._axes.set_xlim(0.0, self._duration_sec)
             self._axes.set_xlabel("Time (s)")
-            self._draw_morph_labels()
+            self._draw_overlays()
         else:
             self._axes.plot(self._samples, linewidth=0.8, color="#2c7fb8")
             self._axes.set_xlabel("Sample")
@@ -91,6 +137,56 @@ class WaveformView(FigureCanvas):
         self._axes.grid(True, alpha=0.25, linestyle="-", linewidth=0.5)
         self._figure.tight_layout()
         self.draw_idle()
+
+    def _draw_overlays(self) -> None:
+        if self._show_frame_grid:
+            self._draw_frame_grid()
+        if self._show_event_regions:
+            self._draw_event_regions()
+        if self._show_vowel_labels:
+            self._draw_morph_labels()
+
+    def _draw_frame_grid(self) -> None:
+        if self._duration_sec <= 0.0:
+            return
+        frame_step_sec = 1.0 / 30.0
+        frame_count = int(self._duration_sec / frame_step_sec)
+        x_positions = [index * frame_step_sec for index in range(frame_count + 1)]
+        if not x_positions or x_positions[-1] < self._duration_sec:
+            x_positions.append(self._duration_sec)
+        if not x_positions:
+            return
+        self._axes.vlines(
+            x_positions,
+            ymin=-1.05,
+            ymax=1.05,
+            colors="#888888",
+            alpha=0.18,
+            linestyles="--",
+            linewidth=0.5,
+            zorder=0.3,
+        )
+
+    def _draw_event_regions(self) -> None:
+        if not self._morph_events:
+            return
+        for event in self._morph_events:
+            start_sec, end_sec = self._event_bounds(event)
+            if end_sec <= 0.0 or start_sec >= self._duration_sec:
+                continue
+            clamped_start = min(max(start_sec, 0.0), self._duration_sec)
+            clamped_end = min(max(end_sec, 0.0), self._duration_sec)
+            if clamped_end <= clamped_start:
+                continue
+            self._axes.axvspan(
+                clamped_start,
+                clamped_end,
+                facecolor="#f0f4ff",
+                edgecolor="#9bb0d9",
+                alpha=0.22,
+                linewidth=0.4,
+                zorder=0.4,
+            )
 
     def _draw_morph_labels(self) -> None:
         if not self._morph_events:
@@ -115,6 +211,12 @@ class WaveformView(FigureCanvas):
                 color="#444444",
                 fontfamily=_JP_FONT_FAMILIES,
             )
+
+    def _refresh_after_overlay_option_changed(self) -> None:
+        if self._samples:
+            self._render_waveform()
+            return
+        self.draw_idle()
 
     def _event_bounds(self, event: VowelTimelinePoint) -> tuple[float, float]:
         if event.start_sec is not None and event.end_sec is not None:

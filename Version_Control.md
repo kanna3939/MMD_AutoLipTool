@@ -228,3 +228,54 @@
   - 本エントリはドキュメント更新のみであり、処理ロジック・解析アルゴリズム・VMD生成仕様の新規実装変更は含まない。
 - Verification:
   - `git diff -- README.md Version_Control.md Specifications_Prompt_v1.md` で差分内容を確認。
+
+---
+
+## Entry 2026-03-19 / Session: phaseb-menu-integration-and-help-version
+
+- Date: 2026-03-19
+- Session: phaseb-menu-integration-and-help-version
+- Summary:
+  - フェーズB段取り8/9として、最近使ったTEXT/WAV履歴（各10件）を File メニューへ接続し、複数入口整合を最小修正で完了。
+  - Run の `再解析` を処理実行と同一入口へ接続し、View の表示切替（30fps縦線/母音ラベル/イベント区間/初期化）を波形表示内部フラグへ接続。
+  - Help のバージョン情報に `pyopenjtalk` / `whisper` の実行環境バージョン表示を追加。
+  - README/仕様書/履歴の md を現時点の実装内容へ同期。
+- Modified Files:
+  - `src/gui/main_window.py`: 履歴機能（保持/更新/再読込）、Run/View 配線、View checked 同期、Help バージョン情報拡張を追加。
+  - `src/gui/waveform_view.py`: 表示フラグ（frame grid / vowel labels / event regions）、setter、初期化、状態取得を追加。
+  - `README.md`: フェーズB実装（履歴/View/再解析/Help表示）を反映。
+  - `Specifications_Prompt_v1.md`: 追補 16.15（フェーズB）/16.16（Help表示拡張）を追加。
+  - `Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし
+- Notes:
+  - 履歴の永続化は未実装（セッション内保持のみ）。
+  - 履歴再読込失敗時は該当項目を履歴から削除する方針（方針A）を採用。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m compileall src/gui/main_window.py src/gui/waveform_view.py` を実行し成功。
+  - `.\.venv\Scripts\python.exe -m unittest discover -s tests` を実行し、`OK (33 tests)` を確認。
+  - `QT_QPA_PLATFORM=offscreen` で `MainWindow` を起動し、Run/View/履歴の入口整合スモーク確認を実施。
+
+---
+
+## Entry 2026-03-19 / Session: release-v0337-full-repo-commit
+
+- Date: 2026-03-19
+- Session: release-v0337-full-repo-commit
+- Summary:
+  - 現セッションでの実装差分（フェーズBメニュー整合、履歴、View表示切替連動、Help版情報拡張）をリポジトリ全体として確定。
+  - ドキュメント同期バージョンと Help 表示版を `Ver 0.3.3.7` へ更新。
+  - md 更新だけに限定せず、作業ツリー上の変更を全体コミット対象として確定。
+- Modified Files:
+  - `src/gui/main_window.py`: Run/View/履歴導線と Help バージョン表示（依存バージョン表示含む）を含む更新を反映。
+  - `src/gui/waveform_view.py`: View 表示切替向け内部フラグ・setter・描画分岐を反映。
+  - `README.md`: 版数を `Ver 0.3.3.7` に更新し、フェーズB反映内容を同期。
+  - `Specifications_Prompt_v1.md`: 16.14 の同期版数を `Ver 0.3.3.7` に更新、16.15/16.16 を維持。
+  - `Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし
+- Notes:
+  - 履歴永続化は未実装（セッション内保持のみ）。
+- Verification:
+  - `git status --short` で全体差分を確認。
+  - `.\.venv\Scripts\python.exe -m unittest discover -s tests` の既存成功結果を維持。

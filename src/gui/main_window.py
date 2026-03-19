@@ -1,3 +1,5 @@
+import os
+from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 
 from core import (
@@ -12,11 +14,13 @@ from core import (
     load_waveform_preview,
     text_to_hiragana,
 )
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QMenuBar,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -39,8 +43,13 @@ class MainWindow(QWidget):
         self.selected_vowel_content: str = ""
         self.selected_wav_analysis: WavAnalysisResult | None = None
         self.current_timing_plan: VowelTimingPlan | None = None
+        self._recent_file_limit = 10
+        self.recent_text_files: list[str] = []
+        self.recent_wav_files: list[str] = []
 
         layout = QVBoxLayout()
+        self.menu_bar = self._build_menu_bar()
+        layout.setMenuBar(self.menu_bar)
 
         self.text_button = QPushButton("TEXT\u8aad\u307f\u8fbc\u307f")
         self.wav_button = QPushButton("WAV\u8aad\u307f\u8fbc\u307f")
@@ -78,11 +87,12 @@ class MainWindow(QWidget):
         )
         self.wav_waveform_view = WaveformView()
         self.output_status_label = QLabel("\u51fa\u529b\u72b6\u614b: \u672a\u5b9f\u884c")
+        self._sync_view_action_checks()
 
-        self.text_button.clicked.connect(self._select_text_file)
-        self.wav_button.clicked.connect(self._select_wav_file)
-        self.process_button.clicked.connect(self._run_processing)
-        self.output_button.clicked.connect(self._export_vmd)
+        self.text_button.clicked.connect(self._open_text_file)
+        self.wav_button.clicked.connect(self._open_wav_file)
+        self.process_button.clicked.connect(self._run_processing_requested)
+        self.output_button.clicked.connect(self._save_vmd_file)
         self.morph_upper_limit_input.valueChanged.connect(self._on_morph_upper_limit_changed)
 
         morph_upper_limit_layout = QHBoxLayout()
@@ -107,6 +117,134 @@ class MainWindow(QWidget):
         layout.addWidget(self.output_status_label)
 
         self.setLayout(layout)
+        self._update_action_states()
+
+    # Common GUI entry points (buttons and menu actions should share these).
+    def _open_text_file(self) -> None:
+        self._select_text_file()
+
+    def _open_wav_file(self) -> None:
+        self._select_wav_file()
+
+    def _run_processing_requested(self) -> None:
+        self._run_processing()
+
+    def _run_reanalysis_requested(self) -> None:
+        self._run_processing()
+
+    def _save_vmd_file(self) -> None:
+        self._export_vmd()
+
+    def _close_application(self) -> None:
+        self.close()
+
+    def _show_version_info(self) -> None:
+        pyopenjtalk_version = self._resolve_installed_version(["pyopenjtalk"])
+        whisper_version = self._resolve_installed_version(["openai-whisper", "whisper"])
+        QMessageBox.information(
+            self,
+            "バージョン情報",
+            "\n".join(
+                [
+                    "MMD AutoLip Tool Ver 0.3.3.7",
+                    f"pyopenjtalk: {pyopenjtalk_version}",
+                    f"whisper: {whisper_version}",
+                ]
+            ),
+        )
+
+    def _resolve_installed_version(self, package_names: list[str]) -> str:
+        for package_name in package_names:
+            try:
+                return package_version(package_name)
+            except PackageNotFoundError:
+                continue
+        return "not installed"
+
+    def _build_menu_bar(self) -> QMenuBar:
+        menu_bar = QMenuBar(self)
+
+        file_menu = menu_bar.addMenu("File")
+        self.action_open_text = QAction("TEXT\u3092\u958b\u304f", self)
+        self.action_open_wav = QAction("WAV\u3092\u958b\u304f", self)
+        self.action_save_vmd = QAction("VMD\u3092\u4fdd\u5b58", self)
+        self.action_exit = QAction("\u7d42\u4e86", self)
+        file_menu.addAction(self.action_open_text)
+        file_menu.addAction(self.action_open_wav)
+        self.menu_recent_text = file_menu.addMenu("\u6700\u8fd1\u4f7f\u3063\u305fTEXT")
+        self.menu_recent_wav = file_menu.addMenu("\u6700\u8fd1\u4f7f\u3063\u305fWAV")
+        file_menu.addSeparator()
+        file_menu.addAction(self.action_save_vmd)
+        file_menu.addSeparator()
+        file_menu.addAction(self.action_exit)
+
+        run_menu = menu_bar.addMenu("Run")
+        self.action_run_processing = QAction("\u51e6\u7406\u5b9f\u884c", self)
+        self.action_reanalyze = QAction("\u518d\u89e3\u6790", self)
+        run_menu.addAction(self.action_run_processing)
+        run_menu.addAction(self.action_reanalyze)
+
+        view_menu = menu_bar.addMenu("View")
+        self.action_show_30fps_lines = QAction("30fps\u7e26\u7dda\u3092\u8868\u793a", self)
+        self.action_show_vowel_labels = QAction("\u6bcd\u97f3\u30e9\u30d9\u30eb\u3092\u8868\u793a", self)
+        self.action_show_event_ranges = QAction("\u30a4\u30d9\u30f3\u30c8\u533a\u9593\u3092\u8868\u793a", self)
+        self.action_reset_waveform_view = QAction("\u6ce2\u5f62\u8868\u793a\u3092\u521d\u671f\u5316", self)
+        self.action_show_30fps_lines.setCheckable(True)
+        self.action_show_vowel_labels.setCheckable(True)
+        self.action_show_event_ranges.setCheckable(True)
+        view_menu.addAction(self.action_show_30fps_lines)
+        view_menu.addAction(self.action_show_vowel_labels)
+        view_menu.addAction(self.action_show_event_ranges)
+        view_menu.addSeparator()
+        view_menu.addAction(self.action_reset_waveform_view)
+
+        help_menu = menu_bar.addMenu("Help")
+        self.action_show_version = QAction("\u30d0\u30fc\u30b8\u30e7\u30f3\u60c5\u5831", self)
+        help_menu.addAction(self.action_show_version)
+
+        self._connect_menu_actions()
+        self._refresh_recent_file_menus()
+
+        return menu_bar
+
+    def _connect_menu_actions(self) -> None:
+        self.action_open_text.triggered.connect(self._open_text_file)
+        self.action_open_wav.triggered.connect(self._open_wav_file)
+        self.action_save_vmd.triggered.connect(self._save_vmd_file)
+        self.action_exit.triggered.connect(self._close_application)
+        self.action_run_processing.triggered.connect(self._run_processing_requested)
+        self.action_reanalyze.triggered.connect(self._run_reanalysis_requested)
+        self.action_show_30fps_lines.toggled.connect(self._on_show_30fps_lines_toggled)
+        self.action_show_vowel_labels.toggled.connect(self._on_show_vowel_labels_toggled)
+        self.action_show_event_ranges.toggled.connect(self._on_show_event_ranges_toggled)
+        self.action_reset_waveform_view.triggered.connect(self._reset_waveform_view_options)
+        self.action_show_version.triggered.connect(self._show_version_info)
+
+    def _sync_view_action_checks(self) -> None:
+        show_frame_grid, show_vowel_labels, show_event_regions = (
+            self.wav_waveform_view.overlay_visibility()
+        )
+        for action, checked in (
+            (self.action_show_30fps_lines, show_frame_grid),
+            (self.action_show_vowel_labels, show_vowel_labels),
+            (self.action_show_event_ranges, show_event_regions),
+        ):
+            previous_blocked = action.blockSignals(True)
+            action.setChecked(checked)
+            action.blockSignals(previous_blocked)
+
+    def _on_show_30fps_lines_toggled(self, checked: bool) -> None:
+        self.wav_waveform_view.set_show_frame_grid(checked)
+
+    def _on_show_vowel_labels_toggled(self, checked: bool) -> None:
+        self.wav_waveform_view.set_show_vowel_labels(checked)
+
+    def _on_show_event_ranges_toggled(self, checked: bool) -> None:
+        self.wav_waveform_view.set_show_event_regions(checked)
+
+    def _reset_waveform_view_options(self) -> None:
+        self.wav_waveform_view.reset_overlay_visibility()
+        self._sync_view_action_checks()
 
     def _select_text_file(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
@@ -117,7 +255,9 @@ class MainWindow(QWidget):
         )
         if not file_path:
             return
+        self._load_text_file(file_path)
 
+    def _load_text_file(self, file_path: str) -> bool:
         try:
             text_content = Path(file_path).read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -127,7 +267,7 @@ class MainWindow(QWidget):
                 message="UTF-8\u306eTEXT\u30d5\u30a1\u30a4\u30eb\u3067\u306f\u306a\u3044\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059\u3002",
                 status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
             )
-            return
+            return False
         except OSError as error:
             self.current_timing_plan = None
             self._show_warning(
@@ -135,7 +275,7 @@ class MainWindow(QWidget):
                 message=f"TEXT\u30d5\u30a1\u30a4\u30eb\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093: {error}",
                 status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
             )
-            return
+            return False
 
         self.selected_text_path = file_path
         self.selected_text_content = text_content
@@ -155,9 +295,11 @@ class MainWindow(QWidget):
                 message=f"TEXT\u3092\u304b\u306a/\u3072\u3089\u304c\u306a\u306b\u5909\u63db\u3067\u304d\u307e\u305b\u3093: {error}",
                 status="\u51fa\u529b\u72b6\u614b: TEXT\u5909\u63db\u5931\u6557",
             )
-            return
+            return False
         self.wav_waveform_view.clear_morph_labels()
         self._set_ready_status()
+        self._add_recent_text_file(file_path)
+        return True
 
     def _select_wav_file(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
@@ -168,7 +310,9 @@ class MainWindow(QWidget):
         )
         if not file_path:
             return
+        self._load_wav_file(file_path)
 
+    def _load_wav_file(self, file_path: str) -> bool:
         try:
             wav_info = analyze_wav_file(file_path)
         except (ValueError, OSError, EOFError) as error:
@@ -181,7 +325,7 @@ class MainWindow(QWidget):
                 message=f"WAV\u30d5\u30a1\u30a4\u30eb\u3092\u89e3\u6790\u3067\u304d\u307e\u305b\u3093: {error}",
                 status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
             )
-            return
+            return False
 
         try:
             waveform_preview = load_waveform_preview(file_path, max_points=3000, stereo_mode="average")
@@ -195,7 +339,7 @@ class MainWindow(QWidget):
                 message=f"WAV\u6ce2\u5f62\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093: {error}",
                 status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
             )
-            return
+            return False
 
         self.selected_wav_path = file_path
         self.selected_wav_analysis = wav_info
@@ -214,6 +358,97 @@ class MainWindow(QWidget):
         )
         self.wav_waveform_view.clear_morph_labels()
         self._set_ready_status()
+        self._add_recent_wav_file(file_path)
+        return True
+
+    def _open_recent_text_file(self, file_path: str) -> None:
+        if self._load_text_file(file_path):
+            return
+        self._remove_recent_text_file(file_path)
+
+    def _open_recent_wav_file(self, file_path: str) -> None:
+        if self._load_wav_file(file_path):
+            return
+        self._remove_recent_wav_file(file_path)
+
+    def _add_recent_text_file(self, file_path: str) -> None:
+        self._remember_recent_file(self.recent_text_files, file_path)
+        self._refresh_recent_text_menu()
+
+    def _add_recent_wav_file(self, file_path: str) -> None:
+        self._remember_recent_file(self.recent_wav_files, file_path)
+        self._refresh_recent_wav_menu()
+
+    def _remove_recent_text_file(self, file_path: str) -> None:
+        if self._remove_recent_file(self.recent_text_files, file_path):
+            self._refresh_recent_text_menu()
+
+    def _remove_recent_wav_file(self, file_path: str) -> None:
+        if self._remove_recent_file(self.recent_wav_files, file_path):
+            self._refresh_recent_wav_menu()
+
+    def _remember_recent_file(self, recent_files: list[str], file_path: str) -> None:
+        normalized_target = self._normalize_recent_path(file_path)
+        recent_files[:] = [
+            existing_path
+            for existing_path in recent_files
+            if self._normalize_recent_path(existing_path) != normalized_target
+        ]
+        recent_files.insert(0, file_path)
+        if len(recent_files) > self._recent_file_limit:
+            del recent_files[self._recent_file_limit :]
+
+    def _remove_recent_file(self, recent_files: list[str], file_path: str) -> bool:
+        normalized_target = self._normalize_recent_path(file_path)
+        original_size = len(recent_files)
+        recent_files[:] = [
+            existing_path
+            for existing_path in recent_files
+            if self._normalize_recent_path(existing_path) != normalized_target
+        ]
+        return len(recent_files) != original_size
+
+    def _normalize_recent_path(self, file_path: str) -> str:
+        return os.path.normcase(os.path.normpath(file_path))
+
+    def _refresh_recent_file_menus(self) -> None:
+        self._refresh_recent_text_menu()
+        self._refresh_recent_wav_menu()
+
+    def _refresh_recent_text_menu(self) -> None:
+        self._refresh_recent_menu(
+            menu=self.menu_recent_text,
+            recent_files=self.recent_text_files,
+            on_selected=self._open_recent_text_file,
+        )
+
+    def _refresh_recent_wav_menu(self) -> None:
+        self._refresh_recent_menu(
+            menu=self.menu_recent_wav,
+            recent_files=self.recent_wav_files,
+            on_selected=self._open_recent_wav_file,
+        )
+
+    def _refresh_recent_menu(
+        self,
+        menu,
+        recent_files: list[str],
+        on_selected,
+    ) -> None:
+        menu.clear()
+        if not recent_files:
+            empty_action = QAction("(\u5c65\u6b74\u306a\u3057)", self)
+            empty_action.setEnabled(False)
+            menu.addAction(empty_action)
+            menu.setEnabled(False)
+            return
+        menu.setEnabled(True)
+        for recent_path in recent_files:
+            action = QAction(recent_path, self)
+            action.triggered.connect(
+                lambda _checked=False, selected_path=recent_path: on_selected(selected_path)
+            )
+            menu.addAction(action)
 
     def _export_vmd(self) -> None:
         if self.selected_text_path and self.selected_wav_path and not self.selected_vowel_content:
@@ -392,6 +627,7 @@ class MainWindow(QWidget):
         QMessageBox.warning(self, title, message)
         if status:
             self._set_output_status(status)
+        self._update_action_states()
 
     def _ensure_timing_plan(self) -> VowelTimingPlan:
         if self.current_timing_plan is not None:
@@ -416,6 +652,7 @@ class MainWindow(QWidget):
     def _set_ready_status(self) -> None:
         text_loaded = bool(self.selected_text_path)
         wav_loaded = bool(self.selected_wav_path and self.selected_wav_analysis is not None)
+        self._update_action_states()
 
         if text_loaded and wav_loaded and not self.current_timing_plan:
             self._set_output_status("\u51fa\u529b\u72b6\u614b: \u89e3\u6790\u672a\u5b9f\u884c (TEXT/WAV\u8aad\u8fbc\u6e08\u307f)")
@@ -438,3 +675,15 @@ class MainWindow(QWidget):
         self._set_output_status(
             f"\u51fa\u529b\u72b6\u614b: \u89e3\u6790\u5b9f\u884c\u6e08\u307f ({timing_label} / \u533a\u9593={len(self.current_timing_plan.anchors)} / \u6bcd\u97f3={len(self.current_timing_plan.timeline)})"
         )
+
+    def _update_action_states(self) -> None:
+        has_text = bool(self.selected_text_content and self.selected_vowel_content)
+        has_wav = bool(self.selected_wav_path and self.selected_wav_analysis is not None)
+        can_run = has_text and has_wav
+        can_save = can_run and self.current_timing_plan is not None
+
+        self.process_button.setEnabled(can_run)
+        self.output_button.setEnabled(can_save)
+        self.action_run_processing.setEnabled(can_run)
+        self.action_reanalyze.setEnabled(can_run)
+        self.action_save_vmd.setEnabled(can_save)

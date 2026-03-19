@@ -15,4 +15,5 @@ pyproject
 pywin
 setuptools
 shiboken
+tiktoken
 Vocaloid
