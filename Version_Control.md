@@ -329,3 +329,52 @@
 - Verification:
   - `.\.venv\Scripts\python.exe -m unittest discover -s tests` を実行し、`OK (33 tests)` を確認。
 
+---
+
+## Entry 2026-03-19 / Session: ms7-io-safety-phases2-to-8-and-docs-sync
+
+- Date: 2026-03-19
+- Session: ms7-io-safety-phases2-to-8-and-docs-sync
+- Summary:
+  - MS7（入出力安全性点検）として、TEXT/WAV 読込・VMD 保存・履歴再読込の入口に対する最小防御を実装。
+  - 想定外例外時に GUI 警告へフォールバックする復帰経路を補強し、状態不整合の残留リスクを低減。
+  - フェーズ7/8として、修正範囲の固定（`main_window.py` 局所）と完了判定観点（TEXT/WAV/保存/履歴/例外）を整理。
+  - `README.md` / `repo_milestone.md` / `Specification_Prompt_v2.md` に MS7 の実施結果を反映。
+- Modified Files:
+  - `src/gui/main_window.py`: MS7 フェーズ2〜6の最小修正（入口パス確認、保存前確認、履歴再読込防御、例外フォールバック）を反映。
+  - `README.md`: MS7 実装内容と完了観点を追記。
+  - `repo_milestone.md`: MS7 フェーズ1〜8の進捗・方針固定・完了判定観点を追記。
+  - `Specification_Prompt_v2.md`: 6.8 節（MS7）を追加し、残課題から MS7 項目を除外。
+  - `Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし
+- Notes:
+  - 本セッションでは `src/app_io/` 導入、履歴永続化、非同期化は対象外。
+  - 主要導線（TEXT→WAV→処理実行→出力）は維持。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m py_compile src\gui\main_window.py` を実行し成功。
+
+---
+
+## Entry 2026-03-19 / Session: release-v0340-repo-sync
+
+- Date: 2026-03-19
+- Session: release-v0340-repo-sync
+- Summary:
+  - リポジトリ現状を再確認し、反映版を `Ver 0.3.4.0` へ同期。
+  - MS7（入出力安全性点検）反映済みの状態を、版数とドキュメント表記へ統一。
+- Modified Files:
+  - `README.md`: 版数表記を `Ver 0.3.4.0` に更新。
+  - `pyproject.toml`: プロジェクトバージョンを `0.3.4.0` に更新。
+  - `src/gui/main_window.py`: Help のバージョン表示を `Ver 0.3.4.0` に更新。
+  - `Specification_Prompt_v2.md`: 文書情報の対応リリースを `Ver 0.3.4.0` に更新。
+  - `repo_milestone.md`: 進捗メモのリリース同期版を `Ver 0.3.4.0` に更新。
+  - `Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし
+- Notes:
+  - 主要導線（TEXT→WAV→処理実行→出力）は維持。
+  - 本エントリはバージョン同期と反映整理を対象とし、追加機能の導入は行わない。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m py_compile src\gui\main_window.py` を実行し成功。
+

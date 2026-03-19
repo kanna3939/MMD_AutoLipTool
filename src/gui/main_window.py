@@ -197,7 +197,7 @@ class MainWindow(QWidget):
             "バージョン情報",
             "\n".join(
                 [
-                    "MMD AutoLip Tool Ver 0.3.3.8",
+                    "MMD AutoLip Tool Ver 0.3.4.0",
                     f"pyopenjtalk: {pyopenjtalk_version}",
                     f"whisper: {whisper_version}",
                 ]
@@ -308,11 +308,58 @@ class MainWindow(QWidget):
             return
         self._load_text_file(file_path)
 
+    def _reset_text_analysis_state(self) -> None:
+        self.current_timing_plan = None
+        self.wav_waveform_view.clear_morph_labels()
+
+    def _show_text_conversion_failed_previews(self) -> None:
+        self.selected_hiragana_content = ""
+        self.selected_vowel_content = ""
+        self.hiragana_preview.setPlainText("(\u3072\u3089\u304c\u306a\u5909\u63db\u306b\u5931\u6557\u3057\u307e\u3057\u305f)")
+        self.vowel_preview.setPlainText("(\u6bcd\u97f3\u5909\u63db\u306f\u672a\u5b9f\u884c\u3067\u3059)")
+
     def _load_text_file(self, file_path: str) -> bool:
+        normalized_path = file_path.strip()
+        if not normalized_path:
+            self._reset_text_analysis_state()
+            self._show_warning(
+                title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
+                message="TEXT\u30d5\u30a1\u30a4\u30eb\u306e\u30d1\u30b9\u304c\u7a7a\u3067\u3059\u3002",
+                status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
+            )
+            return False
+
+        text_path = Path(normalized_path)
         try:
-            text_content = Path(file_path).read_text(encoding="utf-8")
+            if not text_path.exists():
+                self._reset_text_analysis_state()
+                self._show_warning(
+                    title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
+                    message="TEXT\u30d5\u30a1\u30a4\u30eb\u304c\u5b58\u5728\u3057\u307e\u305b\u3093\u3002",
+                    status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
+                )
+                return False
+            if text_path.is_dir():
+                self._reset_text_analysis_state()
+                self._show_warning(
+                    title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
+                    message="TEXT\u30d5\u30a1\u30a4\u30eb\u3067\u306f\u306a\u304f\u30d5\u30a9\u30eb\u30c0\u304c\u9078\u629e\u3055\u308c\u3066\u3044\u307e\u3059\u3002",
+                    status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
+                )
+                return False
+        except OSError as error:
+            self._reset_text_analysis_state()
+            self._show_warning(
+                title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
+                message=f"TEXT\u30d5\u30a1\u30a4\u30eb\u306e\u78ba\u8a8d\u4e2d\u306b\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f: {error}",
+                status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
+            )
+            return False
+
+        try:
+            text_content = text_path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
-            self.current_timing_plan = None
+            self._reset_text_analysis_state()
             self._show_warning(
                 title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
                 message="UTF-8\u306eTEXT\u30d5\u30a1\u30a4\u30eb\u3067\u306f\u306a\u3044\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059\u3002",
@@ -320,7 +367,7 @@ class MainWindow(QWidget):
             )
             return False
         except OSError as error:
-            self.current_timing_plan = None
+            self._reset_text_analysis_state()
             self._show_warning(
                 title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
                 message=f"TEXT\u30d5\u30a1\u30a4\u30eb\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093: {error}",
@@ -328,28 +375,56 @@ class MainWindow(QWidget):
             )
             return False
 
-        self.selected_text_path = file_path
+        if not text_content:
+            self._reset_text_analysis_state()
+            self.selected_hiragana_content = ""
+            self.selected_vowel_content = ""
+            self.hiragana_preview.setPlainText("(\u3072\u3089\u304c\u306a\u5909\u63db\u306f\u672a\u5b9f\u884c\u3067\u3059)")
+            self.vowel_preview.setPlainText("(\u6bcd\u97f3\u5909\u63db\u306f\u672a\u5b9f\u884c\u3067\u3059)")
+            self._show_warning(
+                title="TEXT\u5909\u63db\u30a8\u30e9\u30fc",
+                message="TEXT\u30d5\u30a1\u30a4\u30eb\u304c\u7a7a\u3067\u3059\u3002",
+                status="\u51fa\u529b\u72b6\u614b: TEXT\u5909\u63db\u5931\u6557",
+            )
+            return False
+
+        self.selected_text_path = normalized_path
         self.selected_text_content = text_content
         self.current_timing_plan = None
-        self.text_path_label.setText(f"TEXT: {Path(file_path).name}")
+        self.text_path_label.setText(f"TEXT: {text_path.name}")
         try:
             self._refresh_text_processing_views()
         except TextProcessingError as error:
-            self.selected_hiragana_content = ""
-            self.selected_vowel_content = ""
-            self.current_timing_plan = None
-            self.hiragana_preview.setPlainText("(\u3072\u3089\u304c\u306a\u5909\u63db\u306b\u5931\u6557\u3057\u307e\u3057\u305f)")
-            self.vowel_preview.setPlainText("(\u6bcd\u97f3\u5909\u63db\u306f\u672a\u5b9f\u884c\u3067\u3059)")
-            self.wav_waveform_view.clear_morph_labels()
+            self._reset_text_analysis_state()
+            self._show_text_conversion_failed_previews()
             self._show_warning(
                 title="TEXT\u5909\u63db\u30a8\u30e9\u30fc",
                 message=f"TEXT\u3092\u304b\u306a/\u3072\u3089\u304c\u306a\u306b\u5909\u63db\u3067\u304d\u307e\u305b\u3093: {error}",
                 status="\u51fa\u529b\u72b6\u614b: TEXT\u5909\u63db\u5931\u6557",
             )
             return False
+        except Exception as error:
+            self._reset_text_analysis_state()
+            self._show_text_conversion_failed_previews()
+            self._show_warning(
+                title="\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc",
+                message=f"TEXT\u8aad\u307f\u8fbc\u307f\u4e2d\u306b\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f: {error}",
+                status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
+            )
+            return False
+
+        if not self.selected_vowel_content:
+            self._reset_text_analysis_state()
+            self._show_warning(
+                title="TEXT\u5909\u63db\u30a8\u30e9\u30fc",
+                message="\u6bcd\u97f3\u3092\u62bd\u51fa\u3067\u304d\u308b\u6587\u5b57\u304c\u3042\u308a\u307e\u305b\u3093\u3002",
+                status="\u51fa\u529b\u72b6\u614b: TEXT\u5909\u63db\u5931\u6557",
+            )
+            return False
+
         self.wav_waveform_view.clear_morph_labels()
         self._set_ready_status()
-        self._add_recent_text_file(file_path)
+        self._add_recent_text_file(normalized_path)
         return True
 
     def _select_wav_file(self) -> None:
@@ -363,42 +438,132 @@ class MainWindow(QWidget):
             return
         self._load_wav_file(file_path)
 
+    def _reset_wav_load_state(self, placeholder_message: str = "Waveform preview (load failed)") -> None:
+        self.selected_wav_path = None
+        self.selected_wav_analysis = None
+        self.current_timing_plan = None
+        self.wav_path_label.setText("WAV: \u672a\u9078\u629e")
+        self.wav_info_label.setText("WAV\u60c5\u5831: \u672a\u8aad\u307f\u8fbc\u307f")
+        self.wav_waveform_view.clear_morph_labels()
+        self.wav_waveform_view.show_placeholder(placeholder_message)
+
+    def _validate_wav_load_result(self, wav_info: WavAnalysisResult, waveform_preview) -> str | None:
+        if wav_info.sample_rate_hz <= 0:
+            return "WAV\u306e\u30b5\u30f3\u30d7\u30ea\u30f3\u30b0\u5468\u6ce2\u6570\u304c\u7121\u52b9\u3067\u3059\u3002"
+        if wav_info.frame_count < 0:
+            return "WAV\u306e\u30d5\u30ec\u30fc\u30e0\u6570\u304c\u7121\u52b9\u3067\u3059\u3002"
+        if wav_info.duration_sec < 0.0:
+            return "WAV\u306e\u518d\u751f\u6642\u9593\u304c\u7121\u52b9\u3067\u3059\u3002"
+        if wav_info.has_speech:
+            if wav_info.speech_start_sec < 0.0:
+                return "WAV\u306e\u767a\u8a71\u958b\u59cb\u6642\u9593\u304c\u7121\u52b9\u3067\u3059\u3002"
+            if wav_info.speech_end_sec <= wav_info.speech_start_sec:
+                return "WAV\u306e\u767a\u8a71\u533a\u9593\u304c\u7121\u52b9\u3067\u3059\u3002"
+            if wav_info.speech_end_sec > (wav_info.duration_sec + 1e-9):
+                return "WAV\u306e\u767a\u8a71\u7d42\u4e86\u6642\u9593\u304c\u518d\u751f\u6642\u9593\u3092\u8d85\u3048\u3066\u3044\u307e\u3059\u3002"
+        if waveform_preview.duration_sec < 0.0:
+            return "WAV\u6ce2\u5f62\u306e\u518d\u751f\u6642\u9593\u304c\u7121\u52b9\u3067\u3059\u3002"
+        if waveform_preview.duration_sec > 0.0 and not waveform_preview.samples:
+            return "WAV\u6ce2\u5f62\u306e\u8868\u793a\u30c7\u30fc\u30bf\u304c\u53d6\u5f97\u3067\u304d\u307e\u305b\u3093\u3002"
+        return None
+
     def _load_wav_file(self, file_path: str) -> bool:
+        normalized_path = file_path.strip()
+        if not normalized_path:
+            self._reset_wav_load_state()
+            self._show_warning(
+                title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
+                message="WAV\u30d5\u30a1\u30a4\u30eb\u306e\u30d1\u30b9\u304c\u7a7a\u3067\u3059\u3002",
+                status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
+            )
+            return False
+
+        wav_path = Path(normalized_path)
         try:
-            wav_info = analyze_wav_file(file_path)
+            if not wav_path.exists():
+                self._reset_wav_load_state()
+                self._show_warning(
+                    title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
+                    message="WAV\u30d5\u30a1\u30a4\u30eb\u304c\u5b58\u5728\u3057\u307e\u305b\u3093\u3002",
+                    status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
+                )
+                return False
+            if wav_path.is_dir():
+                self._reset_wav_load_state()
+                self._show_warning(
+                    title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
+                    message="WAV\u30d5\u30a1\u30a4\u30eb\u3067\u306f\u306a\u304f\u30d5\u30a9\u30eb\u30c0\u304c\u9078\u629e\u3055\u308c\u3066\u3044\u307e\u3059\u3002",
+                    status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
+                )
+                return False
+        except OSError as error:
+            self._reset_wav_load_state()
+            self._show_warning(
+                title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
+                message=f"WAV\u30d5\u30a1\u30a4\u30eb\u306e\u78ba\u8a8d\u4e2d\u306b\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f: {error}",
+                status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
+            )
+            return False
+
+        try:
+            wav_info = analyze_wav_file(normalized_path)
         except (ValueError, OSError, EOFError) as error:
-            self.selected_wav_analysis = None
-            self.current_timing_plan = None
-            self.wav_waveform_view.clear_morph_labels()
-            self.wav_waveform_view.show_placeholder("Waveform preview (load failed)")
+            self._reset_wav_load_state()
             self._show_warning(
                 title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
                 message=f"WAV\u30d5\u30a1\u30a4\u30eb\u3092\u89e3\u6790\u3067\u304d\u307e\u305b\u3093: {error}",
                 status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
             )
             return False
+        except Exception as error:
+            self._reset_wav_load_state()
+            self._show_warning(
+                title="\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc",
+                message=f"WAV\u89e3\u6790\u4e2d\u306b\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f: {error}",
+                status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
+            )
+            return False
 
         try:
-            waveform_preview = load_waveform_preview(file_path, max_points=3000, stereo_mode="average")
+            waveform_preview = load_waveform_preview(
+                normalized_path,
+                max_points=3000,
+                stereo_mode="average",
+            )
         except (ValueError, OSError, EOFError) as error:
-            self.selected_wav_analysis = None
-            self.current_timing_plan = None
-            self.wav_waveform_view.clear_morph_labels()
-            self.wav_waveform_view.show_placeholder("Waveform preview (load failed)")
+            self._reset_wav_load_state()
             self._show_warning(
                 title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
                 message=f"WAV\u6ce2\u5f62\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093: {error}",
                 status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
             )
             return False
+        except Exception as error:
+            self._reset_wav_load_state()
+            self._show_warning(
+                title="\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc",
+                message=f"WAV\u6ce2\u5f62\u53d6\u5f97\u4e2d\u306b\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f: {error}",
+                status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
+            )
+            return False
 
-        self.selected_wav_path = file_path
+        wav_load_error = self._validate_wav_load_result(wav_info, waveform_preview)
+        if wav_load_error:
+            self._reset_wav_load_state()
+            self._show_warning(
+                title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
+                message=f"WAV\u60c5\u5831\u304c\u7121\u52b9\u3067\u3059: {wav_load_error}",
+                status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
+            )
+            return False
+
+        self.selected_wav_path = normalized_path
         self.selected_wav_analysis = wav_info
         self.current_timing_plan = None
-        self.wav_path_label.setText(f"WAV: {Path(file_path).name}")
+        self.wav_path_label.setText(f"WAV: {wav_path.name}")
         self.wav_info_label.setText(
             "WAV\u60c5\u5831: "
-            f"\u30d5\u30a1\u30a4\u30eb\u540d={Path(file_path).name} / "
+            f"\u30d5\u30a1\u30a4\u30eb\u540d={wav_path.name} / "
             f"\u518d\u751f\u6642\u9593={wav_info.duration_sec:.3f}s / "
             f"\u30b5\u30f3\u30d7\u30ea\u30f3\u30b0\u5468\u6ce2\u6570={wav_info.sample_rate_hz}Hz / "
             f"\u767a\u8a71={wav_info.speech_start_sec:.3f}s-{wav_info.speech_end_sec:.3f}s"
@@ -409,18 +574,62 @@ class MainWindow(QWidget):
         )
         self.wav_waveform_view.clear_morph_labels()
         self._set_ready_status()
-        self._add_recent_wav_file(file_path)
+        self._add_recent_wav_file(normalized_path)
         return True
 
     def _open_recent_text_file(self, file_path: str) -> None:
-        if self._load_text_file(file_path):
+        try:
+            recent_path_error = self._validate_recent_file_path(
+                file_path=file_path,
+                expected_suffix=".txt",
+            )
+            if recent_path_error:
+                self._remove_recent_text_file(file_path)
+                self._show_warning(
+                    title="読み込みエラー",
+                    message=f"最近使ったTEXTを開けません: {recent_path_error}",
+                    status="出力状態: TEXT読込失敗",
+                )
+                return
+            if self._load_text_file(file_path):
+                return
+            self._remove_recent_text_file(file_path)
             return
-        self._remove_recent_text_file(file_path)
+        except Exception as error:
+            self._remove_recent_text_file(file_path)
+            self._reset_text_analysis_state()
+            self._show_warning(
+                title="\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc",
+                message=f"最近使ったTEXTの読み込み中に予期しないエラーが発生しました: {error}",
+                status="出力状態: TEXT読込失敗",
+            )
 
     def _open_recent_wav_file(self, file_path: str) -> None:
-        if self._load_wav_file(file_path):
+        try:
+            recent_path_error = self._validate_recent_file_path(
+                file_path=file_path,
+                expected_suffix=".wav",
+            )
+            if recent_path_error:
+                self._remove_recent_wav_file(file_path)
+                self._show_warning(
+                    title="読み込みエラー",
+                    message=f"最近使ったWAVを開けません: {recent_path_error}",
+                    status="出力状態: WAV読込失敗",
+                )
+                return
+            if self._load_wav_file(file_path):
+                return
+            self._remove_recent_wav_file(file_path)
             return
-        self._remove_recent_wav_file(file_path)
+        except Exception as error:
+            self._remove_recent_wav_file(file_path)
+            self._reset_wav_load_state()
+            self._show_warning(
+                title="\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc",
+                message=f"最近使ったWAVの読み込み中に予期しないエラーが発生しました: {error}",
+                status="出力状態: WAV読込失敗",
+            )
 
     def _add_recent_text_file(self, file_path: str) -> None:
         self._remember_recent_file(self.recent_text_files, file_path)
@@ -462,6 +671,30 @@ class MainWindow(QWidget):
     def _normalize_recent_path(self, file_path: str) -> str:
         return os.path.normcase(os.path.normpath(file_path))
 
+    def _validate_recent_file_path(
+        self,
+        *,
+        file_path: str,
+        expected_suffix: str,
+    ) -> str | None:
+        normalized_path = file_path.strip()
+        if not normalized_path:
+            return "履歴パスが空です。"
+
+        path = Path(normalized_path)
+        try:
+            if not path.exists():
+                return "ファイルが存在しません。"
+            if path.is_dir():
+                return "フォルダが指定されています。"
+        except OSError as error:
+            return f"ファイル確認中にエラーが発生しました: {error}"
+
+        if path.suffix.lower() != expected_suffix:
+            return f"{expected_suffix} ファイルではありません。"
+
+        return None
+
     def _refresh_recent_file_menus(self) -> None:
         self._refresh_recent_text_menu()
         self._refresh_recent_wav_menu()
@@ -501,6 +734,72 @@ class MainWindow(QWidget):
             )
             menu.addAction(action)
 
+    def _resolve_vmd_output_path(self, raw_output_path: str) -> Path | None:
+        normalized_output_path = raw_output_path.strip()
+        if not normalized_output_path:
+            self._show_warning(
+                title="出力エラー",
+                message="VMDの保存先パスが空です。",
+                status="出力状態: 失敗",
+            )
+            return None
+
+        out_path = Path(normalized_output_path)
+        try:
+            if out_path.suffix.lower() != ".vmd":
+                out_path = out_path.with_suffix(".vmd")
+        except ValueError:
+            self._show_warning(
+                title="出力エラー",
+                message="VMDの保存先パスが不正です。",
+                status="出力状態: 失敗",
+            )
+            return None
+
+        final_output_path = str(out_path).strip()
+        if not final_output_path:
+            self._show_warning(
+                title="出力エラー",
+                message="VMDの保存先パスが不正です。",
+                status="出力状態: 失敗",
+            )
+            return None
+
+        out_path = Path(final_output_path)
+        try:
+            if out_path.exists() and out_path.is_dir():
+                self._show_warning(
+                    title="出力エラー",
+                    message="保存先にフォルダが指定されています。ファイル名を指定してください。",
+                    status="出力状態: 失敗",
+                )
+                return None
+
+            parent_dir = out_path.parent
+            if not str(parent_dir).strip():
+                self._show_warning(
+                    title="出力エラー",
+                    message="保存先フォルダが不正です。",
+                    status="出力状態: 失敗",
+                )
+                return None
+            if parent_dir.exists() and not parent_dir.is_dir():
+                self._show_warning(
+                    title="出力エラー",
+                    message="保存先フォルダが不正です。",
+                    status="出力状態: 失敗",
+                )
+                return None
+        except OSError as error:
+            self._show_warning(
+                title="出力エラー",
+                message=f"保存先の確認中にエラーが発生しました: {error}",
+                status="出力状態: 失敗",
+            )
+            return None
+
+        return out_path
+
     def _export_vmd(self) -> None:
         if self.selected_text_path and self.selected_wav_path and not self.selected_vowel_content:
             self._show_warning(
@@ -536,9 +835,9 @@ class MainWindow(QWidget):
             self._set_output_status("\u51fa\u529b\u72b6\u614b: \u30ad\u30e3\u30f3\u30bb\u30eb")
             return
 
-        out_path = Path(output_path)
-        if out_path.suffix.lower() != ".vmd":
-            out_path = out_path.with_suffix(".vmd")
+        out_path = self._resolve_vmd_output_path(output_path)
+        if out_path is None:
+            return
 
         try:
             timing_plan = self._ensure_timing_plan()
