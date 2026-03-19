@@ -2,6 +2,7 @@ import os
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from core import (
     PipelineError,
     TextProcessingError,
@@ -16,6 +17,7 @@ from core import (
 )
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QApplication,
     QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
@@ -23,6 +25,7 @@ from PySide6.QtWidgets import (
     QMenuBar,
     QMessageBox,
     QPlainTextEdit,
+    QProgressDialog,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -43,6 +46,8 @@ class MainWindow(QWidget):
         self.selected_vowel_content: str = ""
         self.selected_wav_analysis: WavAnalysisResult | None = None
         self.current_timing_plan: VowelTimingPlan | None = None
+        self._is_processing = False
+        self._processing_dialog: QProgressDialog | None = None
         self._recent_file_limit = 10
         self.recent_text_files: list[str] = []
         self.recent_wav_files: list[str] = []
@@ -127,9 +132,13 @@ class MainWindow(QWidget):
         self._select_wav_file()
 
     def _run_processing_requested(self) -> None:
+        if self._is_processing:
+            return
         self._run_processing()
 
     def _run_reanalysis_requested(self) -> None:
+        if self._is_processing:
+            return
         self._run_processing()
 
     def _save_vmd_file(self) -> None:
@@ -137,6 +146,48 @@ class MainWindow(QWidget):
 
     def _close_application(self) -> None:
         self.close()
+
+    def _ensure_processing_dialog(self) -> QProgressDialog:
+        if self._processing_dialog is None:
+            dialog = QProgressDialog("処理中です...", "", 0, 0, self)
+            dialog.setWindowTitle("処理中")
+            dialog.setCancelButton(None)
+            dialog.setWindowModality(Qt.ApplicationModal)
+            dialog.setAutoClose(False)
+            dialog.setAutoReset(False)
+            dialog.setMinimumDuration(0)
+            dialog.setValue(0)
+            dialog.setWindowFlag(Qt.WindowCloseButtonHint, False)
+            dialog.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+            self._processing_dialog = dialog
+        return self._processing_dialog
+
+    def _show_processing_dialog(self) -> None:
+        dialog = self._ensure_processing_dialog()
+        dialog.setRange(0, 0)
+        dialog.setValue(0)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _hide_processing_dialog(self) -> None:
+        if self._processing_dialog is None:
+            return
+        self._processing_dialog.hide()
+
+    def _begin_processing_session(self) -> None:
+        self._is_processing = True
+        self._update_action_states()
+        self._set_output_status("出力状態: 解析中")
+        self._show_processing_dialog()
+        QApplication.processEvents()
+
+    def _end_processing_session(self) -> None:
+        self._hide_processing_dialog()
+        self._is_processing = False
+        if self.output_status_label.text() == "出力状態: 解析中":
+            self._set_output_status("出力状態: 失敗")
+        self._update_action_states()
 
     def _show_version_info(self) -> None:
         pyopenjtalk_version = self._resolve_installed_version(["pyopenjtalk"])
@@ -146,7 +197,7 @@ class MainWindow(QWidget):
             "バージョン情報",
             "\n".join(
                 [
-                    "MMD AutoLip Tool Ver 0.3.3.7",
+                    "MMD AutoLip Tool Ver 0.3.3.8",
                     f"pyopenjtalk: {pyopenjtalk_version}",
                     f"whisper: {whisper_version}",
                 ]
@@ -542,6 +593,8 @@ class MainWindow(QWidget):
         )
 
     def _run_processing(self) -> None:
+        if self._is_processing:
+            return
         if not self.selected_text_content:
             self._show_warning(
                 title="\u5165\u529b\u4e0d\u8db3",
@@ -564,15 +617,19 @@ class MainWindow(QWidget):
             )
             return
 
-        self._refresh_waveform_morph_labels()
-        if self.current_timing_plan is None:
-            self._show_warning(
-                title="\u51e6\u7406\u30a8\u30e9\u30fc",
-                message="\u97f3\u58f0\u51e6\u7406\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002",
-                status="\u51fa\u529b\u72b6\u614b: \u5931\u6557",
-            )
-            return
-        self._set_ready_status()
+        self._begin_processing_session()
+        try:
+            self._refresh_waveform_morph_labels()
+            if self.current_timing_plan is None:
+                self._show_warning(
+                    title="\u51e6\u7406\u30a8\u30e9\u30fc",
+                    message="\u97f3\u58f0\u51e6\u7406\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002",
+                    status="\u51fa\u529b\u72b6\u614b: \u5931\u6557",
+                )
+                return
+            self._set_ready_status()
+        finally:
+            self._end_processing_session()
 
     def _has_required_inputs(self) -> bool:
         return bool(self.selected_text_path and self.selected_wav_path)
@@ -677,10 +734,61 @@ class MainWindow(QWidget):
         )
 
     def _update_action_states(self) -> None:
+        action_states = self._build_normal_action_states()
+        action_states = self._apply_processing_lock_overrides(action_states)
+        self._apply_action_states(action_states)
+
+    def _build_normal_action_states(self) -> dict[str, bool]:
         has_text = bool(self.selected_text_content and self.selected_vowel_content)
         has_wav = bool(self.selected_wav_path and self.selected_wav_analysis is not None)
+        has_recent_text = bool(self.recent_text_files)
+        has_recent_wav = bool(self.recent_wav_files)
         can_run = has_text and has_wav
         can_save = can_run and self.current_timing_plan is not None
+
+        return {
+            "can_open_text": True,
+            "can_open_wav": True,
+            "can_open_recent_text": has_recent_text,
+            "can_open_recent_wav": has_recent_wav,
+            "can_adjust_morph_upper_limit": True,
+            "can_run": can_run,
+            "can_save": can_save,
+        }
+
+    def _apply_processing_lock_overrides(self, action_states: dict[str, bool]) -> dict[str, bool]:
+        if not self._is_processing:
+            return action_states
+        locked_states = action_states.copy()
+        locked_states["can_open_text"] = False
+        locked_states["can_open_wav"] = False
+        locked_states["can_open_recent_text"] = False
+        locked_states["can_open_recent_wav"] = False
+        locked_states["can_adjust_morph_upper_limit"] = False
+        locked_states["can_run"] = False
+        locked_states["can_save"] = False
+        return locked_states
+
+    def _apply_action_states(self, action_states: dict[str, bool]) -> None:
+        can_open_text = action_states["can_open_text"]
+        can_open_wav = action_states["can_open_wav"]
+        can_open_recent_text = action_states["can_open_recent_text"]
+        can_open_recent_wav = action_states["can_open_recent_wav"]
+        can_adjust_morph_upper_limit = action_states["can_adjust_morph_upper_limit"]
+        can_run = action_states["can_run"]
+        can_save = action_states["can_save"]
+
+        self.text_button.setEnabled(can_open_text)
+        self.wav_button.setEnabled(can_open_wav)
+        self.action_open_text.setEnabled(can_open_text)
+        self.action_open_wav.setEnabled(can_open_wav)
+        self.menu_recent_text.setEnabled(can_open_recent_text)
+        self.menu_recent_wav.setEnabled(can_open_recent_wav)
+        for action in self.menu_recent_text.actions():
+            action.setEnabled(can_open_recent_text)
+        for action in self.menu_recent_wav.actions():
+            action.setEnabled(can_open_recent_wav)
+        self.morph_upper_limit_input.setEnabled(can_adjust_morph_upper_limit)
 
         self.process_button.setEnabled(can_run)
         self.output_button.setEnabled(can_save)
