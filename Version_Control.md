@@ -68,3 +68,96 @@
   - GUI表示用イベント列とVMD出力用イベント列の二重化はしていない。
 - Verification:
   - `\.\.venv\Scripts\python.exe -m unittest discover -s tests` を実行し、`OK (26 tests)` を確認。
+
+---
+
+## Entry 2026-03-19 / Session: peak-value-upper-limit-gui-v0340
+
+- Date: 2026-03-19
+- Session: peak-value-upper-limit-gui-v0340
+- Summary:
+  - 母音イベントに `peak_value` を保持し、VMD非ゼロキーへ固定 `0.5` ではなくイベント別値を接続。
+  - `upper_limit`（既定 `0.5`）を内部処理に追加し、`peak_value` を `0.0..upper_limit` へクランプする導線を実装。
+  - GUI に「モーフ上限値」入力欄を最小追加し、同一イベント列（`timing_plan.timeline`）を表示と出力で共通利用。
+  - 仕様書/README を本セッション実装に合わせて更新。
+- Modified Files:
+  - `src/vmd_writer/writer.py`: `peak_value` 優先のモーフ値参照、最終書き込み時の丸め、固定 `0.5` 上限クランプの撤去。
+  - `src/core/pipeline.py`: `upper_limit` パラメータ追加、RMS ベースの `peak_value` 算出とクランプ、フォールバック処理を追加。
+  - `src/gui/main_window.py`: `QDoubleSpinBox` による「モーフ上限値」入力欄と `upper_limit` 受け渡し導線を追加。
+  - `README.md`: バージョン・機能一覧・未実装一覧を現状実装へ更新。
+  - `Specifications_Prompt_v1.md`: モーフ値仕様、GUI仕様、追補（16.8/16.9）を更新。
+- Added Files:
+  - `tests/test_vmd_writer_peak_value.py`: `peak_value` 優先利用とフォールバックのテストを追加。
+  - `tests/test_pipeline_peak_values.py`: `upper_limit` クランプとフォールバックのテストを追加。
+- Notes:
+  - 16.7 の立ち上がり前ゼロ保証（同一フレーム衝突時 `frame-1` 退避）は維持。
+  - GUI は入力窓口のみを追加し、計算ロジックは `core.pipeline` に一元化。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m unittest discover -s tests` を実行し、`OK (33 tests)` を確認。
+
+---
+
+## Entry 2026-03-19 / Session: processing-trigger-separation-v0350
+
+- Date: 2026-03-19
+- Session: processing-trigger-separation-v0350
+- Summary:
+  - WAV読込直後に重い解析が自動起動しないよう、UI処理起動タイミングを分離。
+  - 「処理実行」ボタンを追加し、Whisper/RMS/タイミング更新などのWAV依存処理を押下時に集約。
+  - モーフ上限値変更時の即時再解析を停止し、値保持のみへ変更。
+  - 未解析状態での出力時は暗黙再解析せず、警告して中断する動作へ整理。
+  - README/仕様書へ現状挙動を反映。
+- Modified Files:
+  - `src/gui/main_window.py`: 処理実行ボタン追加、wav読込時の重処理トリガー停止、上限値変更時の再解析停止、出力時の未解析ガード追加。
+  - `README.md`: バージョン `Ver 0.3.5.0` と現行挙動（処理実行導線、未解析出力中断など）を反映。
+  - `Specifications_Prompt_v1.md`: 処理概要・GUI仕様・エラー処理・追補に「処理実行」導線と自動実行停止方針を追記。
+  - `Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし
+- Notes:
+  - text読込時のかな化・母音変換の即時処理は維持。
+  - wav読込時は基本情報表示と波形表示のみ維持。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m unittest discover -s tests` を実行し、`OK (33 tests)` を確認。
+
+---
+
+## Entry 2026-03-19 / Session: repo-ops-baseline-setup
+
+- Date: 2026-03-19
+- Session: repo-ops-baseline-setup
+- Summary:
+  - リポジトリ運用面の不足を補うため、プロジェクト定義・除外設定・ビルド手順を追加。
+  - Windowsローカル開発で再現しやすい最小運用手順を README に明記。
+- Modified Files:
+  - `README.md`: セットアップ/実行/テスト/EXEビルド手順と運用ファイル一覧を追記。
+  - `Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - `.gitignore`: 仮想環境、キャッシュ、ビルド成果物、IDE設定の除外を追加。
+  - `pyproject.toml`: プロジェクトメタデータ、依存関係、スクリプト、`src` 配下探索設定を追加。
+  - `build.ps1`: PyInstaller ビルドを一括実行する PowerShell スクリプトを追加。
+  - `MMD_AutoLipTool.spec`: PyInstaller の固定ビルド設定を追加。
+- Notes:
+  - 既存のアプリ機能ロジック（`src/core` / `src/gui` / `src/vmd_writer`）は変更していない。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m unittest discover -s tests` を実行し、結果を確認。
+
+---
+
+## Entry 2026-03-19 / Session: docs-sync-before-onedir-build
+
+- Date: 2026-03-19
+- Session: docs-sync-before-onedir-build
+- Summary:
+  - `onedir` 化作業に入る前の現状として、md関連ドキュメントを同期更新。
+  - README/仕様書へ「運用整備済みの内容」と「`onedir` 未対応（次タスク）」を明記。
+- Modified Files:
+  - `README.md`: EXEビルド節に `onedir` 未対応（次タスク予定）の注記を追加。
+  - `Specifications_Prompt_v1.md`: 追補 16.11（リポジトリ運用整備）を追加。
+  - `Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし
+- Notes:
+  - 本エントリはドキュメント更新のみを対象とし、アプリ実装コードは変更しない。
+- Verification:
+  - ドキュメント差分を確認し、mdファイルのみをコミット対象に設定。
