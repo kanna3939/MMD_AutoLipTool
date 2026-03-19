@@ -68,10 +68,40 @@ python -m pip install -r requirements.txt
 .\build.ps1
 ```
 
+実行ポリシーでブロックされる場合:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build.ps1 -Clean -SmokeLaunch
+```
+
 - ビルド定義: `MMD_AutoLipTool.spec`
-- 出力先: `dist\`（`MMD_AutoLipTool.exe` または `MMD_AutoLipTool\`）
+- ビルド方式: `onedir`（`dist\MMD_AutoLipTool\` 配下に展開）
+- 出力先: `dist\MMD_AutoLipTool\MMD_AutoLipTool.exe`
 - クリーンビルド: `.\build.ps1 -Clean`
-- 現時点（2026-03-19）のビルド定義は `onedir` 未対応（次タスクで対応予定）
+- 起動スモーク確認付きビルド: `.\build.ps1 -Clean -SmokeLaunch`
+
+### onedir同梱方針（現行）
+
+- Pythonモジュール: `src` 配下で参照する `core / gui / vmd_writer` と依存パッケージ
+- GUI関連: `PySide6` 一式
+- 描画関連: `matplotlib` backend サブモジュール
+- 音声タイミング関連: `whisper` サブモジュールと assets
+- 日本語読み変換関連: `pyopenjtalk` のデータ/動的ライブラリ
+- tokenizer関連: `tiktoken` / `tiktoken_ext` のデータ/サブモジュール
+
+### onedir動作確認（第1段階）
+
+手動確認（`dist\MMD_AutoLipTool\MMD_AutoLipTool.exe` 起動後）:
+
+1. `TEXT読み込み` で `sample\sample_input.txt` を選択
+2. `WAV読み込み` で `sample\sample_voice.wav` を選択
+3. `処理実行` を押下
+4. `出力` から `.vmd` を保存
+
+補助確認（自動）:
+
+- `.\build.ps1 -Clean -SmokeLaunch` で exe 起動スモークまで実行
+- `generate_vmd_from_text_wav` のE2Eで `dist\_smoke\smoke_output.vmd` 生成を確認
 
 ## リポジトリ運用ファイル
 
@@ -79,3 +109,36 @@ python -m pip install -r requirements.txt
 - `.gitignore`: 仮想環境、キャッシュ、ビルド成果物の除外設定
 - `build.ps1`: Windows用の標準ビルドコマンド
 - `MMD_AutoLipTool.spec`: PyInstallerの固定ビルド設定
+
+## 現状整理（2026-03-19）
+
+1. 現在のフォルダ構成（要点）
+- `src/`, `tests/`, `sample/`, `build/`, `dist/`
+- ルート主要ファイル: `README.md`, `Specifications_Prompt_v1.md`, `Version_Control.md`, `requirements.txt`, `pyproject.toml`, `build.ps1`, `MMD_AutoLipTool.spec`
+
+2. エントリーポイント候補
+- 本命: `src/main.py`（PySide6 GUI起動）
+- 補助: `src/test_gui.py`（最小GUI動作確認）
+
+3. GUI関連ファイル候補
+- `src/gui/main_window.py`
+- `src/gui/waveform_view.py`
+- `src/gui/__init__.py`
+
+4. 今の状態で不足している主要ファイル（運用観点）
+- `LICENSE`（配布時の明示）
+- `src/app_io/` 系の責務分離（現状は `core` と `gui` に集約）
+- 配布物向けチェックリスト/リリースノート雛形（任意）
+
+5. 最小構成で進める場合の推奨ディレクトリ構成
+- `src/main.py`
+- `src/core/`（処理ロジック）
+- `src/gui/`（UI）
+- `src/vmd_writer/`（VMD出力）
+- `src/app_io/`（I/O責務、段階導入）
+- `tests/`, `sample/`
+
+6. 未実装の内容（現時点）
+- 強制アライメントによる厳密音素境界
+- 高度な音響特徴量ベース最適化
+- 音量連動の詳細チューニングUI（マッピング調整・プリセット等）

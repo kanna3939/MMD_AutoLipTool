@@ -2,7 +2,6 @@ from pathlib import Path
 
 from core import (
     PipelineError,
-    RmsSeriesData,
     TextProcessingError,
     VowelTimingPlan,
     WavAnalysisResult,
@@ -10,12 +9,13 @@ from core import (
     build_vowel_timing_plan,
     generate_vmd_from_text_wav,
     hiragana_to_vowel_string,
-    load_rms_series,
     load_waveform_preview,
     text_to_hiragana,
 )
 from PySide6.QtWidgets import (
+    QDoubleSpinBox,
     QFileDialog,
+    QHBoxLayout,
     QLabel,
     QMessageBox,
     QPlainTextEdit,
@@ -38,14 +38,20 @@ class MainWindow(QWidget):
         self.selected_hiragana_content: str = ""
         self.selected_vowel_content: str = ""
         self.selected_wav_analysis: WavAnalysisResult | None = None
-        self.selected_rms_series: RmsSeriesData | None = None
         self.current_timing_plan: VowelTimingPlan | None = None
 
         layout = QVBoxLayout()
 
         self.text_button = QPushButton("TEXT\u8aad\u307f\u8fbc\u307f")
         self.wav_button = QPushButton("WAV\u8aad\u307f\u8fbc\u307f")
+        self.process_button = QPushButton("\u51e6\u7406\u5b9f\u884c")
         self.output_button = QPushButton("\u51fa\u529b")
+        self.morph_upper_limit_label = QLabel("\u30e2\u30fc\u30d5\u4e0a\u9650\u5024")
+        self.morph_upper_limit_input = QDoubleSpinBox()
+        self.morph_upper_limit_input.setRange(0.0, 10.0)
+        self.morph_upper_limit_input.setDecimals(4)
+        self.morph_upper_limit_input.setSingleStep(0.05)
+        self.morph_upper_limit_input.setValue(0.5)
 
         self.text_path_label = QLabel("TEXT: \u672a\u9078\u629e")
         self.wav_path_label = QLabel("WAV: \u672a\u9078\u629e")
@@ -75,7 +81,13 @@ class MainWindow(QWidget):
 
         self.text_button.clicked.connect(self._select_text_file)
         self.wav_button.clicked.connect(self._select_wav_file)
+        self.process_button.clicked.connect(self._run_processing)
         self.output_button.clicked.connect(self._export_vmd)
+        self.morph_upper_limit_input.valueChanged.connect(self._on_morph_upper_limit_changed)
+
+        morph_upper_limit_layout = QHBoxLayout()
+        morph_upper_limit_layout.addWidget(self.morph_upper_limit_label)
+        morph_upper_limit_layout.addWidget(self.morph_upper_limit_input)
 
         layout.addWidget(self.text_button)
         layout.addWidget(self.text_path_label)
@@ -89,6 +101,8 @@ class MainWindow(QWidget):
         layout.addWidget(self.wav_path_label)
         layout.addWidget(self.wav_info_label)
         layout.addWidget(self.wav_waveform_view)
+        layout.addWidget(self.process_button)
+        layout.addLayout(morph_upper_limit_layout)
         layout.addWidget(self.output_button)
         layout.addWidget(self.output_status_label)
 
@@ -142,7 +156,7 @@ class MainWindow(QWidget):
                 status="\u51fa\u529b\u72b6\u614b: TEXT\u5909\u63db\u5931\u6557",
             )
             return
-        self._refresh_waveform_morph_labels()
+        self.wav_waveform_view.clear_morph_labels()
         self._set_ready_status()
 
     def _select_wav_file(self) -> None:
@@ -159,7 +173,6 @@ class MainWindow(QWidget):
             wav_info = analyze_wav_file(file_path)
         except (ValueError, OSError, EOFError) as error:
             self.selected_wav_analysis = None
-            self.selected_rms_series = None
             self.current_timing_plan = None
             self.wav_waveform_view.clear_morph_labels()
             self.wav_waveform_view.show_placeholder("Waveform preview (load failed)")
@@ -174,7 +187,6 @@ class MainWindow(QWidget):
             waveform_preview = load_waveform_preview(file_path, max_points=3000, stereo_mode="average")
         except (ValueError, OSError, EOFError) as error:
             self.selected_wav_analysis = None
-            self.selected_rms_series = None
             self.current_timing_plan = None
             self.wav_waveform_view.clear_morph_labels()
             self.wav_waveform_view.show_placeholder("Waveform preview (load failed)")
@@ -187,10 +199,6 @@ class MainWindow(QWidget):
 
         self.selected_wav_path = file_path
         self.selected_wav_analysis = wav_info
-        try:
-            self.selected_rms_series = load_rms_series(file_path, stereo_mode="average")
-        except (ValueError, OSError, EOFError):
-            self.selected_rms_series = None
         self.current_timing_plan = None
         self.wav_path_label.setText(f"WAV: {Path(file_path).name}")
         self.wav_info_label.setText(
@@ -204,7 +212,7 @@ class MainWindow(QWidget):
             waveform_preview.samples,
             waveform_preview.duration_sec,
         )
-        self._refresh_waveform_morph_labels()
+        self.wav_waveform_view.clear_morph_labels()
         self._set_ready_status()
 
     def _export_vmd(self) -> None:
@@ -221,6 +229,14 @@ class MainWindow(QWidget):
                 title="\u5165\u529b\u4e0d\u8db3",
                 message="TEXT\u3068WAV\u306e\u4e21\u65b9\u3092\u8aad\u307f\u8fbc\u3093\u3067\u304b\u3089\u51fa\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
                 status="\u51fa\u529b\u72b6\u614b: \u5165\u529b\u4e0d\u8db3",
+            )
+            return
+
+        if self.current_timing_plan is None:
+            self._show_warning(
+                title="\u672a\u89e3\u6790",
+                message="\u51e6\u7406\u5b9f\u884c\u30dc\u30bf\u30f3\u3067\u89e3\u6790\u3057\u3066\u304b\u3089\u51fa\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+                status="\u51fa\u529b\u72b6\u614b: \u89e3\u6790\u672a\u5b9f\u884c",
             )
             return
 
@@ -245,6 +261,7 @@ class MainWindow(QWidget):
                 wav_path=self.selected_wav_path,
                 output_path=out_path,
                 timing_plan=timing_plan,
+                upper_limit=self._current_upper_limit(),
             )
             self.current_timing_plan = timing_plan
         except ValueError as error:
@@ -289,6 +306,39 @@ class MainWindow(QWidget):
             f"\u51fa\u529b\u72b6\u614b: \u6210\u529f ({result.output_path.name} / {timing_label})"
         )
 
+    def _run_processing(self) -> None:
+        if not self.selected_text_content:
+            self._show_warning(
+                title="\u5165\u529b\u4e0d\u8db3",
+                message="TEXT\u3092\u8aad\u307f\u8fbc\u3093\u3067\u304b\u3089\u51e6\u7406\u5b9f\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+                status="\u51fa\u529b\u72b6\u614b: \u5165\u529b\u4e0d\u8db3",
+            )
+            return
+        if not self.selected_wav_analysis or not self.selected_wav_path:
+            self._show_warning(
+                title="\u5165\u529b\u4e0d\u8db3",
+                message="WAV\u3092\u8aad\u307f\u8fbc\u3093\u3067\u304b\u3089\u51e6\u7406\u5b9f\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+                status="\u51fa\u529b\u72b6\u614b: \u5165\u529b\u4e0d\u8db3",
+            )
+            return
+        if not self.selected_vowel_content:
+            self._show_warning(
+                title="\u5165\u529b\u4e0d\u8db3",
+                message="TEXT\u304b\u3089\u6709\u52b9\u306a\u3072\u3089\u304c\u306a/\u6bcd\u97f3\u5217\u3092\u751f\u6210\u3067\u304d\u3066\u3044\u307e\u305b\u3093\u3002",
+                status="\u51fa\u529b\u72b6\u614b: TEXT\u5909\u63db\u5931\u6557",
+            )
+            return
+
+        self._refresh_waveform_morph_labels()
+        if self.current_timing_plan is None:
+            self._show_warning(
+                title="\u51e6\u7406\u30a8\u30e9\u30fc",
+                message="\u97f3\u58f0\u51e6\u7406\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002",
+                status="\u51fa\u529b\u72b6\u614b: \u5931\u6557",
+            )
+            return
+        self._set_ready_status()
+
     def _has_required_inputs(self) -> bool:
         return bool(self.selected_text_path and self.selected_wav_path)
 
@@ -328,6 +378,7 @@ class MainWindow(QWidget):
                 wav_path=self.selected_wav_path,
                 wav_analysis=self.selected_wav_analysis,
                 whisper_model_name="small",
+                upper_limit=self._current_upper_limit(),
             )
         except ValueError:
             self.current_timing_plan = None
@@ -349,18 +400,34 @@ class MainWindow(QWidget):
             raise ValueError("TEXT \u304c\u307e\u3060\u6e96\u5099\u3067\u304d\u3066\u3044\u307e\u305b\u3093\u3002")
         if not self.selected_wav_analysis or not self.selected_wav_path:
             raise ValueError("WAV \u304c\u307e\u3060\u6e96\u5099\u3067\u304d\u3066\u3044\u307e\u305b\u3093\u3002")
-        timing_plan = build_vowel_timing_plan(
-            text_content=self.selected_text_content,
-            wav_path=self.selected_wav_path,
-            wav_analysis=self.selected_wav_analysis,
-            whisper_model_name="small",
+        raise ValueError(
+            "\u89e3\u6790\u304c\u307e\u3060\u5b9f\u884c\u3055\u308c\u3066\u3044\u307e\u305b\u3093\u3002"
+            "\u300c\u51e6\u7406\u5b9f\u884c\u300d\u3092\u62bc\u3057\u3066\u304b\u3089\u51fa\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
         )
-        self.current_timing_plan = timing_plan
-        return timing_plan
+
+    def _on_morph_upper_limit_changed(self, _: float) -> None:
+        self.current_timing_plan = None
+        self.wav_waveform_view.clear_morph_labels()
+        self._set_ready_status()
+
+    def _current_upper_limit(self) -> float:
+        return float(self.morph_upper_limit_input.value())
 
     def _set_ready_status(self) -> None:
+        text_loaded = bool(self.selected_text_path)
+        wav_loaded = bool(self.selected_wav_path and self.selected_wav_analysis is not None)
+
+        if text_loaded and wav_loaded and not self.current_timing_plan:
+            self._set_output_status("\u51fa\u529b\u72b6\u614b: \u89e3\u6790\u672a\u5b9f\u884c (TEXT/WAV\u8aad\u8fbc\u6e08\u307f)")
+            return
+        if text_loaded and not wav_loaded:
+            self._set_output_status("\u51fa\u529b\u72b6\u614b: \u5165\u529b\u6e96\u5099\u4e2d (TEXT\u8aad\u8fbc\u6e08\u307f / WAV\u672a\u8aad\u8fbc)")
+            return
+        if wav_loaded and not text_loaded:
+            self._set_output_status("\u51fa\u529b\u72b6\u614b: \u5165\u529b\u6e96\u5099\u4e2d (WAV\u8aad\u8fbc\u6e08\u307f / TEXT\u672a\u8aad\u8fbc)")
+            return
         if not self.current_timing_plan:
-            self._set_output_status("\u51fa\u529b\u72b6\u614b: \u5165\u529b\u6e96\u5099\u4e2d")
+            self._set_output_status("\u51fa\u529b\u72b6\u614b: \u5165\u529b\u6e96\u5099\u4e2d (TEXT/WAV\u672a\u8aad\u8fbc)")
             return
 
         timing_source = self.current_timing_plan.source
@@ -369,5 +436,5 @@ class MainWindow(QWidget):
         else:
             timing_label = "\u5747\u7b49\u914d\u5206(\u30d5\u30a9\u30fc\u30eb\u30d0\u30c3\u30af)"
         self._set_output_status(
-            f"\u51fa\u529b\u72b6\u614b: \u5165\u529b\u6e96\u5099\u4e2d ({timing_label} / \u533a\u9593={len(self.current_timing_plan.anchors)} / \u6bcd\u97f3={len(self.current_timing_plan.timeline)})"
+            f"\u51fa\u529b\u72b6\u614b: \u89e3\u6790\u5b9f\u884c\u6e08\u307f ({timing_label} / \u533a\u9593={len(self.current_timing_plan.anchors)} / \u6bcd\u97f3={len(self.current_timing_plan.timeline)})"
         )
