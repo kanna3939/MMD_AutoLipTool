@@ -207,3 +207,24 @@
 - Verification:
   - `git status --short` で対象差分を確認。
   - 反映後に `git add -A` と `git commit` を実行。
+
+---
+
+## Entry 2026-03-19 / Session: docs-sync-v0336-topmenu-phasea
+
+- Date: 2026-03-19
+- Session: docs-sync-v0336-topmenu-phasea
+- Summary:
+  - これまでの変更（RMS/区間ベースVMD、モーフ上限値、処理実行導線分離、トップメニュー フェーズA 段取り0〜4）を md ドキュメントに統合。
+  - ドキュメント上のバージョンを `Ver 0.3.3.6` に同期。
+  - 仕様書へトップメニュー導入状況とバージョン同期の追補（16.13/16.14）を追加。
+- Modified Files:
+  - `README.md`: バージョンを `Ver 0.3.3.6` に更新し、トップメニュー フェーズA（段取り0〜4）と状態整合の要点を追記。
+  - `Specifications_Prompt_v1.md`: 16.13（トップメニュー追加・状態整合）と16.14（ドキュメント同期バージョン）を追記。
+  - `Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし
+- Notes:
+  - 本エントリはドキュメント更新のみであり、処理ロジック・解析アルゴリズム・VMD生成仕様の新規実装変更は含まない。
+- Verification:
+  - `git diff -- README.md Version_Control.md Specifications_Prompt_v1.md` で差分内容を確認。
