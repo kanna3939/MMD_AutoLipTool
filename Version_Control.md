@@ -453,3 +453,28 @@
   - `git status --short` / `git branch --show-current` / `git remote -v` で同期前状態を確認。
   - `git commit` 後、`git push origin main` でリモート同期を実施。
 
+---
+
+## Entry 2026-03-20 / Session: ms6b-autocomplete-counterpart-phases1-to-10-docs-sync
+
+- Date: 2026-03-20
+- Session: ms6b-autocomplete-counterpart-phases1-to-10-docs-sync
+- Summary:
+  - MS6B（同名対応ファイルの自動補完読込）として、主読込成功後に同一フォルダ・同一 stem の相方（`.txt/.wav`）を1回試行する導線を `main_window.py` に反映。
+  - 通常読込と履歴再読込の双方で同一補完処理を呼び、反対側既読込ガード・未存在/失敗サイレント・再連鎖なしを確定。
+  - 自動補完成功時の履歴反映、読込開始ディレクトリ保持、ready 状態/`current_timing_plan` 整合を既存成功導線の再利用で成立させた。
+  - 本フェーズ10として、`repo_milestone.md` / `Specification_Prompt_v2.md` / `Version_Control.md` へ MS6B 仕様を同期。
+- Modified Files:
+  - `src/gui/main_window.py`: MS6B 実装（相方候補解決、自動補完試行、サイレント失敗、通常/履歴入口接続、履歴/開始ディレクトリ反映）を局所修正で反映。
+  - `repo_milestone.md`: MS6B を独立マイルストーンとして追加し、対象/非対象と完了要点を追記。
+  - `Specification_Prompt_v2.md`: 6.9 節として MS6B の現行仕様（発動条件、探索条件、サイレント方針、再連鎖防止、成功時反映）を追加。
+  - `Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし
+- Notes:
+  - セッション外永続化の復元時発動は対象外のまま維持。
+  - 自動補完専用の通知・確認ダイアログは追加しない方針を維持。
+- Verification:
+  - フェーズ9 観点（9-1〜9-8）に対して、`src/gui/main_window.py` の条件分岐と呼出し導線をコード読解で確認。
+  - `.\.venv\Scripts\python.exe -m py_compile src\gui\main_window.py` を実行し、構文上の整合を確認。
+
