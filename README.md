@@ -2,7 +2,7 @@
 
 ## Version
 
-Ver 0.3.4.0
+Ver 0.3.4.1
 
 ## 概要
 
@@ -42,6 +42,12 @@ UTF-8 のテキスト 1 ファイルと PCM WAV 1 ファイルを入力し、母
 - MS7 として、VMD 保存前パス検証（`.vmd` 補完後の最終パス検証、保存先妥当性確認）を導入
 - MS7 として、履歴再読込の危険値チェック（空/非存在/ディレクトリ/拡張子不一致）を導入
 - MS7 として、想定外例外時も GUI 警告へフォールバックし、状態復帰を崩さない経路を補強
+- MS5 として、TEXT/WAV 読込ダイアログの直前ディレクトリ記憶を導入（用途別に分離管理）
+- MS5 として、通常読込・履歴再読込の成功時のみ、各保持値を「選択ファイルの親ディレクトリ」へ更新
+- MS5 として、保持値が無効（未設定/空/非存在/非ディレクトリ）な場合は警告を増やさずフォールバックで起動
+- MS6 として、TEXT/WAV の最近使ったファイル履歴を各10件で保持し、重複時は先頭へ再配置
+- MS6 として、履歴再読込失敗時は該当項目のみ除去し、対応メニューを即時更新
+- MS6 として、TEXT 履歴系と WAV 履歴系の更新先・再読込導線・メニュー接続を分離して非混線を固定
 
 ## 直近更新（2026-03-19）
 
@@ -60,6 +66,16 @@ UTF-8 のテキスト 1 ファイルと PCM WAV 1 ファイルを入力し、母
 - 復帰整合確認として、成功時・失敗時ともに「ダイアログ終了」「busy解除」「状態表示復帰」が成立することを確認
 - MS7 フェーズ2〜6として、TEXT/WAV/保存/履歴再読込の失敗経路を点検し、最小防御と状態復帰を補強
 - MS7 フェーズ7〜8として、修正範囲を `src/gui/main_window.py` の局所修正に固定し、完了判定観点を最終整理
+
+## 直近更新（2026-03-20）
+
+- MS5 フェーズ2〜8として、`src/gui/main_window.py` に読込ダイアログ用の直前ディレクトリ保持（TEXT/WAV分離）を導入
+- `_select_text_file` / `_select_wav_file` で、初期ディレクトリ解決結果を使ってダイアログを起動する導線へ接続
+- 通常読込成功時と履歴再読込成功時のみ、保持値を親ディレクトリで更新するよう整理
+- 初期ディレクトリ解決で、未設定/空/非存在/非ディレクトリを安全にフォールバックする防御を適用
+- MS5 フェーズ9として、確認観点（9-1〜9-5）を整理し、モックベースの最小実行確認で PASS を確認
+- MS6 フェーズ1〜8として、履歴追加・履歴メニュー更新・履歴再読込・失敗時除去・更新タイミング・非混線を `src/gui/main_window.py` の局所修正で整理
+- MS6 フェーズ9として、確認観点（10件上限/重複先頭移動/再読込導線/壊れた履歴値除去/非混線）をコード読解と最小スモーク確認で整理
 
 ## MS7 入出力安全性点検（2026-03-19）
 
@@ -173,32 +189,32 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1 -Clean -SmokeLaunch
 ## 現状整理（2026-03-19）
 
 1. 現在のフォルダ構成（要点）
-- `src/`, `tests/`, `sample/`, `build/`, `dist/`
-- ルート主要ファイル: `README.md`, `Specification_Prompt_v2.md`, `repo_milestone.md`, `Version_Control.md`, `requirements.txt`, `pyproject.toml`, `build.ps1`, `MMD_AutoLipTool.spec`
+    - `src/`, `tests/`, `sample/`, `build/`, `dist/`
+    - ルート主要ファイル: `README.md`, `Specification_Prompt_v2.md`, `repo_milestone.md`, `Version_Control.md`, `requirements.txt`, `pyproject.toml`, `build.ps1`, `MMD_AutoLipTool.spec`
 
 2. エントリーポイント候補
-- 本命: `src/main.py`（PySide6 GUI起動）
-- 補助: `src/test_gui.py`（最小GUI動作確認）
+    - 本命: `src/main.py`（PySide6 GUI起動）
+    - 補助: `src/test_gui.py`（最小GUI動作確認）
 
 3. GUI関連ファイル候補
-- `src/gui/main_window.py`
-- `src/gui/waveform_view.py`
-- `src/gui/__init__.py`
+    - `src/gui/main_window.py`
+    - `src/gui/waveform_view.py`
+    - `src/gui/__init__.py`
 
 4. 今の状態で不足している主要ファイル（運用観点）
-- `LICENSE`（配布時の明示）
-- `src/app_io/` 系の責務分離（現状は `core` と `gui` に集約）
-- 配布物向けチェックリスト/リリースノート雛形（任意）
+    - `LICENSE`（配布時の明示）
+    - `src/app_io/` 系の責務分離（現状は `core` と `gui` に集約）
+    - 配布物向けチェックリスト/リリースノート雛形（任意）
 
 5. 最小構成で進める場合の推奨ディレクトリ構成
-- `src/main.py`
-- `src/core/`（処理ロジック）
-- `src/gui/`（UI）
-- `src/vmd_writer/`（VMD出力）
-- `src/app_io/`（I/O責務、段階導入）
-- `tests/`, `sample/`
+    - `src/main.py`
+    - `src/core/`（処理ロジック）
+    - `src/gui/`（UI）
+    - `src/vmd_writer/`（VMD出力）
+    - `src/app_io/`（I/O責務、段階導入）
+    - `tests/`, `sample/`
 
 6. 未実装の内容（現時点）
-- 強制アライメントによる厳密音素境界
-- 高度な音響特徴量ベース最適化
-- 音量連動の詳細チューニングUI（マッピング調整・プリセット等）
+    - 強制アライメントによる厳密音素境界
+    - 高度な音響特徴量ベース最適化
+    - 音量連動の詳細チューニングUI（マッピング調整・プリセット等）
