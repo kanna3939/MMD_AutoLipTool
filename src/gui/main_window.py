@@ -324,6 +324,52 @@ class MainWindow(QWidget):
 
         return normalized_dir
 
+    def _resolve_counterpart_path(self, primary_path: str | Path) -> Path | None:
+        if isinstance(primary_path, str):
+            normalized_path = primary_path.strip()
+            if not normalized_path:
+                return None
+            base_path = Path(normalized_path)
+        else:
+            base_path = Path(primary_path)
+
+        suffix = base_path.suffix.lower()
+        if suffix == ".txt":
+            return base_path.with_suffix(".wav")
+        if suffix == ".wav":
+            return base_path.with_suffix(".txt")
+        return None
+
+    def _try_autocomplete_counterpart_load(self, primary_path: str | Path) -> None:
+        """Try one counterpart load after the primary load has already succeeded."""
+        counterpart_path = self._resolve_counterpart_path(primary_path)
+        if counterpart_path is None:
+            return
+
+        counterpart_suffix = counterpart_path.suffix.lower()
+        if counterpart_suffix == ".txt":
+            if self.selected_text_path:
+                return
+        elif counterpart_suffix == ".wav":
+            if self.selected_wav_path:
+                return
+        else:
+            return
+
+        try:
+            if not counterpart_path.exists() or counterpart_path.is_dir():
+                return
+        except OSError:
+            return
+
+        if counterpart_suffix == ".txt":
+            if self._load_text_file(str(counterpart_path), suppress_warning=True):
+                self.last_text_dialog_dir = str(counterpart_path.parent)
+            return
+        if counterpart_suffix == ".wav":
+            if self._load_wav_file(str(counterpart_path), suppress_warning=True):
+                self.last_wav_dialog_dir = str(counterpart_path.parent)
+
     def _select_text_file(self) -> None:
         initial_dir = self._resolve_text_dialog_initial_dir()
         file_path, _ = QFileDialog.getOpenFileName(
@@ -336,6 +382,7 @@ class MainWindow(QWidget):
             return
         if self._load_text_file(file_path):
             self.last_text_dialog_dir = str(Path(file_path).parent)
+            self._try_autocomplete_counterpart_load(file_path)
 
     def _reset_text_analysis_state(self) -> None:
         self.current_timing_plan = None
@@ -347,64 +394,93 @@ class MainWindow(QWidget):
         self.hiragana_preview.setPlainText("(\u3072\u3089\u304c\u306a\u5909\u63db\u306b\u5931\u6557\u3057\u307e\u3057\u305f)")
         self.vowel_preview.setPlainText("(\u6bcd\u97f3\u5909\u63db\u306f\u672a\u5b9f\u884c\u3067\u3059)")
 
-    def _load_text_file(self, file_path: str) -> bool:
-        normalized_path = file_path.strip()
-        if not normalized_path:
+    def _load_text_file(self, file_path: str, *, suppress_warning: bool = False) -> bool:
+        def _fail_text_load(*, title: str, message: str, status: str) -> bool:
+            if suppress_warning:
+                return False
             self._reset_text_analysis_state()
             self._show_warning(
+                title=title,
+                message=message,
+                status=status,
+            )
+            return False
+
+        normalized_path = file_path.strip()
+        if not normalized_path:
+            return _fail_text_load(
                 title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
                 message="TEXT\u30d5\u30a1\u30a4\u30eb\u306e\u30d1\u30b9\u304c\u7a7a\u3067\u3059\u3002",
                 status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
             )
-            return False
 
         text_path = Path(normalized_path)
         try:
             if not text_path.exists():
-                self._reset_text_analysis_state()
-                self._show_warning(
+                return _fail_text_load(
                     title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
                     message="TEXT\u30d5\u30a1\u30a4\u30eb\u304c\u5b58\u5728\u3057\u307e\u305b\u3093\u3002",
                     status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
                 )
-                return False
             if text_path.is_dir():
-                self._reset_text_analysis_state()
-                self._show_warning(
+                return _fail_text_load(
                     title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
                     message="TEXT\u30d5\u30a1\u30a4\u30eb\u3067\u306f\u306a\u304f\u30d5\u30a9\u30eb\u30c0\u304c\u9078\u629e\u3055\u308c\u3066\u3044\u307e\u3059\u3002",
                     status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
                 )
-                return False
         except OSError as error:
-            self._reset_text_analysis_state()
-            self._show_warning(
+            return _fail_text_load(
                 title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
                 message=f"TEXT\u30d5\u30a1\u30a4\u30eb\u306e\u78ba\u8a8d\u4e2d\u306b\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f: {error}",
                 status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
             )
-            return False
 
         try:
             text_content = text_path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
-            self._reset_text_analysis_state()
-            self._show_warning(
+            return _fail_text_load(
                 title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
                 message="UTF-8\u306eTEXT\u30d5\u30a1\u30a4\u30eb\u3067\u306f\u306a\u3044\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059\u3002",
                 status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
             )
-            return False
         except OSError as error:
-            self._reset_text_analysis_state()
-            self._show_warning(
+            return _fail_text_load(
                 title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
                 message=f"TEXT\u30d5\u30a1\u30a4\u30eb\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093: {error}",
                 status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
             )
-            return False
+
+        previous_text_state = None
+        if suppress_warning:
+            previous_text_state = {
+                "selected_text_path": self.selected_text_path,
+                "selected_text_content": self.selected_text_content,
+                "selected_hiragana_content": self.selected_hiragana_content,
+                "selected_vowel_content": self.selected_vowel_content,
+                "current_timing_plan": self.current_timing_plan,
+                "text_path_label": self.text_path_label.text(),
+                "text_preview": self.text_preview.toPlainText(),
+                "hiragana_preview": self.hiragana_preview.toPlainText(),
+                "vowel_preview": self.vowel_preview.toPlainText(),
+            }
+
+        def _restore_text_state_on_silent_failure() -> None:
+            if previous_text_state is None:
+                return
+            self.selected_text_path = previous_text_state["selected_text_path"]
+            self.selected_text_content = previous_text_state["selected_text_content"]
+            self.selected_hiragana_content = previous_text_state["selected_hiragana_content"]
+            self.selected_vowel_content = previous_text_state["selected_vowel_content"]
+            self.current_timing_plan = previous_text_state["current_timing_plan"]
+            self.text_path_label.setText(previous_text_state["text_path_label"])
+            self.text_preview.setPlainText(previous_text_state["text_preview"])
+            self.hiragana_preview.setPlainText(previous_text_state["hiragana_preview"])
+            self.vowel_preview.setPlainText(previous_text_state["vowel_preview"])
 
         if not text_content:
+            if suppress_warning:
+                _restore_text_state_on_silent_failure()
+                return False
             self._reset_text_analysis_state()
             self.selected_hiragana_content = ""
             self.selected_vowel_content = ""
@@ -424,6 +500,9 @@ class MainWindow(QWidget):
         try:
             self._refresh_text_processing_views()
         except TextProcessingError as error:
+            if suppress_warning:
+                _restore_text_state_on_silent_failure()
+                return False
             self._reset_text_analysis_state()
             self._show_text_conversion_failed_previews()
             self._show_warning(
@@ -433,6 +512,9 @@ class MainWindow(QWidget):
             )
             return False
         except Exception as error:
+            if suppress_warning:
+                _restore_text_state_on_silent_failure()
+                return False
             self._reset_text_analysis_state()
             self._show_text_conversion_failed_previews()
             self._show_warning(
@@ -443,6 +525,9 @@ class MainWindow(QWidget):
             return False
 
         if not self.selected_vowel_content:
+            if suppress_warning:
+                _restore_text_state_on_silent_failure()
+                return False
             self._reset_text_analysis_state()
             self._show_warning(
                 title="TEXT\u5909\u63db\u30a8\u30e9\u30fc",
@@ -468,6 +553,7 @@ class MainWindow(QWidget):
             return
         if self._load_wav_file(file_path):
             self.last_wav_dialog_dir = str(Path(file_path).parent)
+            self._try_autocomplete_counterpart_load(file_path)
 
     def _reset_wav_load_state(self, placeholder_message: str = "Waveform preview (load failed)") -> None:
         self.selected_wav_path = None
@@ -498,62 +584,61 @@ class MainWindow(QWidget):
             return "WAV\u6ce2\u5f62\u306e\u8868\u793a\u30c7\u30fc\u30bf\u304c\u53d6\u5f97\u3067\u304d\u307e\u305b\u3093\u3002"
         return None
 
-    def _load_wav_file(self, file_path: str) -> bool:
-        normalized_path = file_path.strip()
-        if not normalized_path:
+    def _load_wav_file(self, file_path: str, *, suppress_warning: bool = False) -> bool:
+        def _fail_wav_load(*, title: str, message: str, status: str) -> bool:
+            if suppress_warning:
+                return False
             self._reset_wav_load_state()
             self._show_warning(
+                title=title,
+                message=message,
+                status=status,
+            )
+            return False
+
+        normalized_path = file_path.strip()
+        if not normalized_path:
+            return _fail_wav_load(
                 title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
                 message="WAV\u30d5\u30a1\u30a4\u30eb\u306e\u30d1\u30b9\u304c\u7a7a\u3067\u3059\u3002",
                 status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
             )
-            return False
 
         wav_path = Path(normalized_path)
         try:
             if not wav_path.exists():
-                self._reset_wav_load_state()
-                self._show_warning(
+                return _fail_wav_load(
                     title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
                     message="WAV\u30d5\u30a1\u30a4\u30eb\u304c\u5b58\u5728\u3057\u307e\u305b\u3093\u3002",
                     status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
                 )
-                return False
             if wav_path.is_dir():
-                self._reset_wav_load_state()
-                self._show_warning(
+                return _fail_wav_load(
                     title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
                     message="WAV\u30d5\u30a1\u30a4\u30eb\u3067\u306f\u306a\u304f\u30d5\u30a9\u30eb\u30c0\u304c\u9078\u629e\u3055\u308c\u3066\u3044\u307e\u3059\u3002",
                     status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
                 )
-                return False
         except OSError as error:
-            self._reset_wav_load_state()
-            self._show_warning(
+            return _fail_wav_load(
                 title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
                 message=f"WAV\u30d5\u30a1\u30a4\u30eb\u306e\u78ba\u8a8d\u4e2d\u306b\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f: {error}",
                 status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
             )
-            return False
 
         try:
             wav_info = analyze_wav_file(normalized_path)
         except (ValueError, OSError, EOFError) as error:
-            self._reset_wav_load_state()
-            self._show_warning(
+            return _fail_wav_load(
                 title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
                 message=f"WAV\u30d5\u30a1\u30a4\u30eb\u3092\u89e3\u6790\u3067\u304d\u307e\u305b\u3093: {error}",
                 status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
             )
-            return False
         except Exception as error:
-            self._reset_wav_load_state()
-            self._show_warning(
+            return _fail_wav_load(
                 title="\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc",
                 message=f"WAV\u89e3\u6790\u4e2d\u306b\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f: {error}",
                 status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
             )
-            return False
 
         try:
             waveform_preview = load_waveform_preview(
@@ -562,31 +647,25 @@ class MainWindow(QWidget):
                 stereo_mode="average",
             )
         except (ValueError, OSError, EOFError) as error:
-            self._reset_wav_load_state()
-            self._show_warning(
+            return _fail_wav_load(
                 title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
                 message=f"WAV\u6ce2\u5f62\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093: {error}",
                 status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
             )
-            return False
         except Exception as error:
-            self._reset_wav_load_state()
-            self._show_warning(
+            return _fail_wav_load(
                 title="\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc",
                 message=f"WAV\u6ce2\u5f62\u53d6\u5f97\u4e2d\u306b\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f: {error}",
                 status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
             )
-            return False
 
         wav_load_error = self._validate_wav_load_result(wav_info, waveform_preview)
         if wav_load_error:
-            self._reset_wav_load_state()
-            self._show_warning(
+            return _fail_wav_load(
                 title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
                 message=f"WAV\u60c5\u5831\u304c\u7121\u52b9\u3067\u3059: {wav_load_error}",
                 status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
             )
-            return False
 
         self.selected_wav_path = normalized_path
         self.selected_wav_analysis = wav_info
@@ -624,6 +703,7 @@ class MainWindow(QWidget):
                 return
             if self._load_text_file(file_path):
                 self.last_text_dialog_dir = str(Path(file_path).parent)
+                self._try_autocomplete_counterpart_load(file_path)
                 return
             self._remove_recent_text_file(file_path)
             return
@@ -652,6 +732,7 @@ class MainWindow(QWidget):
                 return
             if self._load_wav_file(file_path):
                 self.last_wav_dialog_dir = str(Path(file_path).parent)
+                self._try_autocomplete_counterpart_load(file_path)
                 return
             self._remove_recent_wav_file(file_path)
             return
