@@ -46,6 +46,8 @@ class MainWindow(QWidget):
         self.selected_vowel_content: str = ""
         self.selected_wav_analysis: WavAnalysisResult | None = None
         self.current_timing_plan: VowelTimingPlan | None = None
+        self.last_text_dialog_dir: str | None = None
+        self.last_wav_dialog_dir: str | None = None
         self._is_processing = False
         self._processing_dialog: QProgressDialog | None = None
         self._recent_file_limit = 10
@@ -197,7 +199,7 @@ class MainWindow(QWidget):
             "バージョン情報",
             "\n".join(
                 [
-                    "MMD AutoLip Tool Ver 0.3.4.0",
+                    "MMD AutoLip Tool Ver 0.3.4.1",
                     f"pyopenjtalk: {pyopenjtalk_version}",
                     f"whisper: {whisper_version}",
                 ]
@@ -297,16 +299,43 @@ class MainWindow(QWidget):
         self.wav_waveform_view.reset_overlay_visibility()
         self._sync_view_action_checks()
 
+    def _resolve_text_dialog_initial_dir(self) -> str:
+        return self._resolve_dialog_initial_dir(self.last_text_dialog_dir)
+
+    def _resolve_wav_dialog_initial_dir(self) -> str:
+        return self._resolve_dialog_initial_dir(self.last_wav_dialog_dir)
+
+    def _resolve_dialog_initial_dir(self, remembered_dir: str | None) -> str:
+        fallback_dir = ""
+        if remembered_dir is None:
+            return fallback_dir
+
+        normalized_dir = remembered_dir.strip()
+        if not normalized_dir:
+            return fallback_dir
+
+        try:
+            if not os.path.exists(normalized_dir):
+                return fallback_dir
+            if not os.path.isdir(normalized_dir):
+                return fallback_dir
+        except OSError:
+            return fallback_dir
+
+        return normalized_dir
+
     def _select_text_file(self) -> None:
+        initial_dir = self._resolve_text_dialog_initial_dir()
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "TEXT\u30d5\u30a1\u30a4\u30eb\u3092\u9078\u629e",
-            "",
+            initial_dir,
             "Text Files (*.txt);;All Files (*)",
         )
         if not file_path:
             return
-        self._load_text_file(file_path)
+        if self._load_text_file(file_path):
+            self.last_text_dialog_dir = str(Path(file_path).parent)
 
     def _reset_text_analysis_state(self) -> None:
         self.current_timing_plan = None
@@ -428,15 +457,17 @@ class MainWindow(QWidget):
         return True
 
     def _select_wav_file(self) -> None:
+        initial_dir = self._resolve_wav_dialog_initial_dir()
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "WAV\u30d5\u30a1\u30a4\u30eb\u3092\u9078\u629e",
-            "",
+            initial_dir,
             "WAV Files (*.wav);;All Files (*)",
         )
         if not file_path:
             return
-        self._load_wav_file(file_path)
+        if self._load_wav_file(file_path):
+            self.last_wav_dialog_dir = str(Path(file_path).parent)
 
     def _reset_wav_load_state(self, placeholder_message: str = "Waveform preview (load failed)") -> None:
         self.selected_wav_path = None
@@ -592,6 +623,7 @@ class MainWindow(QWidget):
                 )
                 return
             if self._load_text_file(file_path):
+                self.last_text_dialog_dir = str(Path(file_path).parent)
                 return
             self._remove_recent_text_file(file_path)
             return
@@ -619,6 +651,7 @@ class MainWindow(QWidget):
                 )
                 return
             if self._load_wav_file(file_path):
+                self.last_wav_dialog_dir = str(Path(file_path).parent)
                 return
             self._remove_recent_wav_file(file_path)
             return

@@ -1,5 +1,6 @@
 # Custom Dictionary Words
 altgraph
+autolip
 contourpy
 ctypes
 dateutil

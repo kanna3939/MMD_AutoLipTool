@@ -378,3 +378,78 @@
 - Verification:
   - `.\.venv\Scripts\python.exe -m py_compile src\gui\main_window.py` を実行し成功。
 
+---
+
+## Entry 2026-03-20 / Session: ms5-current-dir-memory-phases2-to-9-and-docs-sync
+
+- Date: 2026-03-20
+- Session: ms5-current-dir-memory-phases2-to-9-and-docs-sync
+- Summary:
+  - MS5（読み込み関係のカレントディレクトリ記憶）をフェーズ2〜8で実装し、TEXT/WAV別の保持、通常読込成功時更新、履歴再読込成功時更新、無効値フォールバックを反映。
+  - フェーズ9として、確認観点（9-1〜9-5）をコード読解と最小実行確認で整理。
+  - `README.md` / `repo_milestone.md` / `Specification_Prompt_v2.md` に本セッション内容を同期。
+- Modified Files:
+  - `src/gui/main_window.py`: MS5 フェーズ2〜8の局所修正（保持値追加、初期ディレクトリ解決、読込導線接続、成功時更新、履歴再読込連動、無効値フォールバック）を反映。
+  - `README.md`: MS5 実装内容と 2026-03-20 の直近更新を追記。
+  - `repo_milestone.md`: 進捗メモに MS5 完了（フェーズ1〜9）と確認結果要点を追記。
+  - `Specification_Prompt_v2.md`: 6.6 節へ MS5 挙動を追記し、残課題から「読込ダイアログのカレントディレクトリ記憶」を除外。
+  - `Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし
+- Notes:
+  - 永続化（QSettings等）および保存ダイアログ拡張は未対応のまま維持。
+  - 変更対象は `src/gui/main_window.py` の局所修正に限定。
+- Verification:
+  - `.\.venv\Scripts\python.exe -` でモックベース確認スクリプトを実行し、MS5 観点 `9-1..9-5` がすべて `PASS` を確認。
+  - `.\.venv\Scripts\python.exe -m unittest discover -s tests` を実行し、`OK (33 tests)` を確認。
+
+---
+
+## Entry 2026-03-20 / Session: ms6-recent-files-phases1-to-9-and-docs-sync
+
+- Date: 2026-03-20
+- Session: ms6-recent-files-phases1-to-9-and-docs-sync
+- Summary:
+  - MS6（最近使ったファイル履歴）をフェーズ1〜8の方針に沿って整理し、TEXT/WAV 履歴の10件上限、重複先頭移動、再読込導線、失敗時除去、更新タイミング整合、非混線を `main_window.py` で確定。
+  - フェーズ9として、確認観点（10件上限/重複先頭移動/履歴メニュー再読込/壊れた履歴値の該当除去/非混線）をコード読解と最小スモーク確認で整理。
+  - `README.md` / `repo_milestone.md` / `Specification_Prompt_v2.md` に MS6 到達状況を同期。
+- Modified Files:
+  - `src/gui/main_window.py`: MS6 対応（履歴追加/削除/再読込/メニュー反映/非混線）を局所修正で確定。
+  - `README.md`: MS6 の実装済み機能と 2026-03-20 の直近更新を追記。
+  - `repo_milestone.md`: 進捗メモに MS6 完了（フェーズ1〜9）と確認結果要点を追記。
+  - `Specification_Prompt_v2.md`: 6.6 節へ MS6 の挙動（再構築・再読込導線・失敗時除去・非混線）を追記。
+  - `Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし
+- Notes:
+  - 履歴および表示設定のセッション外永続化（QSettings等）は未対応のまま維持。
+  - VMD 保存履歴、`app_io` 分離、大規模リファクタリングは対象外。
+- Verification:
+  - `.\.venv\Scripts\python.exe -` で MS6 観点の最小スモーク確認を実行し、`MS6 phase9 smoke checks passed` を確認。
+  - `.\.venv\Scripts\python.exe -` でメニュー action から `_load_*` 到達確認を実行し、`MS6 phase9 menu->reload route checks passed` を確認。
+
+---
+
+## Entry 2026-03-20 / Session: release-v0341-repo-sync
+
+- Date: 2026-03-20
+- Session: release-v0341-repo-sync
+- Summary:
+  - リポジトリ全体の現状（`src/`, `tests/`, `sample/`, `build/`, `dist/` と主要ドキュメント）を再確認。
+  - 反映版を `Ver 0.3.4.1` として同期し、版数表記を統一。
+  - 現在の作業ツリー差分をリリースコミットとして確定し、GitHub (`origin/main`) へ同期。
+- Modified Files:
+  - `README.md`: 版数表記を `Ver 0.3.4.1` に更新。
+  - `pyproject.toml`: プロジェクトバージョンを `0.3.4.1` に更新。
+  - `src/gui/main_window.py`: Help のバージョン表示を `Ver 0.3.4.1` に更新。
+  - `Specification_Prompt_v2.md`: 文書情報の対応リリースを `Ver 0.3.4.1` に更新。
+  - `repo_milestone.md`: 進捗メモのリリース同期版を `Ver 0.3.4.1` に更新。
+  - `Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし
+- Notes:
+  - 版数同期は最小変更で実施し、機能仕様の追加実装は行わない。
+- Verification:
+  - `git status --short` / `git branch --show-current` / `git remote -v` で同期前状態を確認。
+  - `git commit` 後、`git push origin main` でリモート同期を実施。
+
