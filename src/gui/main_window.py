@@ -19,6 +19,7 @@ from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QApplication,
     QDoubleSpinBox,
+    QFrame,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -26,10 +27,11 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QProgressDialog,
-    QPushButton,
     QVBoxLayout,
     QWidget,
 )
+from gui.operation_panel import OperationPanel
+from gui.status_panel import StatusPanel
 from gui.waveform_view import WaveformView
 
 
@@ -58,10 +60,16 @@ class MainWindow(QWidget):
         self.menu_bar = self._build_menu_bar()
         layout.setMenuBar(self.menu_bar)
 
-        self.text_button = QPushButton("TEXT\u8aad\u307f\u8fbc\u307f")
-        self.wav_button = QPushButton("WAV\u8aad\u307f\u8fbc\u307f")
-        self.process_button = QPushButton("\u51e6\u7406\u5b9f\u884c")
-        self.output_button = QPushButton("\u51fa\u529b")
+        self.operation_panel = OperationPanel()
+        # Keep existing attribute names to minimize impact on state-update paths.
+        self.text_button = self.operation_panel.text_button
+        self.wav_button = self.operation_panel.wav_button
+        self.process_button = self.operation_panel.process_button
+        self.output_button = self.operation_panel.output_button
+        self.play_button = self.operation_panel.play_button
+        self.stop_button = self.operation_panel.stop_button
+        self.zoom_in_button = self.operation_panel.zoom_in_button
+        self.zoom_out_button = self.operation_panel.zoom_out_button
         self.morph_upper_limit_label = QLabel("\u30e2\u30fc\u30d5\u4e0a\u9650\u5024")
         self.morph_upper_limit_input = QDoubleSpinBox()
         self.morph_upper_limit_input.setRange(0.0, 10.0)
@@ -93,7 +101,7 @@ class MainWindow(QWidget):
             "WAV\u60c5\u5831: \u672a\u8aad\u307f\u8fbc\u307f"
         )
         self.wav_waveform_view = WaveformView()
-        self.output_status_label = QLabel("\u51fa\u529b\u72b6\u614b: \u672a\u5b9f\u884c")
+        self.status_panel = StatusPanel("\u51fa\u529b\u72b6\u614b: \u672a\u5b9f\u884c")
         self._sync_view_action_checks()
 
         self.text_button.clicked.connect(self._open_text_file)
@@ -106,22 +114,41 @@ class MainWindow(QWidget):
         morph_upper_limit_layout.addWidget(self.morph_upper_limit_label)
         morph_upper_limit_layout.addWidget(self.morph_upper_limit_input)
 
-        layout.addWidget(self.text_button)
-        layout.addWidget(self.text_path_label)
-        layout.addWidget(self.text_preview_label)
-        layout.addWidget(self.text_preview)
-        layout.addWidget(self.hiragana_preview_label)
-        layout.addWidget(self.hiragana_preview)
-        layout.addWidget(self.vowel_preview_label)
-        layout.addWidget(self.vowel_preview)
-        layout.addWidget(self.wav_button)
-        layout.addWidget(self.wav_path_label)
-        layout.addWidget(self.wav_info_label)
-        layout.addWidget(self.wav_waveform_view)
-        layout.addWidget(self.process_button)
+        center_layout = QHBoxLayout()
+
+        left_column_layout = QVBoxLayout()
+        left_column_layout.addWidget(self.text_path_label)
+        left_column_layout.addWidget(self.wav_path_label)
+        left_column_layout.addWidget(self.text_preview_label)
+        left_column_layout.addWidget(self.text_preview)
+        left_column_layout.addWidget(self.hiragana_preview_label)
+        left_column_layout.addWidget(self.hiragana_preview)
+        left_column_layout.addWidget(self.vowel_preview_label)
+        left_column_layout.addWidget(self.vowel_preview)
+        left_column_layout.addWidget(self.wav_info_label)
+
+        right_column_layout = QVBoxLayout()
+        right_column_layout.addWidget(self.wav_waveform_view, 3)
+
+        self.preview_placeholder = QFrame()
+        self.preview_placeholder.setFrameShape(QFrame.StyledPanel)
+        self.preview_placeholder.setFrameShadow(QFrame.Sunken)
+        self.preview_placeholder.setMinimumHeight(140)
+        self.preview_placeholder_label = QLabel("Preview Area (reserved)")
+        self.preview_placeholder_label.setAlignment(Qt.AlignCenter)
+        preview_placeholder_layout = QVBoxLayout()
+        preview_placeholder_layout.setContentsMargins(8, 8, 8, 8)
+        preview_placeholder_layout.addWidget(self.preview_placeholder_label)
+        self.preview_placeholder.setLayout(preview_placeholder_layout)
+        right_column_layout.addWidget(self.preview_placeholder, 2)
+
+        center_layout.addLayout(left_column_layout, 1)
+        center_layout.addLayout(right_column_layout, 1)
+
+        layout.addWidget(self.operation_panel)
         layout.addLayout(morph_upper_limit_layout)
-        layout.addWidget(self.output_button)
-        layout.addWidget(self.output_status_label)
+        layout.addLayout(center_layout)
+        layout.addWidget(self.status_panel)
 
         self.setLayout(layout)
         self._update_action_states()
@@ -187,7 +214,7 @@ class MainWindow(QWidget):
     def _end_processing_session(self) -> None:
         self._hide_processing_dialog()
         self._is_processing = False
-        if self.output_status_label.text() == "出力状態: 解析中":
+        if self.status_panel.status_text() == "出力状態: 解析中":
             self._set_output_status("出力状態: 失敗")
         self._update_action_states()
 
@@ -199,7 +226,7 @@ class MainWindow(QWidget):
             "バージョン情報",
             "\n".join(
                 [
-                    "MMD AutoLip Tool Ver 0.3.4.1",
+                    "MMD AutoLip Tool Ver 0.3.5.1",
                     f"pyopenjtalk: {pyopenjtalk_version}",
                     f"whisper: {whisper_version}",
                 ]
@@ -1048,7 +1075,7 @@ class MainWindow(QWidget):
         return bool(self.selected_text_path and self.selected_wav_path)
 
     def _set_output_status(self, text: str) -> None:
-        self.output_status_label.setText(text)
+        self.status_panel.set_status_text(text)
 
     def _refresh_text_processing_views(self) -> None:
         self.text_preview.setPlainText(self.selected_text_content)
@@ -1205,6 +1232,11 @@ class MainWindow(QWidget):
 
         self.process_button.setEnabled(can_run)
         self.output_button.setEnabled(can_save)
+        # MS8A scope: preview/playback/zoom controls are display-only placeholders.
+        self.play_button.setEnabled(False)
+        self.stop_button.setEnabled(False)
+        self.zoom_in_button.setEnabled(False)
+        self.zoom_out_button.setEnabled(False)
         self.action_run_processing.setEnabled(can_run)
         self.action_reanalyze.setEnabled(can_run)
         self.action_save_vmd.setEnabled(can_save)
