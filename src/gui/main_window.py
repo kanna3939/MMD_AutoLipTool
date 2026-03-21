@@ -19,7 +19,6 @@ from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QApplication,
     QDoubleSpinBox,
-    QFrame,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -31,6 +30,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from gui.operation_panel import OperationPanel
+from gui.preview_area import PreviewArea
+from gui.preview_transform import build_preview_data
 from gui.status_panel import StatusPanel
 from gui.waveform_view import WaveformView
 
@@ -130,17 +131,8 @@ class MainWindow(QWidget):
         right_column_layout = QVBoxLayout()
         right_column_layout.addWidget(self.wav_waveform_view, 3)
 
-        self.preview_placeholder = QFrame()
-        self.preview_placeholder.setFrameShape(QFrame.StyledPanel)
-        self.preview_placeholder.setFrameShadow(QFrame.Sunken)
-        self.preview_placeholder.setMinimumHeight(140)
-        self.preview_placeholder_label = QLabel("Preview Area (reserved)")
-        self.preview_placeholder_label.setAlignment(Qt.AlignCenter)
-        preview_placeholder_layout = QVBoxLayout()
-        preview_placeholder_layout.setContentsMargins(8, 8, 8, 8)
-        preview_placeholder_layout.addWidget(self.preview_placeholder_label)
-        self.preview_placeholder.setLayout(preview_placeholder_layout)
-        right_column_layout.addWidget(self.preview_placeholder, 2)
+        self.preview_area = PreviewArea()
+        right_column_layout.addWidget(self.preview_area, 2)
 
         center_layout.addLayout(left_column_layout, 1)
         center_layout.addLayout(right_column_layout, 1)
@@ -226,7 +218,7 @@ class MainWindow(QWidget):
             "バージョン情報",
             "\n".join(
                 [
-                    "MMD AutoLip Tool Ver 0.3.5.1",
+                    "MMD AutoLip Tool Ver 0.3.5.2",
                     f"pyopenjtalk: {pyopenjtalk_version}",
                     f"whisper: {whisper_version}",
                 ]
@@ -412,7 +404,7 @@ class MainWindow(QWidget):
             self._try_autocomplete_counterpart_load(file_path)
 
     def _reset_text_analysis_state(self) -> None:
-        self.current_timing_plan = None
+        self._invalidate_current_timing_plan()
         self.wav_waveform_view.clear_morph_labels()
 
     def _show_text_conversion_failed_previews(self) -> None:
@@ -424,6 +416,7 @@ class MainWindow(QWidget):
     def _load_text_file(self, file_path: str, *, suppress_warning: bool = False) -> bool:
         def _fail_text_load(*, title: str, message: str, status: str) -> bool:
             if suppress_warning:
+                self._update_preview_from_current_timing_plan()
                 return False
             self._reset_text_analysis_state()
             self._show_warning(
@@ -491,9 +484,10 @@ class MainWindow(QWidget):
                 "vowel_preview": self.vowel_preview.toPlainText(),
             }
 
-        def _restore_text_state_on_silent_failure() -> None:
+        def _restore_text_state_on_silent_failure() -> bool:
             if previous_text_state is None:
-                return
+                self._invalidate_current_timing_plan()
+                return False
             self.selected_text_path = previous_text_state["selected_text_path"]
             self.selected_text_content = previous_text_state["selected_text_content"]
             self.selected_hiragana_content = previous_text_state["selected_hiragana_content"]
@@ -503,6 +497,8 @@ class MainWindow(QWidget):
             self.text_preview.setPlainText(previous_text_state["text_preview"])
             self.hiragana_preview.setPlainText(previous_text_state["hiragana_preview"])
             self.vowel_preview.setPlainText(previous_text_state["vowel_preview"])
+            self._update_preview_from_current_timing_plan()
+            return True
 
         if not text_content:
             if suppress_warning:
@@ -522,7 +518,7 @@ class MainWindow(QWidget):
 
         self.selected_text_path = normalized_path
         self.selected_text_content = text_content
-        self.current_timing_plan = None
+        self._invalidate_current_timing_plan()
         self.text_path_label.setText(f"TEXT: {text_path.name}")
         try:
             self._refresh_text_processing_views()
@@ -585,7 +581,7 @@ class MainWindow(QWidget):
     def _reset_wav_load_state(self, placeholder_message: str = "Waveform preview (load failed)") -> None:
         self.selected_wav_path = None
         self.selected_wav_analysis = None
-        self.current_timing_plan = None
+        self._invalidate_current_timing_plan()
         self.wav_path_label.setText("WAV: \u672a\u9078\u629e")
         self.wav_info_label.setText("WAV\u60c5\u5831: \u672a\u8aad\u307f\u8fbc\u307f")
         self.wav_waveform_view.clear_morph_labels()
@@ -614,6 +610,7 @@ class MainWindow(QWidget):
     def _load_wav_file(self, file_path: str, *, suppress_warning: bool = False) -> bool:
         def _fail_wav_load(*, title: str, message: str, status: str) -> bool:
             if suppress_warning:
+                self._update_preview_from_current_timing_plan()
                 return False
             self._reset_wav_load_state()
             self._show_warning(
@@ -696,7 +693,7 @@ class MainWindow(QWidget):
 
         self.selected_wav_path = normalized_path
         self.selected_wav_analysis = wav_info
-        self.current_timing_plan = None
+        self._invalidate_current_timing_plan()
         self.wav_path_label.setText(f"WAV: {wav_path.name}")
         self.wav_info_label.setText(
             "WAV\u60c5\u5831: "
@@ -1036,6 +1033,7 @@ class MainWindow(QWidget):
         if self._is_processing:
             return
         if not self.selected_text_content:
+            self._invalidate_current_timing_plan()
             self._show_warning(
                 title="\u5165\u529b\u4e0d\u8db3",
                 message="TEXT\u3092\u8aad\u307f\u8fbc\u3093\u3067\u304b\u3089\u51e6\u7406\u5b9f\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
@@ -1043,6 +1041,7 @@ class MainWindow(QWidget):
             )
             return
         if not self.selected_wav_analysis or not self.selected_wav_path:
+            self._invalidate_current_timing_plan()
             self._show_warning(
                 title="\u5165\u529b\u4e0d\u8db3",
                 message="WAV\u3092\u8aad\u307f\u8fbc\u3093\u3067\u304b\u3089\u51e6\u7406\u5b9f\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
@@ -1050,6 +1049,7 @@ class MainWindow(QWidget):
             )
             return
         if not self.selected_vowel_content:
+            self._invalidate_current_timing_plan()
             self._show_warning(
                 title="\u5165\u529b\u4e0d\u8db3",
                 message="TEXT\u304b\u3089\u6709\u52b9\u306a\u3072\u3089\u304c\u306a/\u6bcd\u97f3\u5217\u3092\u751f\u6210\u3067\u304d\u3066\u3044\u307e\u305b\u3093\u3002",
@@ -1077,6 +1077,26 @@ class MainWindow(QWidget):
     def _set_output_status(self, text: str) -> None:
         self.status_panel.set_status_text(text)
 
+    def _clear_preview_display(self) -> None:
+        preview_area = getattr(self, "preview_area", None)
+        if preview_area is None:
+            return
+        preview_area.clear_preview()
+
+    def _invalidate_current_timing_plan(self) -> None:
+        self.current_timing_plan = None
+        self._update_preview_from_current_timing_plan()
+
+    def _update_preview_from_current_timing_plan(self) -> None:
+        preview_area = getattr(self, "preview_area", None)
+        if preview_area is None:
+            return
+        if self.current_timing_plan is None:
+            self._clear_preview_display()
+            return
+        preview_data = build_preview_data(self.current_timing_plan.timeline)
+        preview_area.set_preview_data(preview_data)
+
     def _refresh_text_processing_views(self) -> None:
         self.text_preview.setPlainText(self.selected_text_content)
 
@@ -1095,12 +1115,12 @@ class MainWindow(QWidget):
             or not self.selected_text_content
             or not self.selected_wav_path
         ):
-            self.current_timing_plan = None
+            self._invalidate_current_timing_plan()
             self.wav_waveform_view.clear_morph_labels()
             return
 
         if not self.selected_wav_analysis.has_speech:
-            self.current_timing_plan = None
+            self._invalidate_current_timing_plan()
             self.wav_waveform_view.clear_morph_labels()
             return
 
@@ -1113,12 +1133,13 @@ class MainWindow(QWidget):
                 upper_limit=self._current_upper_limit(),
             )
         except ValueError:
-            self.current_timing_plan = None
+            self._invalidate_current_timing_plan()
             self.wav_waveform_view.clear_morph_labels()
             return
 
         self.current_timing_plan = timing_plan
         self.wav_waveform_view.set_morph_events(timing_plan.timeline)
+        self._update_preview_from_current_timing_plan()
 
     def _show_warning(self, title: str, message: str, status: str | None = None) -> None:
         QMessageBox.warning(self, title, message)
@@ -1139,7 +1160,7 @@ class MainWindow(QWidget):
         )
 
     def _on_morph_upper_limit_changed(self, _: float) -> None:
-        self.current_timing_plan = None
+        self._invalidate_current_timing_plan()
         self.wav_waveform_view.clear_morph_labels()
         self._set_ready_status()
 
