@@ -1,4 +1,5 @@
 import os
+import math
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 
@@ -39,6 +40,8 @@ from gui.waveform_view import WaveformView
 
 _STATUS_FRAME_FPS = 30
 _PLAYBACK_STATUS_PREFIX = "出力状態: 再生中"
+_DEFAULT_ZOOM_LEVELS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0)
+_PATH_DISPLAY_MAX_FULL_LENGTH = 48
 
 
 class MainWindow(QWidget):
@@ -61,6 +64,8 @@ class MainWindow(QWidget):
         self._recent_file_limit = 10
         self.recent_text_files: list[str] = []
         self.recent_wav_files: list[str] = []
+        self._zoom_levels: tuple[float, ...] = _DEFAULT_ZOOM_LEVELS
+        self._zoom_level_index = 0
 
         layout = QVBoxLayout()
         self.menu_bar = self._build_menu_bar()
@@ -85,6 +90,8 @@ class MainWindow(QWidget):
 
         self.text_path_label = QLabel("TEXT: \u672a\u9078\u629e")
         self.wav_path_label = QLabel("WAV: \u672a\u9078\u629e")
+        self._set_file_path_label(self.text_path_label, "TEXT", None)
+        self._set_file_path_label(self.wav_path_label, "WAV", None)
         self.text_preview_label = QLabel("TEXT\u5168\u6587\u78ba\u8a8d")
         self.text_preview = QPlainTextEdit()
         self.text_preview.setReadOnly(True)
@@ -111,7 +118,6 @@ class MainWindow(QWidget):
         self.playback_controller = PlaybackController(self)
         self.view_sync = ViewSync(self)
         self._sync_view_action_checks()
-        self._connect_playback_layer()
 
         self.text_button.clicked.connect(self._open_text_file)
         self.wav_button.clicked.connect(self._open_wav_file)
@@ -141,6 +147,8 @@ class MainWindow(QWidget):
 
         self.preview_area = PreviewArea()
         right_column_layout.addWidget(self.preview_area, 2)
+        self._connect_playback_layer()
+        self._connect_viewport_layer()
 
         center_layout.addLayout(left_column_layout, 1)
         center_layout.addLayout(right_column_layout, 1)
@@ -179,6 +187,24 @@ class MainWindow(QWidget):
             self.preview_area.clear_playback_cursor
         )
         self.view_sync.shared_position_reset.connect(self._on_shared_position_reset)
+
+    def _connect_viewport_layer(self) -> None:
+        self.operation_panel.zoom_in_requested.connect(self._on_zoom_in_requested)
+        self.operation_panel.zoom_out_requested.connect(self._on_zoom_out_requested)
+        self.wav_waveform_view.pan_requested.connect(self._on_pan_requested)
+        self.preview_area.pan_requested.connect(self._on_pan_requested)
+        self.view_sync.shared_viewport_sec_changed.connect(
+            self.wav_waveform_view.set_viewport_sec
+        )
+        self.view_sync.shared_viewport_sec_changed.connect(
+            self.preview_area.set_viewport_sec
+        )
+        self.view_sync.shared_viewport_reset.connect(
+            self.wav_waveform_view.clear_viewport_sec
+        )
+        self.view_sync.shared_viewport_reset.connect(
+            self.preview_area.clear_viewport_sec
+        )
 
     # Common GUI entry points (buttons and menu actions should share these).
     def _open_text_file(self) -> None:
@@ -232,6 +258,178 @@ class MainWindow(QWidget):
 
     def _reset_shared_playback_position(self) -> None:
         self.view_sync.reset_shared_position()
+
+    def _has_loaded_wav_for_viewport(self) -> bool:
+        return bool(self.selected_wav_path and self.selected_wav_analysis is not None)
+
+    def _current_wav_duration_sec(self) -> float:
+        if self.selected_wav_analysis is None:
+            return 0.0
+        return max(float(self.selected_wav_analysis.duration_sec), 0.0)
+
+    def _reset_zoom_level_state(self) -> None:
+        self._zoom_level_index = self._clamp_zoom_level_index(0)
+
+    def _on_zoom_in_requested(self) -> None:
+        self._step_zoom_level(1)
+
+    def _on_zoom_out_requested(self) -> None:
+        self._step_zoom_level(-1)
+
+    def _on_pan_requested(self, delta_sec: float) -> None:
+        self._apply_pan_delta_to_shared_viewport(delta_sec)
+
+    def _step_zoom_level(self, step: int) -> None:
+        if step == 0:
+            return
+        if not self._has_loaded_wav_for_viewport():
+            self._update_action_states()
+            return
+        next_index = self._clamp_zoom_level_index(self._zoom_level_index + int(step))
+        if next_index == self._zoom_level_index:
+            self._update_action_states()
+            return
+        self._zoom_level_index = next_index
+        self._apply_zoom_level_to_shared_viewport()
+        self._update_action_states()
+
+    def _apply_zoom_level_to_shared_viewport(self) -> None:
+        if not self._has_loaded_wav_for_viewport():
+            self.view_sync.reset_shared_viewport()
+            return
+        duration_sec = self._current_wav_duration_sec()
+        if duration_sec <= 0.0:
+            self.view_sync.update_shared_viewport_sec(0.0, 0.0)
+            return
+        zoom_factor = self._current_zoom_factor()
+        visible_duration_sec = duration_sec / zoom_factor
+        visible_duration_sec = min(max(visible_duration_sec, 0.0), duration_sec)
+        self.view_sync.update_shared_viewport_sec(0.0, visible_duration_sec)
+
+    def _apply_pan_delta_to_shared_viewport(self, delta_sec: float) -> None:
+        if not self._has_loaded_wav_for_viewport():
+            return
+        duration_sec = self._current_wav_duration_sec()
+        if duration_sec <= 0.0:
+            self.view_sync.update_shared_viewport_sec(0.0, 0.0)
+            return
+
+        current_start_sec, current_end_sec = self._resolved_current_viewport_for_pan(
+            duration_sec
+        )
+        current_span_sec = current_end_sec - current_start_sec
+        if current_span_sec <= 0.0:
+            return
+        if current_span_sec >= duration_sec - 1e-9:
+            self.view_sync.update_shared_viewport_sec(0.0, duration_sec)
+            return
+
+        resolved_delta_sec = self._normalize_finite_sec_delta(delta_sec)
+        if abs(resolved_delta_sec) <= 1e-9:
+            return
+
+        max_start_sec = max(duration_sec - current_span_sec, 0.0)
+        next_start_sec = min(
+            max(current_start_sec + resolved_delta_sec, 0.0),
+            max_start_sec,
+        )
+        next_end_sec = next_start_sec + current_span_sec
+        self.view_sync.update_shared_viewport_sec(next_start_sec, next_end_sec)
+
+    def _resolved_current_viewport_for_pan(self, duration_sec: float) -> tuple[float, float]:
+        shared_start_sec, shared_end_sec = self.view_sync.shared_viewport_sec()
+        start_sec = self._normalize_non_negative_sec(shared_start_sec)
+        end_sec = self._normalize_non_negative_sec(shared_end_sec)
+
+        if end_sec < start_sec:
+            start_sec, end_sec = end_sec, start_sec
+        start_sec = min(start_sec, duration_sec)
+        end_sec = min(end_sec, duration_sec)
+        if end_sec <= start_sec:
+            return (0.0, duration_sec)
+        return (start_sec, end_sec)
+
+    def _current_zoom_factor(self) -> float:
+        if not self._zoom_levels:
+            return 1.0
+        current_index = self._clamp_zoom_level_index(self._zoom_level_index)
+        raw_factor = self._zoom_levels[current_index]
+        try:
+            resolved_factor = float(raw_factor)
+        except (TypeError, ValueError):
+            return 1.0
+        if resolved_factor <= 0.0:
+            return 1.0
+        return resolved_factor
+
+    def _clamp_zoom_level_index(self, level_index: int) -> int:
+        if not self._zoom_levels:
+            return 0
+        return min(max(int(level_index), 0), len(self._zoom_levels) - 1)
+
+    def _normalize_non_negative_sec(self, value: float) -> float:
+        try:
+            resolved = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        if not math.isfinite(resolved):
+            return 0.0
+        return max(resolved, 0.0)
+
+    def _normalize_finite_sec_delta(self, value: float) -> float:
+        try:
+            resolved = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        if not math.isfinite(resolved):
+            return 0.0
+        return resolved
+
+    def _snapshot_zoom_and_viewport_state(self) -> tuple[int, float, float]:
+        viewport_start_sec, viewport_end_sec = self.view_sync.shared_viewport_sec()
+        return (self._zoom_level_index, viewport_start_sec, viewport_end_sec)
+
+    def _restore_zoom_and_viewport_state_from_snapshot(
+        self,
+        snapshot: tuple[int, float, float] | None,
+    ) -> None:
+        if snapshot is None:
+            self._reset_zoom_and_viewport_state()
+            return
+
+        zoom_level_index, viewport_start_sec, viewport_end_sec = snapshot
+        self._zoom_level_index = self._clamp_zoom_level_index(zoom_level_index)
+        if not self._has_loaded_wav_for_viewport():
+            self.view_sync.reset_shared_viewport()
+            return
+
+        duration_sec = self._current_wav_duration_sec()
+        if duration_sec <= 0.0:
+            self.view_sync.update_shared_viewport_sec(0.0, 0.0)
+            return
+
+        resolved_start_sec = min(
+            max(self._normalize_non_negative_sec(viewport_start_sec), 0.0),
+            duration_sec,
+        )
+        resolved_end_sec = min(
+            max(self._normalize_non_negative_sec(viewport_end_sec), 0.0),
+            duration_sec,
+        )
+        if resolved_end_sec <= resolved_start_sec:
+            self._apply_zoom_level_to_shared_viewport()
+            return
+        self.view_sync.update_shared_viewport_sec(resolved_start_sec, resolved_end_sec)
+
+    def _reset_shared_viewport_for_current_wav(self) -> None:
+        if not self._has_loaded_wav_for_viewport():
+            self.view_sync.reset_shared_viewport()
+            return
+        self.view_sync.update_shared_viewport_sec(0.0, self._current_wav_duration_sec())
+
+    def _reset_zoom_and_viewport_state(self) -> None:
+        self._reset_zoom_level_state()
+        self._reset_shared_viewport_for_current_wav()
 
     def _stop_playback_for_timing_invalidation(self) -> None:
         self.playback_controller.stop_playback()
@@ -341,7 +539,7 @@ class MainWindow(QWidget):
             "バージョン情報",
             "\n".join(
                 [
-                    "MMD AutoLip Tool Ver 0.3.5.3",
+                    "MMD AutoLip Tool Ver 0.3.5.4",
                     f"pyopenjtalk: {pyopenjtalk_version}",
                     f"whisper: {whisper_version}",
                 ]
@@ -355,6 +553,43 @@ class MainWindow(QWidget):
             except PackageNotFoundError:
                 continue
         return "not installed"
+
+    def _set_file_path_label(
+        self,
+        label: QLabel,
+        prefix: str,
+        full_path: str | None,
+    ) -> None:
+        normalized_path = ""
+        if full_path is not None:
+            normalized_path = str(full_path).strip()
+
+        if not normalized_path:
+            label.setText(f"{prefix}: \u672a\u9078\u629e")
+            label.setToolTip("")
+            return
+
+        display_path = self._build_elided_file_path_display(normalized_path)
+        label.setText(f"{prefix}: {display_path}")
+        label.setToolTip(normalized_path)
+
+    def _build_elided_file_path_display(self, full_path: str) -> str:
+        normalized_path = str(Path(full_path))
+        if len(normalized_path) <= _PATH_DISPLAY_MAX_FULL_LENGTH:
+            return normalized_path
+
+        path_obj = Path(normalized_path)
+        file_name = path_obj.name or normalized_path
+        parent_name = path_obj.parent.name
+        anchor = path_obj.drive or path_obj.anchor.rstrip("\\/")
+
+        if anchor:
+            if parent_name and parent_name != anchor:
+                return f"{anchor}\\...\\{parent_name}\\{file_name}"
+            return f"{anchor}\\...\\{file_name}"
+        if parent_name:
+            return f"...\\{parent_name}\\{file_name}"
+        return file_name
 
     def _build_menu_bar(self) -> QMenuBar:
         menu_bar = QMenuBar(self)
@@ -383,6 +618,8 @@ class MainWindow(QWidget):
         self.action_show_30fps_lines = QAction("30fps\u7e26\u7dda\u3092\u8868\u793a", self)
         self.action_show_vowel_labels = QAction("\u6bcd\u97f3\u30e9\u30d9\u30eb\u3092\u8868\u793a", self)
         self.action_show_event_ranges = QAction("\u30a4\u30d9\u30f3\u30c8\u533a\u9593\u3092\u8868\u793a", self)
+        self.action_zoom_in = QAction("Zoom In", self)
+        self.action_zoom_out = QAction("Zoom Out", self)
         self.action_reset_waveform_view = QAction("\u6ce2\u5f62\u8868\u793a\u3092\u521d\u671f\u5316", self)
         self.action_show_30fps_lines.setCheckable(True)
         self.action_show_vowel_labels.setCheckable(True)
@@ -390,6 +627,9 @@ class MainWindow(QWidget):
         view_menu.addAction(self.action_show_30fps_lines)
         view_menu.addAction(self.action_show_vowel_labels)
         view_menu.addAction(self.action_show_event_ranges)
+        view_menu.addSeparator()
+        view_menu.addAction(self.action_zoom_in)
+        view_menu.addAction(self.action_zoom_out)
         view_menu.addSeparator()
         view_menu.addAction(self.action_reset_waveform_view)
 
@@ -412,6 +652,8 @@ class MainWindow(QWidget):
         self.action_show_30fps_lines.toggled.connect(self._on_show_30fps_lines_toggled)
         self.action_show_vowel_labels.toggled.connect(self._on_show_vowel_labels_toggled)
         self.action_show_event_ranges.toggled.connect(self._on_show_event_ranges_toggled)
+        self.action_zoom_in.triggered.connect(self._on_zoom_in_requested)
+        self.action_zoom_out.triggered.connect(self._on_zoom_out_requested)
         self.action_reset_waveform_view.triggered.connect(self._reset_waveform_view_options)
         self.action_show_version.triggered.connect(self._show_version_info)
 
@@ -596,6 +838,7 @@ class MainWindow(QWidget):
             )
 
         previous_text_state = None
+        previous_zoom_and_viewport_state = None
         if suppress_warning:
             previous_text_state = {
                 "selected_text_path": self.selected_text_path,
@@ -603,11 +846,11 @@ class MainWindow(QWidget):
                 "selected_hiragana_content": self.selected_hiragana_content,
                 "selected_vowel_content": self.selected_vowel_content,
                 "current_timing_plan": self.current_timing_plan,
-                "text_path_label": self.text_path_label.text(),
                 "text_preview": self.text_preview.toPlainText(),
                 "hiragana_preview": self.hiragana_preview.toPlainText(),
                 "vowel_preview": self.vowel_preview.toPlainText(),
             }
+            previous_zoom_and_viewport_state = self._snapshot_zoom_and_viewport_state()
 
         def _restore_text_state_on_silent_failure() -> bool:
             if previous_text_state is None:
@@ -618,10 +861,11 @@ class MainWindow(QWidget):
             self.selected_hiragana_content = previous_text_state["selected_hiragana_content"]
             self.selected_vowel_content = previous_text_state["selected_vowel_content"]
             self.current_timing_plan = previous_text_state["current_timing_plan"]
-            self.text_path_label.setText(previous_text_state["text_path_label"])
+            self._set_file_path_label(self.text_path_label, "TEXT", self.selected_text_path)
             self.text_preview.setPlainText(previous_text_state["text_preview"])
             self.hiragana_preview.setPlainText(previous_text_state["hiragana_preview"])
             self.vowel_preview.setPlainText(previous_text_state["vowel_preview"])
+            self._restore_zoom_and_viewport_state_from_snapshot(previous_zoom_and_viewport_state)
             self._update_preview_from_current_timing_plan()
             self._set_ready_status()
             return True
@@ -645,7 +889,7 @@ class MainWindow(QWidget):
         self.selected_text_path = normalized_path
         self.selected_text_content = text_content
         self._invalidate_current_timing_plan()
-        self.text_path_label.setText(f"TEXT: {text_path.name}")
+        self._set_file_path_label(self.text_path_label, "TEXT", self.selected_text_path)
         try:
             self._refresh_text_processing_views()
         except TextProcessingError as error:
@@ -708,7 +952,7 @@ class MainWindow(QWidget):
         self.selected_wav_path = None
         self.selected_wav_analysis = None
         self._invalidate_current_timing_plan()
-        self.wav_path_label.setText("WAV: \u672a\u9078\u629e")
+        self._set_file_path_label(self.wav_path_label, "WAV", None)
         self.wav_info_label.setText("WAV\u60c5\u5831: \u672a\u8aad\u307f\u8fbc\u307f")
         self.wav_waveform_view.clear_morph_labels()
         self.wav_waveform_view.show_placeholder(placeholder_message)
@@ -823,7 +1067,7 @@ class MainWindow(QWidget):
         self.selected_wav_analysis = wav_info
         self.playback_controller.set_wav_path(normalized_path)
         self._invalidate_current_timing_plan()
-        self.wav_path_label.setText(f"WAV: {wav_path.name}")
+        self._set_file_path_label(self.wav_path_label, "WAV", self.selected_wav_path)
         self.wav_info_label.setText(
             "WAV\u60c5\u5831: "
             f"\u30d5\u30a1\u30a4\u30eb\u540d={wav_path.name} / "
@@ -1217,6 +1461,7 @@ class MainWindow(QWidget):
     def _invalidate_current_timing_plan(self) -> None:
         self.current_timing_plan = None
         self._stop_playback_for_timing_invalidation()
+        self._reset_zoom_and_viewport_state()
         self._update_preview_from_current_timing_plan()
         self._update_action_states()
 
@@ -1347,6 +1592,13 @@ class MainWindow(QWidget):
         )
         can_run = has_text and has_wav
         can_save = can_run and self.current_timing_plan is not None
+        zoom_level_count = len(self._zoom_levels)
+        can_zoom_in = (
+            has_wav
+            and zoom_level_count > 0
+            and self._zoom_level_index < (zoom_level_count - 1)
+        )
+        can_zoom_out = has_wav and self._zoom_level_index > 0
         can_play = (
             (not self._is_processing)
             and has_valid_analysis
@@ -1367,6 +1619,8 @@ class MainWindow(QWidget):
             "can_save": can_save,
             "can_play": can_play,
             "can_stop": can_stop,
+            "can_zoom_in": can_zoom_in,
+            "can_zoom_out": can_zoom_out,
         }
 
     def _apply_processing_lock_overrides(self, action_states: dict[str, bool]) -> dict[str, bool]:
@@ -1382,6 +1636,8 @@ class MainWindow(QWidget):
         locked_states["can_save"] = False
         locked_states["can_play"] = False
         locked_states["can_stop"] = False
+        locked_states["can_zoom_in"] = False
+        locked_states["can_zoom_out"] = False
         return locked_states
 
     def _apply_action_states(self, action_states: dict[str, bool]) -> None:
@@ -1394,6 +1650,8 @@ class MainWindow(QWidget):
         can_save = action_states["can_save"]
         can_play = action_states["can_play"]
         can_stop = action_states["can_stop"]
+        can_zoom_in = action_states["can_zoom_in"]
+        can_zoom_out = action_states["can_zoom_out"]
 
         self.text_button.setEnabled(can_open_text)
         self.wav_button.setEnabled(can_open_wav)
@@ -1411,8 +1669,10 @@ class MainWindow(QWidget):
         self.output_button.setEnabled(can_save)
         self.play_button.setEnabled(can_play)
         self.stop_button.setEnabled(can_stop)
-        self.zoom_in_button.setEnabled(False)
-        self.zoom_out_button.setEnabled(False)
+        self.zoom_in_button.setEnabled(can_zoom_in)
+        self.zoom_out_button.setEnabled(can_zoom_out)
+        self.action_zoom_in.setEnabled(can_zoom_in)
+        self.action_zoom_out.setEnabled(can_zoom_out)
         self.action_run_processing.setEnabled(can_run)
         self.action_reanalyze.setEnabled(can_run)
         self.action_save_vmd.setEnabled(can_save)

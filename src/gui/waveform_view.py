@@ -1,19 +1,24 @@
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.transforms import blended_transform_factory
+from PySide6.QtCore import Qt, Signal
 
 _JP_FONT_FAMILIES = ["Yu Gothic", "Meiryo", "MS Gothic", "sans-serif"]
+_FRAME_RATE = 30.0
 
 if TYPE_CHECKING:
     from vmd_writer import VowelTimelinePoint
 
 
 class WaveformView(FigureCanvas):
+    pan_requested = Signal(float)
+
     def __init__(self) -> None:
         self._figure = Figure(figsize=(5, 2), dpi=100)
         super().__init__(self._figure)
@@ -28,16 +33,29 @@ class WaveformView(FigureCanvas):
         self._show_frame_grid = self._default_show_frame_grid
         self._show_vowel_labels = self._default_show_vowel_labels
         self._show_event_regions = self._default_show_event_regions
+        self._viewport_start_sec: float | None = None
+        self._viewport_end_sec: float | None = None
         self._playback_position_sec: float | None = None
         self._playback_cursor_line: Line2D | None = None
+        self._pan_drag_active = False
+        self._pan_drag_last_x_sec: float | None = None
+        self._pan_press_cid: int | None = None
+        self._pan_move_cid: int | None = None
+        self._pan_release_cid: int | None = None
         self.setMinimumHeight(140)
+        self._connect_pan_interaction()
         self.show_placeholder("Waveform preview (not loaded)")
 
     def show_placeholder(self, message: str) -> None:
         self._samples = []
         self._duration_sec = 0.0
+        self._viewport_start_sec = None
+        self._viewport_end_sec = None
         self._playback_position_sec = None
         self._playback_cursor_line = None
+        self._pan_drag_active = False
+        self._pan_drag_last_x_sec = None
+        self.unsetCursor()
         self._axes.clear()
         self._axes.set_xticks([])
         self._axes.set_yticks([])
@@ -101,6 +119,30 @@ class WaveformView(FigureCanvas):
             return
         self.draw_idle()
 
+    def set_viewport_sec(self, start_sec: float, end_sec: float) -> None:
+        normalized_start, normalized_end = self._normalize_viewport_sec(start_sec, end_sec)
+        if self._is_same_viewport(normalized_start, normalized_end):
+            return
+        self._viewport_start_sec = normalized_start
+        self._viewport_end_sec = normalized_end
+        if self._samples:
+            self._render_waveform()
+            return
+        self.draw_idle()
+
+    def clear_viewport_sec(self) -> None:
+        if self._viewport_start_sec is None and self._viewport_end_sec is None:
+            return
+        self._viewport_start_sec = None
+        self._viewport_end_sec = None
+        if self._samples:
+            self._render_waveform()
+            return
+        self.draw_idle()
+
+    def viewport_sec(self) -> tuple[float | None, float | None]:
+        return (self._viewport_start_sec, self._viewport_end_sec)
+
     def set_show_frame_grid(self, enabled: bool) -> None:
         enabled_bool = bool(enabled)
         if self._show_frame_grid == enabled_bool:
@@ -158,8 +200,10 @@ class WaveformView(FigureCanvas):
             step = self._duration_sec / (len(self._samples) - 1)
             x_values = [step * index for index in range(len(self._samples))]
             self._axes.plot(x_values, self._samples, linewidth=0.8, color="#2c7fb8")
-            self._axes.set_xlim(0.0, self._duration_sec)
-            self._axes.set_xlabel("Time (s)")
+            visible_start_sec, visible_end_sec = self._resolved_visible_range_sec()
+            self._axes.set_xlim(visible_start_sec, visible_end_sec)
+            self._axes.set_xlabel("Frame (30fps)")
+            self._apply_frame_axis_ticks(visible_start_sec, visible_end_sec)
             self._draw_overlays()
         else:
             self._axes.plot(self._samples, linewidth=0.8, color="#2c7fb8")
@@ -183,11 +227,24 @@ class WaveformView(FigureCanvas):
     def _draw_frame_grid(self) -> None:
         if self._duration_sec <= 0.0:
             return
-        frame_step_sec = 1.0 / 30.0
-        frame_count = int(self._duration_sec / frame_step_sec)
-        x_positions = [index * frame_step_sec for index in range(frame_count + 1)]
-        if not x_positions or x_positions[-1] < self._duration_sec:
-            x_positions.append(self._duration_sec)
+        visible_start_sec, visible_end_sec = self._resolved_visible_range_sec()
+        if visible_end_sec <= visible_start_sec:
+            return
+        frame_step_sec = 1.0 / _FRAME_RATE
+        first_frame = int(math.floor(visible_start_sec / frame_step_sec))
+        if first_frame < 0:
+            first_frame = 0
+        x_positions: list[float] = []
+        frame_no = first_frame
+        while True:
+            position = frame_no * frame_step_sec
+            if position > visible_end_sec + 1e-9:
+                break
+            if position >= visible_start_sec - 1e-9:
+                x_positions.append(position)
+            frame_no += 1
+        if not x_positions or x_positions[-1] < visible_end_sec:
+            x_positions.append(visible_end_sec)
         if not x_positions:
             return
         self._axes.vlines(
@@ -204,12 +261,15 @@ class WaveformView(FigureCanvas):
     def _draw_event_regions(self) -> None:
         if not self._morph_events:
             return
+        visible_start_sec, visible_end_sec = self._resolved_visible_range_sec()
+        if visible_end_sec <= visible_start_sec:
+            return
         for event in self._morph_events:
             start_sec, end_sec = self._event_bounds(event)
-            if end_sec <= 0.0 or start_sec >= self._duration_sec:
+            if end_sec <= visible_start_sec or start_sec >= visible_end_sec:
                 continue
-            clamped_start = min(max(start_sec, 0.0), self._duration_sec)
-            clamped_end = min(max(end_sec, 0.0), self._duration_sec)
+            clamped_start = min(max(start_sec, visible_start_sec), visible_end_sec)
+            clamped_end = min(max(end_sec, visible_start_sec), visible_end_sec)
             if clamped_end <= clamped_start:
                 continue
             self._axes.axvspan(
@@ -226,14 +286,17 @@ class WaveformView(FigureCanvas):
         if not self._morph_events:
             return
 
+        visible_start_sec, visible_end_sec = self._resolved_visible_range_sec()
+        if visible_end_sec <= visible_start_sec:
+            return
         transform = blended_transform_factory(self._axes.transData, self._axes.transAxes)
         for event in self._morph_events:
             time_sec = event.time_sec
             vowel = event.vowel
             start_sec, end_sec = self._event_bounds(event)
-            if end_sec < 0.0 or start_sec > self._duration_sec:
+            if end_sec < visible_start_sec or start_sec > visible_end_sec:
                 continue
-            clamped_time = min(max(time_sec, 0.0), self._duration_sec)
+            clamped_time = min(max(time_sec, visible_start_sec), visible_end_sec)
             self._axes.text(
                 clamped_time,
                 0.98,
@@ -275,12 +338,161 @@ class WaveformView(FigureCanvas):
         if self._playback_cursor_line.axes is not self._axes:
             return False
         clamped_sec = min(max(self._playback_position_sec, 0.0), self._duration_sec)
+        visible_start_sec, visible_end_sec = self._resolved_visible_range_sec()
+        is_visible = visible_start_sec <= clamped_sec <= visible_end_sec
         self._playback_cursor_line.set_xdata([clamped_sec, clamped_sec])
-        self._playback_cursor_line.set_visible(True)
+        self._playback_cursor_line.set_visible(is_visible)
         return True
+
+    def _connect_pan_interaction(self) -> None:
+        self._pan_press_cid = self.mpl_connect("button_press_event", self._on_pan_press_event)
+        self._pan_move_cid = self.mpl_connect("motion_notify_event", self._on_pan_move_event)
+        self._pan_release_cid = self.mpl_connect(
+            "button_release_event", self._on_pan_release_event
+        )
+
+    def _on_pan_press_event(self, event) -> None:
+        if event.button != 1:
+            return
+        if event.inaxes is not self._axes:
+            return
+        current_x_sec = self._event_x_sec_for_pan(event)
+        if current_x_sec is None:
+            return
+        self._pan_drag_active = True
+        self._pan_drag_last_x_sec = current_x_sec
+        self.setCursor(Qt.ClosedHandCursor)
+
+    def _on_pan_move_event(self, event) -> None:
+        if not self._pan_drag_active:
+            return
+        current_x_sec = self._event_x_sec_for_pan(event)
+        if current_x_sec is None:
+            return
+        previous_x_sec = self._pan_drag_last_x_sec
+        self._pan_drag_last_x_sec = current_x_sec
+        if previous_x_sec is None:
+            return
+        pan_delta_sec = previous_x_sec - current_x_sec
+        if abs(pan_delta_sec) <= 1e-9:
+            return
+        self.pan_requested.emit(pan_delta_sec)
+
+    def _on_pan_release_event(self, event) -> None:
+        del event
+        if not self._pan_drag_active:
+            return
+        self._pan_drag_active = False
+        self._pan_drag_last_x_sec = None
+        self.unsetCursor()
+
+    def _event_x_sec_for_pan(self, event) -> float | None:
+        if self._duration_sec <= 0.0:
+            return None
+        if event.xdata is None:
+            return None
+        visible_start_sec, visible_end_sec = self._resolved_visible_range_sec()
+        if visible_end_sec <= visible_start_sec:
+            return None
+        try:
+            resolved_x_sec = float(event.xdata)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(resolved_x_sec):
+            return None
+        return min(max(resolved_x_sec, visible_start_sec), visible_end_sec)
 
     def _event_bounds(self, event: VowelTimelinePoint) -> tuple[float, float]:
         if event.start_sec is not None and event.end_sec is not None:
             return (event.start_sec, event.end_sec)
         half = max(event.duration_sec, 0.0) * 0.5
         return (event.time_sec - half, event.time_sec + half)
+
+    def _normalize_viewport_sec(self, start_sec: float, end_sec: float) -> tuple[float, float]:
+        normalized_start = self._normalize_non_negative_sec(start_sec)
+        normalized_end = self._normalize_non_negative_sec(end_sec)
+        if normalized_end < normalized_start:
+            normalized_start, normalized_end = normalized_end, normalized_start
+        return (normalized_start, normalized_end)
+
+    def _normalize_non_negative_sec(self, value: float) -> float:
+        try:
+            resolved = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        if not math.isfinite(resolved):
+            return 0.0
+        return max(resolved, 0.0)
+
+    def _is_same_viewport(self, start_sec: float, end_sec: float) -> bool:
+        if self._viewport_start_sec is None or self._viewport_end_sec is None:
+            return False
+        return (
+            abs(start_sec - self._viewport_start_sec) <= 1e-6
+            and abs(end_sec - self._viewport_end_sec) <= 1e-6
+        )
+
+    def _resolved_visible_range_sec(self) -> tuple[float, float]:
+        full_start_sec = 0.0
+        full_end_sec = max(self._duration_sec, 0.0)
+        if full_end_sec <= full_start_sec:
+            return (full_start_sec, full_start_sec)
+        if self._viewport_start_sec is None or self._viewport_end_sec is None:
+            return (full_start_sec, full_end_sec)
+        clipped_start_sec = min(max(self._viewport_start_sec, full_start_sec), full_end_sec)
+        clipped_end_sec = min(max(self._viewport_end_sec, full_start_sec), full_end_sec)
+        if clipped_end_sec <= clipped_start_sec:
+            return (full_start_sec, full_end_sec)
+        return (clipped_start_sec, clipped_end_sec)
+
+    def _apply_frame_axis_ticks(self, visible_start_sec: float, visible_end_sec: float) -> None:
+        if visible_end_sec <= visible_start_sec:
+            return
+        major_frames = self._build_major_frame_ticks(visible_start_sec, visible_end_sec)
+        if not major_frames:
+            return
+        major_tick_seconds = [frame / _FRAME_RATE for frame in major_frames]
+        major_labels = [str(frame) for frame in major_frames]
+        self._axes.set_xticks(major_tick_seconds)
+        self._axes.set_xticklabels(major_labels)
+
+    def _build_major_frame_ticks(self, start_sec: float, end_sec: float) -> list[int]:
+        start_frame = max(0, self._seconds_to_frame_ceil(start_sec))
+        end_frame = max(start_frame, self._seconds_to_frame_floor(end_sec))
+        frame_span = max(end_frame - start_frame, 1)
+        max_label_count = 9
+        min_step = max(1, int(math.ceil(frame_span / max_label_count)))
+        step_frame = self._normalized_tick_step(min_step)
+
+        first_frame = ((start_frame + step_frame - 1) // step_frame) * step_frame
+        frames: list[int] = []
+        frame_no = first_frame
+        while frame_no <= end_frame:
+            frames.append(frame_no)
+            frame_no += step_frame
+
+        if not frames:
+            return [start_frame, end_frame]
+        if frames[0] != start_frame:
+            frames.insert(0, start_frame)
+        if frames[-1] != end_frame:
+            frames.append(end_frame)
+        return frames
+
+    def _normalized_tick_step(self, minimum_step: int) -> int:
+        if minimum_step <= 1:
+            return 1
+        magnitude = 1
+        while magnitude * 10 < minimum_step:
+            magnitude *= 10
+        for candidate in (1, 2, 5, 10):
+            step = candidate * magnitude
+            if step >= minimum_step:
+                return step
+        return 10 * magnitude
+
+    def _seconds_to_frame_floor(self, seconds: float) -> int:
+        return int(math.floor(max(seconds, 0.0) * _FRAME_RATE + 1e-9))
+
+    def _seconds_to_frame_ceil(self, seconds: float) -> int:
+        return int(math.ceil(max(seconds, 0.0) * _FRAME_RATE - 1e-9))
