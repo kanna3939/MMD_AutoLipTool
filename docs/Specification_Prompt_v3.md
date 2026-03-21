@@ -4,30 +4,29 @@
 
 - 文書名: `docs/Specification_Prompt_v3.md`
 - 作成日: 2026-03-20
-- 最終更新日: 2026-03-21
-- 対応リリース: `Ver 0.3.5.3`
+- 最終更新日: 2026-03-22
+- 対応リリース: `Ver 0.3.5.4`
 - 対象リポジトリ: `MMD_AutoLipTool`
 - 旧版: `docs/Specification_Prompt_v2.md`（本書で置き換え）
 - 文書方針: v2 の意図を引き継ぎつつ、現行実装・確定済み追加仕様・責務分割方針に合わせて更新する
 
-### 0.1 実装同期注記（2026-03-21 / MS8A・MS8B完了）
+### 0.1 実装同期注記（2026-03-22 / MS8D-2完了反映）
 
-- 本書は v3 の目標仕様を含むが、2026-03-21 時点でコード反映済みなのは MS8A（GUI再構成基盤）と MS8B（Preview Area 静止表示）まで。
+- 本書は v3 の目標仕様を含むが、2026-03-22 時点でコード反映済みなのは MS8A / MS8B / MS8C / MS8D-2 まで。
 - 反映済み（コード実体）:
-  - 上部操作列の `OperationPanel` 化
-  - モーフ上限値UIの操作列直下への再配置
-  - 中央領域の左右2カラム化（右下は `PreviewArea`）
-  - 最下部ステータス欄の `StatusPanel` 化
-  - `preview_transform.py` に Preview 整形責務を分離
-  - `preview_area.py` に 5段固定の静止描画責務を分離
-  - `main_window.py` に Preview 受け渡し・無効化クリア・silent restore 整合導線を反映
-  - `main_window.py` 司令塔責務の維持（状態判定の正本）
+  - 上部操作列 `OperationPanel`・最下部 `StatusPanel` を含む GUI 再構成
+  - `PreviewArea` / `preview_transform.py` による 5 段固定 Preview 表示
+  - `PlaybackController` / `ViewSync` による秒ベース再生同期（Play/Stop/共有現在位置）
+  - `ViewSync` の共有可視範囲（viewport）同期
+  - `waveform_view.py` の可視範囲ベース描画 + 横軸フレーム表記
+  - `preview_area.py` の可視範囲ベース描画 + フレーム目盛り
+  - Zoom（操作パネルボタン + View メニュー action）と Pan の導線統合
+  - TEXT/WAV パスの中間省略表示 + tooltip フルパス
 - 未反映（後続対象）:
-  - Preview の再生同期（MS8C）
-  - 再生機能（Play/Stop）
-  - Zoom 機能
-  - 多言語化
-  - 設定永続化
+  - 多言語化（MS8E）
+  - 設定永続化（MS8E）
+  - 出力品質拡張（MS8F）
+- MS8D-2 の改訂要件差分は `docs/MS8D-2_Requirements_and_Spec_Update.md` を参照する。
 
 ---
 
@@ -224,7 +223,7 @@
   * 波形表示と Preview Area の同期補助
   * 共通カーソル位置の配布
   * 共通フレーム原点の扱い
-  * 将来の同期ズーム制御
+  * 共有可視範囲（Zoom/Pan）の同期制御
 
 * `src/gui/preview_transform.py`
 
@@ -452,8 +451,8 @@
 
 ### 6.9 パス表示
 
-* パス欄は単純表示とする
 * 長いパスは中間省略表示する
+* ラベル表示は中間省略、tooltip はフルパス表示とする
 * 自動補完で読み込まれた相方ファイルも通常読込と同じ見せ方にする
 * 主読込 / 自動補完の違いを専用通知で見せ分けない
 
@@ -591,7 +590,7 @@
   * 現行台形ベースから変形台形へ拡張
   * 音量変化との同期
   * 同一母音連続時の上辺複数点対応
-* 波形表示と Preview Area の同期ズーム詳細
+* 再生詳細機能（スクラブ / 手動シーク / クリック移動）の仕様化
 * ステータス表示内容の最終文言調整
 * 英語表記短文化の最終調整
 

@@ -673,3 +673,51 @@
   - `git status --short` / `git branch --show-current` / `git remote -v` used for sync pre-check.
   - `rg -n "Ver 0.3.5.3|0.3.5.3" README.md pyproject.toml src/gui/main_window.py docs/Specification_Prompt_v3.md docs/repo_milestone.md` used for version marker check.
 ---
+
+## Entry 2026-03-22 / Session: ms8d2-cross-doc-sync-and-consistency-pass
+
+- Date: 2026-03-22
+- Session: ms8d2-cross-doc-sync-and-consistency-pass
+- Summary:
+  - MS8D-2 実装完了状態を前提に、md 系ドキュメントを横断更新して整合を取った。
+  - `README.md` / `docs/repo_milestone.md` / `docs/Specification_Prompt_v3.md` の記述を、共有ビューポート・Zoom/Pan・フレーム目盛り・パス中間省略+tooltip の実装済み状態へ同期した。
+  - 旧来の `MS8D` 記述を改訂版 `MS8D-2` 基準へ更新し、次段階（MS8E）へ進む前提の文書矛盾を解消した。
+- Modified Files:
+  - `README.md`: 現在の主な機能へ MS8D-2 実装項目を追記。直近更新（2026-03-22 / MS8D-2）を追加。未対応一覧から Zoom を除外。
+  - `docs/repo_milestone.md`: マイルストーン表の `MS8D` 行を `MS8D-2` 行へ更新。推奨実装順とフェーズ分類を現状へ同期。MS8D-2 完了メモを追記。
+  - `docs/Specification_Prompt_v3.md`: 実装同期注記を MS8D-2 完了反映へ更新。`view_sync` / パス表示 / 残課題の記述を現状実装へ同期。
+  - `docs/Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし
+- Notes:
+  - 本エントリはドキュメント更新のみで、ソースコード実装は変更しない。
+  - ユーザー依頼文中の `MS8B-2` 表記は、既存文書系の改訂段階 `MS8D-2` を指す前提で整合を実施。
+- Verification:
+  - `rg -n "MS8D-2|MS8D |Zoom|Pan|可視範囲|中間省略|tooltip" README.md docs/repo_milestone.md docs/Specification_Prompt_v3.md`
+  - `git diff -- README.md docs/repo_milestone.md docs/Specification_Prompt_v3.md docs/Version_Control.md`
+---
+
+## Entry 2026-03-22 / Session: release-v0354-repo-sync
+
+- Date: 2026-03-22
+- Session: release-v0354-repo-sync
+- Summary:
+  - リポジトリ現状を再確認し、反映版を `Ver 0.3.5.4` として同期。
+  - MS8D-2 実装反映済みの作業ツリー（GUI 実装 + 文書同期）を、同一リリースとして確定対象に整理。
+  - 版数表記を `README.md` / `pyproject.toml` / `src/gui/main_window.py` / `docs/Specification_Prompt_v3.md` / `docs/repo_milestone.md` に反映。
+- Modified Files:
+  - `README.md`: 版数表記を `Ver 0.3.5.4` に更新。
+  - `pyproject.toml`: プロジェクトバージョンを `0.3.5.4` に更新。
+  - `src/gui/main_window.py`: Help のバージョン表示を `Ver 0.3.5.4` に更新。
+  - `docs/Specification_Prompt_v3.md`: 対応リリースを `Ver 0.3.5.4` に更新。
+  - `docs/repo_milestone.md`: 進捗メモへ `Ver 0.3.5.4` のリリース同期追記。
+  - `docs/Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - `docs/MS8D-2_Requirements_and_Spec_Update.md`
+- Notes:
+  - 本エントリはリリース同期と現作業ツリー確定を目的とし、MS8E の先行実装は含まない。
+- Verification:
+  - `git status --short` / `git branch --show-current` / `git remote -v`
+  - `rg -n "Ver 0.3.5.4|0.3.5.4" README.md pyproject.toml src/gui/main_window.py docs/Specification_Prompt_v3.md docs/repo_milestone.md`
+  - `.\.venv\Scripts\python.exe -m py_compile src\gui\main_window.py src\gui\view_sync.py src\gui\waveform_view.py src\gui\preview_area.py src\gui\operation_panel.py src\gui\playback_controller.py src\gui\preview_transform.py`
+---
