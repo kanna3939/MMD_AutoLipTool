@@ -52,9 +52,9 @@ MS8A 時点では、少なくとも以下の配置を正規とする。
 │  ├─ main.py
 │  └─ test_gui.py
 ├─ tests/
-├─ repo_milestone.md
-├─ Specification_Prompt_v3.md
-└─ Version_Control.md
+├─ docs/repo_milestone.md
+├─ docs/Specification_Prompt_v3.md
+└─ docs/Version_Control.md
 ````
 
 ---

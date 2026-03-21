@@ -1,4 +1,4 @@
-﻿# Version Control Log
+# Version Control Log
 
 このファイルは、セッション単位で変更内容を追記するためのログです。
 下へ追記して運用してください（既存エントリは編集せず、必要時のみ訂正注記を追加）。
@@ -60,7 +60,7 @@
   - `src/vmd_writer/writer.py`: rise_start ゼロ衝突の検出・退避ロジックを追加。
   - `README.md`: バージョンを `Ver 0.3.3.2` に更新し、ゼロ保証修正を機能欄へ追記。
   - `Specifications_Prompt_v1.md`: 立ち上がり前ゼロ保証の仕様追補を追加。
-  - `Version_Control.md`: 本エントリを追記。
+  - `docs/Version_Control.md`: 本エントリを追記。
 - Added Files:
   - `tests/test_vmd_writer_zero_guard.py`: 同フレーム衝突時の `-1` フレーム退避と frame 0 例外のテストを追加。
 - Notes:
@@ -111,7 +111,7 @@
   - `src/gui/main_window.py`: 処理実行ボタン追加、wav読込時の重処理トリガー停止、上限値変更時の再解析停止、出力時の未解析ガード追加。
   - `README.md`: バージョン `Ver 0.3.3.5` と現行挙動（処理実行導線、未解析出力中断など）を反映。
   - `Specifications_Prompt_v1.md`: 処理概要・GUI仕様・エラー処理・追補に「処理実行」導線と自動実行停止方針を追記。
-  - `Version_Control.md`: 本エントリを追記。
+  - `docs/Version_Control.md`: 本エントリを追記。
 - Added Files:
   - なし
 - Notes:
@@ -131,7 +131,7 @@
   - Windowsローカル開発で再現しやすい最小運用手順を README に明記。
 - Modified Files:
   - `README.md`: セットアップ/実行/テスト/EXEビルド手順と運用ファイル一覧を追記。
-  - `Version_Control.md`: 本エントリを追記。
+  - `docs/Version_Control.md`: 本エントリを追記。
 - Added Files:
   - `.gitignore`: 仮想環境、キャッシュ、ビルド成果物、IDE設定の除外を追加。
   - `pyproject.toml`: プロジェクトメタデータ、依存関係、スクリプト、`src` 配下探索設定を追加。
@@ -154,7 +154,7 @@
 - Modified Files:
   - `README.md`: EXEビルド節に `onedir` 未対応（次タスク予定）の注記を追加。
   - `Specifications_Prompt_v1.md`: 追補 16.11（リポジトリ運用整備）を追加。
-  - `Version_Control.md`: 本エントリを追記。
+  - `docs/Version_Control.md`: 本エントリを追記。
 - Added Files:
   - なし
 - Notes:
@@ -176,7 +176,7 @@
   - `MMD_AutoLipTool.spec`: `COLLECT` を含む `onedir` 構成へ変更。`whisper/pyopenjtalk/tiktoken` の datas・binaries・hiddenimports を追加。
   - `build.ps1`: `-SmokeLaunch` オプション、出力exe存在チェック、起動スモーク処理を追加。
   - `README.md`: `onedir` ビルド方式、同梱方針、手動確認手順、補助確認手順を追記。
-  - `Version_Control.md`: 本エントリを追記。
+  - `docs/Version_Control.md`: 本エントリを追記。
 - Added Files:
   - なし
 - Notes:
@@ -199,7 +199,7 @@
 - Modified Files:
   - `README.md`: 現状整理（6点）セクションを追加。
   - `Specifications_Prompt_v1.md`: 16.12（リポジトリ現状整理）を追記。
-  - `Version_Control.md`: 本エントリを追記。
+  - `docs/Version_Control.md`: 本エントリを追記。
 - Added Files:
   - なし（本エントリ時点の追記対象として）
 - Notes:
@@ -221,13 +221,13 @@
 - Modified Files:
   - `README.md`: バージョンを `Ver 0.3.3.6` に更新し、トップメニュー フェーズA（段取り0〜4）と状態整合の要点を追記。
   - `Specifications_Prompt_v1.md`: 16.13（トップメニュー追加・状態整合）と16.14（ドキュメント同期バージョン）を追記。
-  - `Version_Control.md`: 本エントリを追記。
+  - `docs/Version_Control.md`: 本エントリを追記。
 - Added Files:
   - なし
 - Notes:
   - 本エントリはドキュメント更新のみであり、処理ロジック・解析アルゴリズム・VMD生成仕様の新規実装変更は含まない。
 - Verification:
-  - `git diff -- README.md Version_Control.md Specifications_Prompt_v1.md` で差分内容を確認。
+  - `git diff -- README.md docs/Version_Control.md Specifications_Prompt_v1.md` で差分内容を確認。
 
 ---
 
@@ -245,7 +245,7 @@
   - `src/gui/waveform_view.py`: 表示フラグ（frame grid / vowel labels / event regions）、setter、初期化、状態取得を追加。
   - `README.md`: フェーズB実装（履歴/View/再解析/Help表示）を反映。
   - `Specifications_Prompt_v1.md`: 追補 16.15（フェーズB）/16.16（Help表示拡張）を追加。
-  - `Version_Control.md`: 本エントリを追記。
+  - `docs/Version_Control.md`: 本エントリを追記。
 - Added Files:
   - なし
 - Notes:
@@ -271,7 +271,7 @@
   - `src/gui/waveform_view.py`: View 表示切替向け内部フラグ・setter・描画分岐を反映。
   - `README.md`: 版数を `Ver 0.3.3.7` に更新し、フェーズB反映内容を同期。
   - `Specifications_Prompt_v1.md`: 16.14 の同期版数を `Ver 0.3.3.7` に更新、16.15/16.16 を維持。
-  - `Version_Control.md`: 本エントリを追記。
+  - `docs/Version_Control.md`: 本エントリを追記。
 - Added Files:
   - なし
 - Notes:
@@ -289,13 +289,13 @@
 - Summary:
   - MS4（実行中状態の可視化）をフェーズ1〜6で実装し、処理中フラグ/処理中ダイアログ/再入防止/操作ロック/状態表示遷移を接続。
   - 処理終了時の復帰整合（成功/失敗共通でダイアログ終了・busy解除・UI復帰）を確認。
-  - 現セッション内容を `README.md` / `Specification_Prompt_v2.md` / `repo_milestone.md` に反映。
+  - 現セッション内容を `README.md` / `docs/Specification_Prompt_v2.md` / `docs/repo_milestone.md` に反映。
 - Modified Files:
   - `src/gui/main_window.py`: MS4 フェーズ1〜6（状態管理土台、処理中表示、入口接続、操作ロック、状態表示遷移、復帰整合）を実装。
   - `README.md`: 実装済み機能と直近更新に MS4 完了内容を追記。
-  - `Specification_Prompt_v2.md`: 6.7 節（実行中状態の可視化）を追加し、残課題から MS4 を削除。
-  - `repo_milestone.md`: 進捗メモを追加し、MS4 完了と確認結果要点を記載。
-  - `Version_Control.md`: 本エントリを追記。
+  - `docs/Specification_Prompt_v2.md`: 6.7 節（実行中状態の可視化）を追加し、残課題から MS4 を削除。
+  - `docs/repo_milestone.md`: 進捗メモを追加し、MS4 完了と確認結果要点を記載。
+  - `docs/Version_Control.md`: 本エントリを追記。
 - Added Files:
   - なし
 - Notes:
@@ -317,12 +317,12 @@
   - `README.md`: 版数表記を `Ver 0.3.3.8` に更新。
   - `pyproject.toml`: プロジェクトバージョンを `0.3.3.8` に更新。
   - `src/gui/main_window.py`: Help のバージョン表示を `Ver 0.3.3.8` に更新。
-  - `Specification_Prompt_v2.md`: 文書情報に対応リリース `Ver 0.3.3.8` を追記。
-  - `repo_milestone.md`: 進捗メモへ `Ver 0.3.3.8` 同期を追記。
-  - `Version_Control.md`: 本エントリを追記。
+  - `docs/Specification_Prompt_v2.md`: 文書情報に対応リリース `Ver 0.3.3.8` を追記。
+  - `docs/repo_milestone.md`: 進捗メモへ `Ver 0.3.3.8` 同期を追記。
+  - `docs/Version_Control.md`: 本エントリを追記。
 - Added Files:
-  - `Specification_Prompt_v2.md`: v2 仕様書をリポジトリ管理対象として追加。
-  - `repo_milestone.md`: マイルストーン管理文書をリポジトリ管理対象として追加。
+  - `docs/Specification_Prompt_v2.md`: v2 仕様書をリポジトリ管理対象として追加。
+  - `docs/repo_milestone.md`: マイルストーン管理文書をリポジトリ管理対象として追加。
   - `_old/Specifications_Prompt_v1.md`: 旧仕様書を退避先へ移動して管理。
 - Notes:
   - 旧配置の `Specifications_Prompt_v1.md` は削除し、`_old/` へ移管。
@@ -339,13 +339,13 @@
   - MS7（入出力安全性点検）として、TEXT/WAV 読込・VMD 保存・履歴再読込の入口に対する最小防御を実装。
   - 想定外例外時に GUI 警告へフォールバックする復帰経路を補強し、状態不整合の残留リスクを低減。
   - フェーズ7/8として、修正範囲の固定（`main_window.py` 局所）と完了判定観点（TEXT/WAV/保存/履歴/例外）を整理。
-  - `README.md` / `repo_milestone.md` / `Specification_Prompt_v2.md` に MS7 の実施結果を反映。
+  - `README.md` / `docs/repo_milestone.md` / `docs/Specification_Prompt_v2.md` に MS7 の実施結果を反映。
 - Modified Files:
   - `src/gui/main_window.py`: MS7 フェーズ2〜6の最小修正（入口パス確認、保存前確認、履歴再読込防御、例外フォールバック）を反映。
   - `README.md`: MS7 実装内容と完了観点を追記。
-  - `repo_milestone.md`: MS7 フェーズ1〜8の進捗・方針固定・完了判定観点を追記。
-  - `Specification_Prompt_v2.md`: 6.8 節（MS7）を追加し、残課題から MS7 項目を除外。
-  - `Version_Control.md`: 本エントリを追記。
+  - `docs/repo_milestone.md`: MS7 フェーズ1〜8の進捗・方針固定・完了判定観点を追記。
+  - `docs/Specification_Prompt_v2.md`: 6.8 節（MS7）を追加し、残課題から MS7 項目を除外。
+  - `docs/Version_Control.md`: 本エントリを追記。
 - Added Files:
   - なし
 - Notes:
@@ -367,9 +367,9 @@
   - `README.md`: 版数表記を `Ver 0.3.4.0` に更新。
   - `pyproject.toml`: プロジェクトバージョンを `0.3.4.0` に更新。
   - `src/gui/main_window.py`: Help のバージョン表示を `Ver 0.3.4.0` に更新。
-  - `Specification_Prompt_v2.md`: 文書情報の対応リリースを `Ver 0.3.4.0` に更新。
-  - `repo_milestone.md`: 進捗メモのリリース同期版を `Ver 0.3.4.0` に更新。
-  - `Version_Control.md`: 本エントリを追記。
+  - `docs/Specification_Prompt_v2.md`: 文書情報の対応リリースを `Ver 0.3.4.0` に更新。
+  - `docs/repo_milestone.md`: 進捗メモのリリース同期版を `Ver 0.3.4.0` に更新。
+  - `docs/Version_Control.md`: 本エントリを追記。
 - Added Files:
   - なし
 - Notes:
@@ -387,13 +387,13 @@
 - Summary:
   - MS5（読み込み関係のカレントディレクトリ記憶）をフェーズ2〜8で実装し、TEXT/WAV別の保持、通常読込成功時更新、履歴再読込成功時更新、無効値フォールバックを反映。
   - フェーズ9として、確認観点（9-1〜9-5）をコード読解と最小実行確認で整理。
-  - `README.md` / `repo_milestone.md` / `Specification_Prompt_v2.md` に本セッション内容を同期。
+  - `README.md` / `docs/repo_milestone.md` / `docs/Specification_Prompt_v2.md` に本セッション内容を同期。
 - Modified Files:
   - `src/gui/main_window.py`: MS5 フェーズ2〜8の局所修正（保持値追加、初期ディレクトリ解決、読込導線接続、成功時更新、履歴再読込連動、無効値フォールバック）を反映。
   - `README.md`: MS5 実装内容と 2026-03-20 の直近更新を追記。
-  - `repo_milestone.md`: 進捗メモに MS5 完了（フェーズ1〜9）と確認結果要点を追記。
-  - `Specification_Prompt_v2.md`: 6.6 節へ MS5 挙動を追記し、残課題から「読込ダイアログのカレントディレクトリ記憶」を除外。
-  - `Version_Control.md`: 本エントリを追記。
+  - `docs/repo_milestone.md`: 進捗メモに MS5 完了（フェーズ1〜9）と確認結果要点を追記。
+  - `docs/Specification_Prompt_v2.md`: 6.6 節へ MS5 挙動を追記し、残課題から「読込ダイアログのカレントディレクトリ記憶」を除外。
+  - `docs/Version_Control.md`: 本エントリを追記。
 - Added Files:
   - なし
 - Notes:
@@ -412,13 +412,13 @@
 - Summary:
   - MS6（最近使ったファイル履歴）をフェーズ1〜8の方針に沿って整理し、TEXT/WAV 履歴の10件上限、重複先頭移動、再読込導線、失敗時除去、更新タイミング整合、非混線を `main_window.py` で確定。
   - フェーズ9として、確認観点（10件上限/重複先頭移動/履歴メニュー再読込/壊れた履歴値の該当除去/非混線）をコード読解と最小スモーク確認で整理。
-  - `README.md` / `repo_milestone.md` / `Specification_Prompt_v2.md` に MS6 到達状況を同期。
+  - `README.md` / `docs/repo_milestone.md` / `docs/Specification_Prompt_v2.md` に MS6 到達状況を同期。
 - Modified Files:
   - `src/gui/main_window.py`: MS6 対応（履歴追加/削除/再読込/メニュー反映/非混線）を局所修正で確定。
   - `README.md`: MS6 の実装済み機能と 2026-03-20 の直近更新を追記。
-  - `repo_milestone.md`: 進捗メモに MS6 完了（フェーズ1〜9）と確認結果要点を追記。
-  - `Specification_Prompt_v2.md`: 6.6 節へ MS6 の挙動（再構築・再読込導線・失敗時除去・非混線）を追記。
-  - `Version_Control.md`: 本エントリを追記。
+  - `docs/repo_milestone.md`: 進捗メモに MS6 完了（フェーズ1〜9）と確認結果要点を追記。
+  - `docs/Specification_Prompt_v2.md`: 6.6 節へ MS6 の挙動（再構築・再読込導線・失敗時除去・非混線）を追記。
+  - `docs/Version_Control.md`: 本エントリを追記。
 - Added Files:
   - なし
 - Notes:
@@ -442,9 +442,9 @@
   - `README.md`: 版数表記を `Ver 0.3.4.1` に更新。
   - `pyproject.toml`: プロジェクトバージョンを `0.3.4.1` に更新。
   - `src/gui/main_window.py`: Help のバージョン表示を `Ver 0.3.4.1` に更新。
-  - `Specification_Prompt_v2.md`: 文書情報の対応リリースを `Ver 0.3.4.1` に更新。
-  - `repo_milestone.md`: 進捗メモのリリース同期版を `Ver 0.3.4.1` に更新。
-  - `Version_Control.md`: 本エントリを追記。
+  - `docs/Specification_Prompt_v2.md`: 文書情報の対応リリースを `Ver 0.3.4.1` に更新。
+  - `docs/repo_milestone.md`: 進捗メモのリリース同期版を `Ver 0.3.4.1` に更新。
+  - `docs/Version_Control.md`: 本エントリを追記。
 - Added Files:
   - なし
 - Notes:
@@ -463,12 +463,12 @@
   - MS6B（同名対応ファイルの自動補完読込）として、主読込成功後に同一フォルダ・同一 stem の相方（`.txt/.wav`）を1回試行する導線を `main_window.py` に反映。
   - 通常読込と履歴再読込の双方で同一補完処理を呼び、反対側既読込ガード・未存在/失敗サイレント・再連鎖なしを確定。
   - 自動補完成功時の履歴反映、読込開始ディレクトリ保持、ready 状態/`current_timing_plan` 整合を既存成功導線の再利用で成立させた。
-  - 本フェーズ10として、`repo_milestone.md` / `Specification_Prompt_v2.md` / `Version_Control.md` へ MS6B 仕様を同期。
+  - 本フェーズ10として、`docs/repo_milestone.md` / `docs/Specification_Prompt_v2.md` / `docs/Version_Control.md` へ MS6B 仕様を同期。
 - Modified Files:
   - `src/gui/main_window.py`: MS6B 実装（相方候補解決、自動補完試行、サイレント失敗、通常/履歴入口接続、履歴/開始ディレクトリ反映）を局所修正で反映。
-  - `repo_milestone.md`: MS6B を独立マイルストーンとして追加し、対象/非対象と完了要点を追記。
-  - `Specification_Prompt_v2.md`: 6.9 節として MS6B の現行仕様（発動条件、探索条件、サイレント方針、再連鎖防止、成功時反映）を追加。
-  - `Version_Control.md`: 本エントリを追記。
+  - `docs/repo_milestone.md`: MS6B を独立マイルストーンとして追加し、対象/非対象と完了要点を追記。
+  - `docs/Specification_Prompt_v2.md`: 6.9 節として MS6B の現行仕様（発動条件、探索条件、サイレント方針、再連鎖防止、成功時反映）を追加。
+  - `docs/Version_Control.md`: 本エントリを追記。
 - Added Files:
   - なし
 - Notes:
@@ -486,11 +486,11 @@
 - Session: ms8a-gui-foundation-phases1-to-10-docs-sync
 - Summary:
   - MS8A（GUI再構成基盤）フェーズ1〜9で反映済みの実装状態を確認し、ドキュメントをコード実体へ同期。
-  - `repo_milestone.md` に MS8A 完了（GUI骨格、導線維持、安全動作維持、範囲外未実装）を追記。
+  - `docs/repo_milestone.md` に MS8A 完了（GUI骨格、導線維持、安全動作維持、範囲外未実装）を追記。
   - `docs/MS8A_phase1_ui_partition.md` に実装後の確定状態と MS8B へ渡す固定前提を最小補足。
 - Modified Files:
-  - `repo_milestone.md`: MS8A をマイルストーン一覧/進捗メモ/GUI整備フェーズへ追記し、完了要点と後続対象を明記。
-  - `Version_Control.md`: 本エントリを追記。
+  - `docs/repo_milestone.md`: MS8A をマイルストーン一覧/進捗メモ/GUI整備フェーズへ追記し、完了要点と後続対象を明記。
+  - `docs/Version_Control.md`: 本エントリを追記。
   - `docs/MS8A_phase1_ui_partition.md`: 実装後補足（OperationPanel/StatusPanel適用、2カラム配置、責務固定、未実装範囲）を追加。
 - Added Files:
   - なし
@@ -548,3 +548,75 @@
   - `git status --short` / `git branch --show-current` / `git remote -v` で同期前状態を確認。
   - `rg -n "Ver 0.3.5.1|0.3.5.1" README.md pyproject.toml src/gui/main_window.py docs/Specification_Prompt_v2.md docs/repo_milestone.md` で版数反映を確認。
 
+---
+
+## Entry 2026-03-21 / Session: ms8b-preimplementation-doc-sync
+
+- Date: 2026-03-21
+- Session: ms8b-preimplementation-doc-sync
+- Summary:
+  - MS8B（Preview Area 静止表示導入）について、実装前に固定した仕様・責務分割・境界条件をドキュメントへ同期。
+  - `docs/Specification_Prompt_v3.md` に MS8B 実装前固定章を追加し、対象/非対象、中間契約、クリア方針、silent restore 方針、完了条件を明文化。
+  - `docs/repo_milestone.md` に MS8B を「実装前固定・未完了」マイルストーンとして追加し、フェーズ1〜9の整理を反映。
+- Modified Files:
+  - `docs/Specification_Prompt_v3.md`: MS8B 実装前固定仕様（目的、責務、データ契約、クリア/復元方針、対象外、完了条件）を追記。
+  - `docs/repo_milestone.md`: マイルストーン一覧へ MS8B を追加し、実装前固定メモとフェーズ分解を追記。
+  - `docs/Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし
+- Notes:
+  - 本エントリはドキュメント同期のみ。`preview_area.py` / `preview_transform.py` は未作成であり、MS8B 実装完了を示すものではない。
+  - ソースコード・設定ファイルの変更は行っていない。
+- Verification:
+  - `rg -n "MS8B|実装前固定|Preview Area|suppress_warning|current_timing_plan.timeline" docs/Specification_Prompt_v3.md docs/repo_milestone.md docs/Version_Control.md` で追記内容を確認。
+  - `git diff -- docs/Specification_Prompt_v3.md docs/repo_milestone.md docs/Version_Control.md` で差分が文書のみであることを確認。
+
+---
+
+## Entry 2026-03-21 / Session: ms8b-postimplementation-doc-sync
+
+- Date: 2026-03-21
+- Session: ms8b-postimplementation-doc-sync
+- Summary:
+  - MS8B（Preview Area 静止表示導入）フェーズ1〜9の実装反映に合わせ、md系ドキュメントを実装済み状態へ同期。
+  - `current_timing_plan.timeline` 正本、5段固定、クリア/無効化導線、`suppress_warning=True` 復元整合、責務分離の成立を文書へ反映。
+  - MS8B 対象外（再生同期・カーソル・Zoom・独立キャッシュ等）が未着手であることを明記。
+- Modified Files:
+  - `README.md`: 直近更新と未実装一覧を MS8B 実装済み状態へ更新。
+  - `docs/repo_milestone.md`: MS8B 行の対象項目を実装済み表現へ更新し、実装完了メモを追記。
+  - `docs/Specification_Prompt_v3.md`: 実装同期注記と 14章（MS8B 固定仕様）を実装済み状態へ更新。
+  - `docs/MS8B_Implementation_Handoff.md`: 実装反映状況（2026-03-21）を追記し、現状位置を実装完了へ更新。
+  - `docs/Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし
+- Notes:
+  - 本エントリはドキュメント同期のみで、追加機能実装は行わない。
+  - MS8C 以降の先回り実装は含まない。
+- Verification:
+  - `rg -n "MS8B|実装前|実装完了|Preview Area|current_timing_plan.timeline|suppress_warning" README.md docs/MS8B_Implementation_Handoff.md docs/Specification_Prompt_v3.md docs/repo_milestone.md docs/Version_Control.md` で更新箇所を確認。
+  - `git diff -- README.md docs/MS8B_Implementation_Handoff.md docs/Specification_Prompt_v3.md docs/repo_milestone.md docs/Version_Control.md` で差分内容を確認。
+
+---
+
+## Entry 2026-03-21 / Session: release-v0352-repo-sync
+
+- Date: 2026-03-21
+- Session: release-v0352-repo-sync
+- Summary:
+  - リポジトリ現状を再確認し、反映版を `Ver 0.3.5.2` として同期。
+  - MS8B（Preview Area 静止表示導入）を含む現作業ツリー差分をリポジトリ全体コミット対象として確定。
+  - 版数表記を `README.md` / `pyproject.toml` / `src/gui/main_window.py` / `docs/Specification_Prompt_v3.md` / `docs/repo_milestone.md` に反映。
+- Modified Files:
+  - `README.md`: 版数表記を `Ver 0.3.5.2` に更新。
+  - `pyproject.toml`: プロジェクトバージョンを `0.3.5.2` に更新。
+  - `src/gui/main_window.py`: Help のバージョン表示を `Ver 0.3.5.2` に更新。
+  - `docs/Specification_Prompt_v3.md`: 対応リリースを `Ver 0.3.5.2` に更新。
+  - `docs/repo_milestone.md`: 進捗メモへ `Ver 0.3.5.2` のリリース同期追記。
+  - `docs/Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし
+- Notes:
+  - 本エントリはリリース同期と全体確定を目的とし、新規機能の先行実装は追加しない。
+- Verification:
+  - `git status --short` / `git branch --show-current` / `git remote -v` で同期前状態を確認。
+  - `rg -n "Ver 0.3.5.2|0.3.5.2" README.md pyproject.toml src/gui/main_window.py docs/Specification_Prompt_v3.md docs/repo_milestone.md` で版数反映を確認。

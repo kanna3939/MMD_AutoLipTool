@@ -1,15 +1,21 @@
 # Custom Dictionary Words
 altgraph
 autolip
+axvspan
 contourpy
 ctypes
 dateutil
+figsize
 fonttools
+hiddenimports
 kiwisolver
 librosa
+numba
 numpy
 onedir
 pefile
+phasea
+phaseb
 pyinstaller
 pyparsing
 pyproject
@@ -18,3 +24,6 @@ setuptools
 shiboken
 tiktoken
 Vocaloid
+xlim
+xticks
+yticks

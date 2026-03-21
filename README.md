@@ -2,7 +2,7 @@
 
 ## Version
 
-Ver 0.3.5.1
+Ver 0.3.5.2
 
 ## 概要
 
@@ -67,7 +67,7 @@ UTF-8 のテキスト 1 ファイルと PCM WAV 1 ファイルを入力し、母
 - MS7 フェーズ2〜6として、TEXT/WAV/保存/履歴再読込の失敗経路を点検し、最小防御と状態復帰を補強
 - MS7 フェーズ7〜8として、修正範囲を `src/gui/main_window.py` の局所修正に固定し、完了判定観点を最終整理
 
-## 直近更新（2026-03-20）
+## 直近更新（2026-03-21）
 
 - MS5 フェーズ2〜8として、`src/gui/main_window.py` に読込ダイアログ用の直前ディレクトリ保持（TEXT/WAV分離）を導入
 - `_select_text_file` / `_select_wav_file` で、初期ディレクトリ解決結果を使ってダイアログを起動する導線へ接続
@@ -80,16 +80,18 @@ UTF-8 のテキスト 1 ファイルと PCM WAV 1 ファイルを入力し、母
 - `main_window.py` を司令塔のまま維持し、`OperationPanel` / `StatusPanel` は表示専用の責務で固定
 - `_update_action_states()` の判定ロジックは `main_window.py` に維持し、Play/Stop/Zoom は MS8A 時点で無効表示のまま据え置き
 - 既存主要導線（TEXT読込 / WAV読込 / 処理実行 / VMD出力）と既存安全動作（処理中ダイアログ / 二重実行防止 / 未解析時保存禁止 / モーフ上限値変更後の再解析待ち復帰）を維持
+- MS8B フェーズ3〜9として、`PreviewArea`（右カラム下段）・`preview_transform.py`・`main_window.py` 受け渡し/クリア/復元整合導線を反映
+- Preview は 5段固定（あ/い/う/え/お）の静止表示として導入し、正本を `current_timing_plan.timeline` に統一
+- 解析結果無効化時クリア（失敗時限定ではない）と `suppress_warning=True` 復元時の再構成整合を最小変更で反映
 
 ## MS8A 完了状態（2026-03-20）
 
 - 実装済み:
   - 上部操作列: `src/gui/operation_panel.py` の `OperationPanel` を `main_window.py` に組み込み
   - モーフ上限値UI: 操作列直下へ再配置（既存ウィジェット再利用）
-  - 中央レイアウト: 左右2カラム化（左: テキスト/ファイル状態、右上: `WaveformView`、右下: 将来用プレースホルダ）
+  - 中央レイアウト: 左右2カラム化（左: テキスト/ファイル状態、右上: `WaveformView`、右下: `PreviewArea`）
   - 最下部ステータス欄: `src/gui/status_panel.py` の `StatusPanel` へ置換
 - 未実装（後続マイルストーン対象）:
-  - Preview Area 本実装
   - 再生機能
   - Zoom 機能
   - 多言語化
@@ -135,7 +137,7 @@ UTF-8 のテキスト 1 ファイルと PCM WAV 1 ファイルを入力し、母
 - 強制アライメントによる厳密音素境界
 - 高度な音響特徴量ベース最適化
 - 音量連動の詳細チューニングUI（マッピング調整・プリセット等）
-- Preview Area の本実装（MS8Aではプレースホルダのみ）
+- Preview Area の再生同期（MS8Bは静止表示まで）
 - 再生機能（Play/Stop）
 - Zoom 機能（Zoom In/Out）
 - 多言語化（日本語/EN 切替）

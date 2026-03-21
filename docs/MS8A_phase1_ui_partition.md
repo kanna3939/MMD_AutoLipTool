@@ -1,4 +1,4 @@
-﻿# MS8A Phase1 UI Partition
+# MS8A Phase1 UI Partition
 
 ## Scope
 - Phase1 performs only UI partitioning and responsibility clarification for `src/gui/main_window.py`.
@@ -32,7 +32,7 @@
   16. `output_status_label`
 
 ## Mapping to v3 Layout
-- `mockup_sample_v3.png` and `Specification_Prompt_v3.md` indicate a top operation row, morph row, left/right center area, and bottom status area.
+- `docs/mockup_sample_v3.png` and `docs/Specification_Prompt_v3.md` indicate a top operation row, morph row, left/right center area, and bottom status area.
 
 | v3 layout region | Current elements to map |
 | --- | --- |

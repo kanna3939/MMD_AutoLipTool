@@ -2,25 +2,28 @@
 
 ## 0. 文書情報
 
-- 文書名: `Specification_Prompt_v3.md`
+- 文書名: `docs/Specification_Prompt_v3.md`
 - 作成日: 2026-03-20
-- 最終更新日: 2026-03-20
-- 対応リリース: `Ver 0.4.0`
+- 最終更新日: 2026-03-21
+- 対応リリース: `Ver 0.3.5.2`
 - 対象リポジトリ: `MMD_AutoLipTool`
-- 旧版: `Specification_Prompt_v2.md`（本書で置き換え）
+- 旧版: `docs/Specification_Prompt_v2.md`（本書で置き換え）
 - 文書方針: v2 の意図を引き継ぎつつ、現行実装・確定済み追加仕様・責務分割方針に合わせて更新する
 
-### 0.1 実装同期注記（2026-03-20 / MS8A完了）
+### 0.1 実装同期注記（2026-03-21 / MS8A・MS8B完了）
 
-- 本書は v3 の目標仕様を含むが、2026-03-20 時点でコード反映済みなのは MS8A（GUI再構成基盤）まで。
+- 本書は v3 の目標仕様を含むが、2026-03-21 時点でコード反映済みなのは MS8A（GUI再構成基盤）と MS8B（Preview Area 静止表示）まで。
 - 反映済み（コード実体）:
   - 上部操作列の `OperationPanel` 化
   - モーフ上限値UIの操作列直下への再配置
-  - 中央領域の左右2カラム化（右下は将来用プレースホルダ）
+  - 中央領域の左右2カラム化（右下は `PreviewArea`）
   - 最下部ステータス欄の `StatusPanel` 化
+  - `preview_transform.py` に Preview 整形責務を分離
+  - `preview_area.py` に 5段固定の静止描画責務を分離
+  - `main_window.py` に Preview 受け渡し・無効化クリア・silent restore 整合導線を反映
   - `main_window.py` 司令塔責務の維持（状態判定の正本）
 - 未反映（後続対象）:
-  - Preview Area 本実装
+  - Preview の再生同期（MS8C）
   - 再生機能（Play/Stop）
   - Zoom 機能
   - 多言語化
@@ -111,12 +114,12 @@
 ├─ build/
 ├─ dist/
 ├─ README.md
-├─ repo_milestone.md
+├─ docs/repo_milestone.md
 ├─ pyproject.toml
 ├─ requirements.txt
 ├─ build.ps1
 ├─ MMD_AutoLipTool.spec
-└─ Specification_Prompt_v3.md
+└─ docs/Specification_Prompt_v3.md
 ````
 
 ---
@@ -617,3 +620,133 @@
 * 実装先行で仕様が変わった場合は、同タスク内で本書を更新する
 * 大規模変更時は、先に最小マイルストーンを定義してから拡張する
 * GUI の見た目変更だけでなく、責務分割変更がある場合は本書 5章も更新対象とする
+
+---
+
+## 14. MS8B 固定仕様（Preview Area 静止表示）
+
+### 14.1 位置づけと優先順位
+
+- 本章は MS8B で実装した範囲の固定仕様である。
+- v3 全体仕様に将来機能記述が含まれる場合でも、MS8B 実装判断では以下を優先する:
+  1. MS8B 追加固定指示
+  2. MS8B 説明プロンプト
+  3. 実装リスト8B
+  4. 本書のうち MS8B と矛盾しない部分
+
+### 14.2 MS8B の目的
+
+- Preview Area の静止表示導入を目的とする。
+- 処理実行後に `current_timing_plan.timeline` 由来データを使って表示する。
+- Preview は右カラム下段に配置し、波形とは別ウィジェットとする。
+- 表示は 5 段固定（`あ / い / う / え / お`）とし、MS8B では静止表示のみを扱う。
+
+### 14.3 主対象ファイル（実装対象）
+
+- `src/gui/preview_area.py`（新規追加）
+- `src/gui/preview_transform.py`（新規追加）
+- `src/gui/main_window.py`（Preview 受け渡し制御の追加対象）
+
+### 14.4 責務分割（MS8B 固定）
+
+- `main_window.py`
+  - 持たせる: `current_timing_plan` の受け取り・保持・受け渡し、`timeline` 取得、整形層への受け渡し、整形済み結果の表示側受け渡し、クリア/無効化時の更新判断。
+  - 持たせない: Preview 用重整形、Preview 描画、Preview 表示キャッシュ独立管理、再生同期管理。
+- `preview_transform.py`
+  - 持たせる: `timeline` 受け取り、Preview 中間契約への変換、5段固定向け整形、安全な空データ返却。
+  - 持たせない: GUI 描画、`main_window.py` の状態判定、再生管理、`pipeline.py` の既存ロジック変更。
+- `preview_area.py`
+  - 持たせる: 5段固定表示、整形済みデータ受け取り、静止表示、空状態表示、クリア表示。
+  - 持たせない: `timeline` 直接解釈、重い整形、`pipeline.py` 直接依存、状態判定、再生同期、共通カーソル、Zoom、スクラブ。
+- `waveform_view.py`
+  - 既存の波形表示責務を維持し、Preview 表示責務は持たせない。
+
+### 14.5 Preview 元データと正本
+
+- Preview 元データは `current_timing_plan.timeline` を使う。
+- Waveform 用と Preview 用で別々のタイミング計画は作らない。
+- `current_timing_plan` を Preview 側の唯一の正本として扱う。
+
+### 14.6 Preview 用中間契約（固定）
+
+- `PreviewData`
+  - `rows: list[PreviewRow]`
+- `PreviewRow`
+  - `vowel: str`
+  - `segments: list[PreviewSegment]`
+- `PreviewSegment`
+  - `start_sec: float`
+  - `end_sec: float`
+  - `duration_sec: float`
+  - `intensity: float`
+
+固定条件:
+- `rows` は常に 5 件固定
+- 行順は `あ / い / う / え / お`
+- 空行も保持する
+- 座標系は秒ベース絶対値
+- 0..1 正規化座標は使わない
+- `duration_sec` は `end_sec - start_sec` と整合
+- 強度値は `peak_value` → `value` → `0.0` の順で解釈
+- `intensity` の上限は `1.0` 固定
+- 空入力 / 不正入力 / データなし時は 5 行固定の空データを返す
+
+### 14.7 復元方針とクリア/無効化方針
+
+- `suppress_warning=True` の silent restore では、Preview 表示キャッシュを独立保存/復元しない。
+- 復元後の `current_timing_plan` を正本として Preview を再構成する。
+- silent restore は通常の破壊的クリア導線と同一扱いにしない。
+- 共通クリア導線を導入する場合でも、silent restore 途中で無条件先行クリアしない。
+
+Preview クリア対象は「失敗時」だけでなく、解析結果無効化時全体とする。少なくとも以下を対象に含める:
+- `_reset_text_analysis_state()` 相当
+- `_reset_wav_load_state()` 相当
+- `_refresh_waveform_morph_labels()` 相当の失敗/不成立分岐
+- `_on_morph_upper_limit_changed()` 相当
+- `current_timing_plan = None` に戻す既存経路
+- 処理失敗時
+- 入力不足時
+- 再解析待ち状態へ戻す時
+- TEXT 再読込時
+- WAV 再読込時
+- モーフ上限変更時
+
+判断基準は「失敗したか」ではなく「解析結果が有効かどうか」とする。
+
+### 14.8 UI 組み込み方針（MS8B）
+
+- 右カラム下段の既存プレースホルダ領域を Preview Area の組み込み先とする。
+- 処理成功後は `current_timing_plan.timeline` → Preview 用整形 → 静止表示の流れとする。
+- 未解析 / 失敗 / 入力不足 / 再解析待ち時は空状態/クリア状態へ戻す。
+- Preview Area を追加しても既存導線（TEXT読込 / WAV読込 / 処理実行 / VMD出力）を崩さない。
+
+### 14.9 MS8B 対象外（実装しない範囲）
+
+- 再生同期
+- 再生中カーソル
+- 共通カーソル線
+- Play / Stop 実機能
+- Zoom
+- スクラブ
+- フレーム単位同期制御
+- 30fps 本格表記対応
+- 多言語化
+- 設定永続化
+- 出力品質拡張
+- `pipeline.py` の既存タイミング計画ロジック変更
+- `WaveformView` の責務変更
+- Preview 独立状態キャッシュの導入
+- 将来フェーズ向け先回り設計
+
+### 14.10 MS8B 完了条件（実装判定用）
+
+- 右カラム下段に Preview Area が組み込まれる
+- Preview Area が 5 段固定で表示される
+- 処理実行後に `timeline` 由来整形済みデータが静止表示される
+- `main_window.py` が整形責務を持たない
+- `preview_transform.py` が整形責務を持つ
+- `preview_area.py` が描画責務を持つ
+- 未解析時 / 失敗時 / 再解析待ち時に Preview がクリアされる
+- 既存導線（TEXT読込 / WAV読込 / 処理実行 / VMD出力）が崩れない
+- Preview と Waveform が同じ `current_timing_plan.timeline` を元データとして使う
+- `suppress_warning=True` 復元時にも Preview 表示整合が崩れない
