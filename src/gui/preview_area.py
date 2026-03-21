@@ -19,6 +19,7 @@ class PreviewArea(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self._preview_data: PreviewData = empty_preview_data()
+        self._playback_position_sec: float | None = None
         self.setMinimumHeight(140)
 
     def set_preview_data(self, preview_data: PreviewData) -> None:
@@ -27,6 +28,19 @@ class PreviewArea(QWidget):
 
     def clear_preview(self) -> None:
         self._preview_data = empty_preview_data()
+        self.update()
+
+    def set_playback_position_sec(self, position_sec: float) -> None:
+        resolved = max(float(position_sec), 0.0)
+        if self._playback_position_sec is not None and abs(self._playback_position_sec - resolved) <= 1e-6:
+            return
+        self._playback_position_sec = resolved
+        self.update()
+
+    def clear_playback_cursor(self) -> None:
+        if self._playback_position_sec is None:
+            return
+        self._playback_position_sec = None
         self.update()
 
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
@@ -57,6 +71,7 @@ class PreviewArea(QWidget):
             self._draw_row_label(painter, inner, top, row_height, row.vowel)
             self._draw_row_grid(painter, row_rect, row_index, row_count)
             self._draw_row_segments(painter, row_rect, row, rows)
+        self._draw_playback_cursor(painter, timeline_rect, rows)
 
     def _rows_with_fallback(self) -> list[PreviewRow]:
         if self._preview_data.rows:
@@ -122,3 +137,28 @@ class PreviewArea(QWidget):
                 if segment.end_sec > max_end_sec:
                     max_end_sec = segment.end_sec
         return max_end_sec
+
+    def _draw_playback_cursor(
+        self,
+        painter: QPainter,
+        timeline_rect: QRectF,
+        rows: list[PreviewRow],
+    ) -> None:
+        if self._playback_position_sec is None:
+            return
+
+        max_end_sec = self._max_end_sec(rows)
+        if max_end_sec <= 0.0:
+            return
+
+        clamped_sec = min(max(self._playback_position_sec, 0.0), max_end_sec)
+        ratio = clamped_sec / max_end_sec
+        x = timeline_rect.left() + (timeline_rect.width() * ratio)
+
+        painter.setPen(QPen(QColor("#d62728"), 1))
+        painter.drawLine(
+            int(x),
+            int(timeline_rect.top()),
+            int(x),
+            int(timeline_rect.bottom()),
+        )

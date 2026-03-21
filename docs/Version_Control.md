@@ -21,6 +21,33 @@
 
 ---
 
+## Entry 2026-03-21 / Session: ms8c-phases1-to-10-implementation-and-final-check
+
+- Date: 2026-03-21
+- Session: ms8c-phases1-to-10-implementation-and-final-check
+- Summary:
+  - MS8C フェーズ1〜10として、再生基盤（`PlaybackController` / `ViewSync`）と `main_window.py` 配線、Play/Stop action state、波形/Preview/ステータスの共通位置同期を実装した。
+  - 共通位置正本を「秒ベース絶対値」に統一し、再生開始は常に 0.0 秒起点、再生停止/終了/解析結果無効化時は 0.0 秒リセットへ統一した。
+  - TEXT/WAV 再読込、読込失敗、入力不足、再解析待ち、`suppress_warning=True` 復元を含む既存入口で、再生状態取り残しを無効化正規導線へ集約した。
+- Modified Files:
+  - `src/gui/main_window.py`: MS8C 全体の司令塔配線（controller/sync接続、Play/Stop 状態判定、ステータス反映、無効化統合、入口整合）
+  - `src/gui/waveform_view.py`: 秒ベース再生位置カーソルの受け取り/描画/クリア導線
+  - `src/gui/preview_area.py`: 秒ベース再生位置カーソルの受け取り/描画/クリア導線
+  - `README.md`: MS8C 完了状態を反映（再生/同期対応、非対応一覧更新）
+  - `docs/repo_milestone.md`: MS8C 完了メモを追記
+  - `docs/Version_Control.md`: 本エントリを追記
+- Added Files:
+  - `src/gui/playback_controller.py`: 実 WAV 再生、停止、終了検知、秒位置通知、開始/終了時 0.0 秒統一
+  - `src/gui/view_sync.py`: 共有秒位置の保持/配布/リセットの最小ハブ
+- Notes:
+  - MS8D 以降（Zoom、スクラブ、手動シーク、表示詳細化、`pipeline.py` 仕様変更）は未着手のまま維持。
+  - 既存主要導線（TEXT読込 / WAV読込 / 処理実行 / VMD出力）は維持。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m py_compile src\gui\main_window.py src\gui\playback_controller.py src\gui\view_sync.py src\gui\waveform_view.py src\gui\preview_area.py src\gui\status_panel.py src\gui\operation_panel.py`
+  - `rg -n "can_play|can_stop|start_playback|shared_position_sec_changed|shared_position_reset|_invalidate_current_timing_plan" src/gui/main_window.py src/gui/playback_controller.py src/gui/view_sync.py`
+  - `git diff --name-only -- src/core src/vmd_writer src/gui/preview_transform.py src/core/pipeline.py src/core/whisper_timing.py`（非対象領域の未変更確認）
+---
+
 ## Entry 2026-03-19 / Session: vowel-interval-rms-integration
 
 - Date: 2026-03-19
@@ -620,3 +647,29 @@
 - Verification:
   - `git status --short` / `git branch --show-current` / `git remote -v` で同期前状態を確認。
   - `rg -n "Ver 0.3.5.2|0.3.5.2" README.md pyproject.toml src/gui/main_window.py docs/Specification_Prompt_v3.md docs/repo_milestone.md` で版数反映を確認。
+
+## Entry 2026-03-21 / Session: release-v0353-repo-sync
+
+- Date: 2026-03-21
+- Session: release-v0353-repo-sync
+- Summary:
+  - Current repository state was re-checked and synchronized as `Ver 0.3.5.3`.
+  - MS8C implementation files and related documentation updates were included in the same repository sync commit.
+  - Version markers were updated consistently for the current release.
+- Modified Files:
+  - `README.md`: version label updated to `Ver 0.3.5.3`.
+  - `pyproject.toml`: project version updated to `0.3.5.3`.
+  - `src/gui/main_window.py`: Help version text updated to `Ver 0.3.5.3`.
+  - `docs/Specification_Prompt_v3.md`: target release updated to `Ver 0.3.5.3`.
+  - `docs/repo_milestone.md`: repository sync release line updated to `Ver 0.3.5.3`.
+  - `docs/Version_Control.md`: this release entry added.
+- Added Files:
+  - `docs/MS8C_Implementation_Handoff.md`
+  - `src/gui/playback_controller.py`
+  - `src/gui/view_sync.py`
+- Notes:
+  - This entry is a repository sync entry; feature-level implementation details remain in each MS8C session entry.
+- Verification:
+  - `git status --short` / `git branch --show-current` / `git remote -v` used for sync pre-check.
+  - `rg -n "Ver 0.3.5.3|0.3.5.3" README.md pyproject.toml src/gui/main_window.py docs/Specification_Prompt_v3.md docs/repo_milestone.md` used for version marker check.
+---

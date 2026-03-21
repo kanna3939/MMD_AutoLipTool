@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 from matplotlib.transforms import blended_transform_factory
 
 _JP_FONT_FAMILIES = ["Yu Gothic", "Meiryo", "MS Gothic", "sans-serif"]
@@ -27,12 +28,16 @@ class WaveformView(FigureCanvas):
         self._show_frame_grid = self._default_show_frame_grid
         self._show_vowel_labels = self._default_show_vowel_labels
         self._show_event_regions = self._default_show_event_regions
+        self._playback_position_sec: float | None = None
+        self._playback_cursor_line: Line2D | None = None
         self.setMinimumHeight(140)
         self.show_placeholder("Waveform preview (not loaded)")
 
     def show_placeholder(self, message: str) -> None:
         self._samples = []
         self._duration_sec = 0.0
+        self._playback_position_sec = None
+        self._playback_cursor_line = None
         self._axes.clear()
         self._axes.set_xticks([])
         self._axes.set_yticks([])
@@ -68,6 +73,33 @@ class WaveformView(FigureCanvas):
 
     def clear_morph_labels(self) -> None:
         self.set_morph_events([])
+
+    def set_playback_position_sec(self, position_sec: float) -> None:
+        if not self._samples or self._duration_sec <= 0.0:
+            return
+
+        clamped_sec = min(max(float(position_sec), 0.0), self._duration_sec)
+        if (
+            self._playback_position_sec is not None
+            and abs(self._playback_position_sec - clamped_sec) <= 1e-6
+        ):
+            return
+
+        self._playback_position_sec = clamped_sec
+        if self._update_playback_cursor_line():
+            self.draw_idle()
+            return
+        self._render_waveform()
+
+    def clear_playback_cursor(self) -> None:
+        if self._playback_position_sec is None and self._playback_cursor_line is None:
+            return
+        self._playback_position_sec = None
+        self._playback_cursor_line = None
+        if self._samples:
+            self._render_waveform()
+            return
+        self.draw_idle()
 
     def set_show_frame_grid(self, enabled: bool) -> None:
         enabled_bool = bool(enabled)
@@ -121,6 +153,7 @@ class WaveformView(FigureCanvas):
 
     def _render_waveform(self) -> None:
         self._axes.clear()
+        self._playback_cursor_line = None
         if self._duration_sec > 0 and len(self._samples) > 1:
             step = self._duration_sec / (len(self._samples) - 1)
             x_values = [step * index for index in range(len(self._samples))]
@@ -145,6 +178,7 @@ class WaveformView(FigureCanvas):
             self._draw_event_regions()
         if self._show_vowel_labels:
             self._draw_morph_labels()
+        self._draw_playback_cursor()
 
     def _draw_frame_grid(self) -> None:
         if self._duration_sec <= 0.0:
@@ -217,6 +251,33 @@ class WaveformView(FigureCanvas):
             self._render_waveform()
             return
         self.draw_idle()
+
+    def _draw_playback_cursor(self) -> None:
+        if self._playback_position_sec is None or self._duration_sec <= 0.0:
+            self._playback_cursor_line = None
+            return
+        clamped_sec = min(max(self._playback_position_sec, 0.0), self._duration_sec)
+        self._playback_cursor_line = self._axes.axvline(
+            x=clamped_sec,
+            ymin=0.0,
+            ymax=1.0,
+            color="#d62728",
+            linewidth=1.2,
+            alpha=0.95,
+            zorder=9.0,
+        )
+
+    def _update_playback_cursor_line(self) -> bool:
+        if self._playback_cursor_line is None:
+            return False
+        if self._playback_position_sec is None:
+            return False
+        if self._playback_cursor_line.axes is not self._axes:
+            return False
+        clamped_sec = min(max(self._playback_position_sec, 0.0), self._duration_sec)
+        self._playback_cursor_line.set_xdata([clamped_sec, clamped_sec])
+        self._playback_cursor_line.set_visible(True)
+        return True
 
     def _event_bounds(self, event: VowelTimelinePoint) -> tuple[float, float]:
         if event.start_sec is not None and event.end_sec is not None:
