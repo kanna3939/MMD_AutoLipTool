@@ -30,10 +30,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from gui.operation_panel import OperationPanel
+from gui.playback_controller import PlaybackController
 from gui.preview_area import PreviewArea
 from gui.preview_transform import build_preview_data
 from gui.status_panel import StatusPanel
+from gui.view_sync import ViewSync
 from gui.waveform_view import WaveformView
+
+_STATUS_FRAME_FPS = 30
+_PLAYBACK_STATUS_PREFIX = "出力状態: 再生中"
 
 
 class MainWindow(QWidget):
@@ -103,7 +108,10 @@ class MainWindow(QWidget):
         )
         self.wav_waveform_view = WaveformView()
         self.status_panel = StatusPanel("\u51fa\u529b\u72b6\u614b: \u672a\u5b9f\u884c")
+        self.playback_controller = PlaybackController(self)
+        self.view_sync = ViewSync(self)
         self._sync_view_action_checks()
+        self._connect_playback_layer()
 
         self.text_button.clicked.connect(self._open_text_file)
         self.wav_button.clicked.connect(self._open_wav_file)
@@ -145,6 +153,33 @@ class MainWindow(QWidget):
         self.setLayout(layout)
         self._update_action_states()
 
+    def _connect_playback_layer(self) -> None:
+        self.operation_panel.play_requested.connect(self._on_play_requested)
+        self.operation_panel.stop_requested.connect(self._on_stop_requested)
+        self.playback_controller.playback_active_changed.connect(
+            self._on_playback_active_changed
+        )
+        self.playback_controller.position_sec_changed.connect(
+            self._on_playback_position_sec_changed
+        )
+        self.playback_controller.playback_finished.connect(self._on_playback_finished)
+        self.view_sync.shared_position_sec_changed.connect(
+            self.wav_waveform_view.set_playback_position_sec
+        )
+        self.view_sync.shared_position_sec_changed.connect(
+            self.preview_area.set_playback_position_sec
+        )
+        self.view_sync.shared_position_sec_changed.connect(
+            self._on_shared_position_sec_changed
+        )
+        self.view_sync.shared_position_reset.connect(
+            self.wav_waveform_view.clear_playback_cursor
+        )
+        self.view_sync.shared_position_reset.connect(
+            self.preview_area.clear_playback_cursor
+        )
+        self.view_sync.shared_position_reset.connect(self._on_shared_position_reset)
+
     # Common GUI entry points (buttons and menu actions should share these).
     def _open_text_file(self) -> None:
         self._select_text_file()
@@ -167,6 +202,94 @@ class MainWindow(QWidget):
 
     def _close_application(self) -> None:
         self.close()
+
+    def _on_play_requested(self) -> None:
+        if not self._sync_playback_source_from_selected_wav():
+            return
+        self.playback_controller.start_playback()
+
+    def _on_stop_requested(self) -> None:
+        self.playback_controller.stop_playback()
+        self._reset_shared_playback_position()
+
+    def _on_playback_position_sec_changed(self, position_sec: float) -> None:
+        self.view_sync.update_shared_position_sec(position_sec)
+
+    def _on_playback_finished(self) -> None:
+        self._reset_shared_playback_position()
+        self._update_action_states()
+
+    def _on_playback_active_changed(self, _: bool) -> None:
+        if self.playback_controller.is_playing():
+            self._on_shared_position_sec_changed(self.view_sync.shared_position_sec())
+        self._update_action_states()
+
+    def _on_shared_position_sec_changed(self, position_sec: float) -> None:
+        self._refresh_playback_frame_status(position_sec)
+
+    def _on_shared_position_reset(self) -> None:
+        self._restore_status_after_playback_stop()
+
+    def _reset_shared_playback_position(self) -> None:
+        self.view_sync.reset_shared_position()
+
+    def _stop_playback_for_timing_invalidation(self) -> None:
+        self.playback_controller.stop_playback()
+        self._reset_shared_playback_position()
+
+    def _sync_playback_source_from_selected_wav(self) -> bool:
+        selected_wav_path = self.selected_wav_path
+        if not selected_wav_path:
+            return False
+        current_source_path = self.playback_controller.source_path()
+        if current_source_path is not None and str(current_source_path) == selected_wav_path:
+            return True
+        return self.playback_controller.set_wav_path(selected_wav_path)
+
+    def _refresh_playback_frame_status(self, position_sec: float | None = None) -> None:
+        if not self.playback_controller.is_playing():
+            return
+
+        current_status_text = self.status_panel.status_text()
+        if not self._status_allows_playback_frame_override(current_status_text):
+            return
+
+        resolved_position_sec = (
+            self.playback_controller.current_position_sec()
+            if position_sec is None
+            else max(float(position_sec), 0.0)
+        )
+        self._set_output_status(self._format_playback_status(resolved_position_sec))
+
+    def _restore_status_after_playback_stop(self) -> None:
+        if not self._is_playback_status_text(self.status_panel.status_text()):
+            return
+        self._set_ready_status()
+
+    def _format_playback_status(self, position_sec: float) -> str:
+        frame_no = self._seconds_to_frame(position_sec)
+        return f"{_PLAYBACK_STATUS_PREFIX} (現在フレーム: {frame_no})"
+
+    def _seconds_to_frame(self, seconds: float) -> int:
+        return max(0, int(round(max(float(seconds), 0.0) * _STATUS_FRAME_FPS)))
+
+    def _status_allows_playback_frame_override(self, status_text: str) -> bool:
+        if self._is_playback_status_text(status_text):
+            return True
+        return self._is_ready_status_text(status_text)
+
+    def _is_playback_status_text(self, status_text: str) -> bool:
+        return status_text.startswith(_PLAYBACK_STATUS_PREFIX)
+
+    def _is_ready_status_text(self, status_text: str) -> bool:
+        ready_prefixes = (
+            "出力状態: 解析未実行 (TEXT/WAV読込済み)",
+            "出力状態: 入力準備中 (TEXT読込済み / WAV未読込)",
+            "出力状態: 入力準備中 (WAV読込済み / TEXT未読込)",
+            "出力状態: 入力準備中 (TEXT/WAV未読込)",
+            "出力状態: 解析実行済み (",
+        )
+        return any(status_text.startswith(prefix) for prefix in ready_prefixes)
 
     def _ensure_processing_dialog(self) -> QProgressDialog:
         if self._processing_dialog is None:
@@ -218,7 +341,7 @@ class MainWindow(QWidget):
             "バージョン情報",
             "\n".join(
                 [
-                    "MMD AutoLip Tool Ver 0.3.5.2",
+                    "MMD AutoLip Tool Ver 0.3.5.3",
                     f"pyopenjtalk: {pyopenjtalk_version}",
                     f"whisper: {whisper_version}",
                 ]
@@ -416,7 +539,9 @@ class MainWindow(QWidget):
     def _load_text_file(self, file_path: str, *, suppress_warning: bool = False) -> bool:
         def _fail_text_load(*, title: str, message: str, status: str) -> bool:
             if suppress_warning:
+                self._stop_playback_for_timing_invalidation()
                 self._update_preview_from_current_timing_plan()
+                self._update_action_states()
                 return False
             self._reset_text_analysis_state()
             self._show_warning(
@@ -498,6 +623,7 @@ class MainWindow(QWidget):
             self.hiragana_preview.setPlainText(previous_text_state["hiragana_preview"])
             self.vowel_preview.setPlainText(previous_text_state["vowel_preview"])
             self._update_preview_from_current_timing_plan()
+            self._set_ready_status()
             return True
 
         if not text_content:
@@ -610,7 +736,9 @@ class MainWindow(QWidget):
     def _load_wav_file(self, file_path: str, *, suppress_warning: bool = False) -> bool:
         def _fail_wav_load(*, title: str, message: str, status: str) -> bool:
             if suppress_warning:
+                self._stop_playback_for_timing_invalidation()
                 self._update_preview_from_current_timing_plan()
+                self._update_action_states()
                 return False
             self._reset_wav_load_state()
             self._show_warning(
@@ -693,6 +821,7 @@ class MainWindow(QWidget):
 
         self.selected_wav_path = normalized_path
         self.selected_wav_analysis = wav_info
+        self.playback_controller.set_wav_path(normalized_path)
         self._invalidate_current_timing_plan()
         self.wav_path_label.setText(f"WAV: {wav_path.name}")
         self.wav_info_label.setText(
@@ -1075,6 +1204,8 @@ class MainWindow(QWidget):
         return bool(self.selected_text_path and self.selected_wav_path)
 
     def _set_output_status(self, text: str) -> None:
+        if self.status_panel.status_text() == text:
+            return
         self.status_panel.set_status_text(text)
 
     def _clear_preview_display(self) -> None:
@@ -1085,7 +1216,9 @@ class MainWindow(QWidget):
 
     def _invalidate_current_timing_plan(self) -> None:
         self.current_timing_plan = None
+        self._stop_playback_for_timing_invalidation()
         self._update_preview_from_current_timing_plan()
+        self._update_action_states()
 
     def _update_preview_from_current_timing_plan(self) -> None:
         preview_area = getattr(self, "preview_area", None)
@@ -1202,10 +1335,27 @@ class MainWindow(QWidget):
     def _build_normal_action_states(self) -> dict[str, bool]:
         has_text = bool(self.selected_text_content and self.selected_vowel_content)
         has_wav = bool(self.selected_wav_path and self.selected_wav_analysis is not None)
+        has_valid_analysis = self.current_timing_plan is not None
         has_recent_text = bool(self.recent_text_files)
         has_recent_wav = bool(self.recent_wav_files)
+        is_playing = self.playback_controller.is_playing()
+        playback_source_path = self.playback_controller.source_path()
+        has_playback_source = (
+            playback_source_path is not None
+            and self.selected_wav_path is not None
+            and str(playback_source_path) == self.selected_wav_path
+        )
         can_run = has_text and has_wav
         can_save = can_run and self.current_timing_plan is not None
+        can_play = (
+            (not self._is_processing)
+            and has_valid_analysis
+            and has_wav
+            and has_playback_source
+            and self.playback_controller.is_ready()
+            and (not is_playing)
+        )
+        can_stop = (not self._is_processing) and is_playing
 
         return {
             "can_open_text": True,
@@ -1215,6 +1365,8 @@ class MainWindow(QWidget):
             "can_adjust_morph_upper_limit": True,
             "can_run": can_run,
             "can_save": can_save,
+            "can_play": can_play,
+            "can_stop": can_stop,
         }
 
     def _apply_processing_lock_overrides(self, action_states: dict[str, bool]) -> dict[str, bool]:
@@ -1228,6 +1380,8 @@ class MainWindow(QWidget):
         locked_states["can_adjust_morph_upper_limit"] = False
         locked_states["can_run"] = False
         locked_states["can_save"] = False
+        locked_states["can_play"] = False
+        locked_states["can_stop"] = False
         return locked_states
 
     def _apply_action_states(self, action_states: dict[str, bool]) -> None:
@@ -1238,6 +1392,8 @@ class MainWindow(QWidget):
         can_adjust_morph_upper_limit = action_states["can_adjust_morph_upper_limit"]
         can_run = action_states["can_run"]
         can_save = action_states["can_save"]
+        can_play = action_states["can_play"]
+        can_stop = action_states["can_stop"]
 
         self.text_button.setEnabled(can_open_text)
         self.wav_button.setEnabled(can_open_wav)
@@ -1253,9 +1409,8 @@ class MainWindow(QWidget):
 
         self.process_button.setEnabled(can_run)
         self.output_button.setEnabled(can_save)
-        # MS8A scope: preview/playback/zoom controls are display-only placeholders.
-        self.play_button.setEnabled(False)
-        self.stop_button.setEnabled(False)
+        self.play_button.setEnabled(can_play)
+        self.stop_button.setEnabled(can_stop)
         self.zoom_in_button.setEnabled(False)
         self.zoom_out_button.setEnabled(False)
         self.action_run_processing.setEnabled(can_run)

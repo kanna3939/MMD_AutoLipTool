@@ -2,7 +2,7 @@
 
 ## Version
 
-Ver 0.3.5.2
+Ver 0.3.5.3
 
 ## 概要
 
@@ -83,6 +83,12 @@ UTF-8 のテキスト 1 ファイルと PCM WAV 1 ファイルを入力し、母
 - MS8B フェーズ3〜9として、`PreviewArea`（右カラム下段）・`preview_transform.py`・`main_window.py` 受け渡し/クリア/復元整合導線を反映
 - Preview は 5段固定（あ/い/う/え/お）の静止表示として導入し、正本を `current_timing_plan.timeline` に統一
 - 解析結果無効化時クリア（失敗時限定ではない）と `suppress_warning=True` 復元時の再構成整合を最小変更で反映
+- MS8C フェーズ1〜10として、`PlaybackController` / `ViewSync` を導入し、実 WAV 再生を秒ベース正本で同期する導線を追加
+- Play/Stop の有効無効を action state へ統合（Play=処理実行後のみ有効、Stop=再生中のみ有効）
+- 再生開始は常に 0.0 秒起点、再生停止/再生終了/解析結果無効化時は共有位置を 0.0 秒へ戻す動作で統一
+- `controller -> view_sync -> waveform/preview/status` の経路で共通位置同期を接続し、波形カーソル/Previewカーソル/ステータス表示を同一位置へ反映
+- TEXT/WAV 再読込、読込失敗、入力不足、再解析待ち、`suppress_warning=True` 復元を含む既存入口で、再生状態取り残しが起きないよう無効化導線へ集約
+- 実装引き継ぎメモを `docs/MS8C_Implementation_Handoff.md` に追加
 
 ## MS8A 完了状態（2026-03-20）
 
@@ -92,7 +98,7 @@ UTF-8 のテキスト 1 ファイルと PCM WAV 1 ファイルを入力し、母
   - 中央レイアウト: 左右2カラム化（左: テキスト/ファイル状態、右上: `WaveformView`、右下: `PreviewArea`）
   - 最下部ステータス欄: `src/gui/status_panel.py` の `StatusPanel` へ置換
 - 未実装（後続マイルストーン対象）:
-  - 再生機能
+  - 再生詳細機能（スクラブ/手動シーク/クリック移動）
   - Zoom 機能
   - 多言語化
   - 設定永続化
@@ -137,9 +143,7 @@ UTF-8 のテキスト 1 ファイルと PCM WAV 1 ファイルを入力し、母
 - 強制アライメントによる厳密音素境界
 - 高度な音響特徴量ベース最適化
 - 音量連動の詳細チューニングUI（マッピング調整・プリセット等）
-- Preview Area の再生同期（MS8Bは静止表示まで）
-- 再生機能（Play/Stop）
-- Zoom 機能（Zoom In/Out）
+- 再生詳細機能（Zoom / スクラブ / 手動シーク / クリック移動）
 - 多言語化（日本語/EN 切替）
 - 設定永続化
 
