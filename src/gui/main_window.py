@@ -1,7 +1,13 @@
 import os
 import math
+from collections.abc import Mapping, Sequence
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
+
+try:
+    import winsound
+except ImportError:  # pragma: no cover - non-Windows fallback
+    winsound = None
 
 from PySide6.QtCore import Qt
 from core import (
@@ -16,38 +22,45 @@ from core import (
     load_waveform_preview,
     text_to_hiragana,
 )
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import (
     QApplication,
-    QDoubleSpinBox,
     QFileDialog,
-    QHBoxLayout,
     QLabel,
     QMenuBar,
     QMessageBox,
-    QPlainTextEdit,
     QProgressDialog,
     QVBoxLayout,
     QWidget,
 )
+from gui.central_panels import (
+    CenterContentContainer,
+    LeftInfoPanel,
+    MorphUpperLimitRow,
+    RightDisplayContainer,
+)
+from gui.i18n_strings import MainWindowStrings, StatusTexts, ThemeStrings
 from gui.operation_panel import OperationPanel
 from gui.playback_controller import PlaybackController
-from gui.preview_area import PreviewArea
 from gui.preview_transform import build_preview_data
 from gui.status_panel import StatusPanel
 from gui.view_sync import ViewSync
-from gui.waveform_view import WaveformView
 
-_STATUS_FRAME_FPS = 30
-_PLAYBACK_STATUS_PREFIX = "出力状態: 再生中"
+_PLAYBACK_STATUS_PREFIX = StatusTexts.PLAYBACK
 _DEFAULT_ZOOM_LEVELS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0)
 _PATH_DISPLAY_MAX_FULL_LENGTH = 48
+_DEFAULT_THEME = ThemeStrings.DARK
+_DEFAULT_CENTER_SPLITTER_RATIO = (35, 65)
+_VIEWPORT_SCROLLBAR_UNITS_PER_SEC = 1000
+_UI_SETTING_KEY_THEME = "theme"
+_UI_SETTING_KEY_CENTER_SPLITTER_RATIO = "center_splitter_ratio"
 
 
 class MainWindow(QWidget):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("MMD AutoLip Tool")
+        self.setObjectName("MainWindowRoot")
+        self.setWindowTitle(MainWindowStrings.WINDOW_TITLE)
         self.resize(760, 560)
 
         self.selected_text_path: str | None = None
@@ -66,9 +79,12 @@ class MainWindow(QWidget):
         self.recent_wav_files: list[str] = []
         self._zoom_levels: tuple[float, ...] = _DEFAULT_ZOOM_LEVELS
         self._zoom_level_index = 0
+        self._current_theme = _DEFAULT_THEME
+        self._current_center_splitter_ratio = _DEFAULT_CENTER_SPLITTER_RATIO
 
         layout = QVBoxLayout()
         self.menu_bar = self._build_menu_bar()
+        self.menu_bar.setObjectName("MainMenuBar")
         layout.setMenuBar(self.menu_bar)
 
         self.operation_panel = OperationPanel()
@@ -81,89 +97,56 @@ class MainWindow(QWidget):
         self.stop_button = self.operation_panel.stop_button
         self.zoom_in_button = self.operation_panel.zoom_in_button
         self.zoom_out_button = self.operation_panel.zoom_out_button
-        self.morph_upper_limit_label = QLabel("\u30e2\u30fc\u30d5\u4e0a\u9650\u5024")
-        self.morph_upper_limit_input = QDoubleSpinBox()
-        self.morph_upper_limit_input.setRange(0.0, 10.0)
-        self.morph_upper_limit_input.setDecimals(4)
-        self.morph_upper_limit_input.setSingleStep(0.05)
-        self.morph_upper_limit_input.setValue(0.5)
+        self.morph_upper_limit_row = MorphUpperLimitRow(self)
+        self.morph_upper_limit_label = self.morph_upper_limit_row.label
+        self.morph_upper_limit_input = self.morph_upper_limit_row.input
 
-        self.text_path_label = QLabel("TEXT: \u672a\u9078\u629e")
-        self.wav_path_label = QLabel("WAV: \u672a\u9078\u629e")
+        self.left_info_panel = LeftInfoPanel(self)
+        self.text_path_label = self.left_info_panel.text_path_label
+        self.wav_path_label = self.left_info_panel.wav_path_label
         self._set_file_path_label(self.text_path_label, "TEXT", None)
         self._set_file_path_label(self.wav_path_label, "WAV", None)
-        self.text_preview_label = QLabel("TEXT\u5168\u6587\u78ba\u8a8d")
-        self.text_preview = QPlainTextEdit()
-        self.text_preview.setReadOnly(True)
-        self.text_preview.setPlaceholderText(
-            "\u3053\u3053\u306bTEXT\u30d5\u30a1\u30a4\u30eb\u306e\u5168\u6587\u304c\u8868\u793a\u3055\u308c\u307e\u3059"
-        )
-        self.hiragana_preview_label = QLabel("\u3072\u3089\u304c\u306a\u5909\u63db\u78ba\u8a8d")
-        self.hiragana_preview = QPlainTextEdit()
-        self.hiragana_preview.setReadOnly(True)
-        self.hiragana_preview.setPlaceholderText(
-            "\u3053\u3053\u306b\u3072\u3089\u304c\u306a\u5909\u63db\u5f8c\u306eTEXT\u304c\u8868\u793a\u3055\u308c\u307e\u3059"
-        )
-        self.vowel_preview_label = QLabel("\u6bcd\u97f3\u5909\u63db\u78ba\u8a8d")
-        self.vowel_preview = QPlainTextEdit()
-        self.vowel_preview.setReadOnly(True)
-        self.vowel_preview.setPlaceholderText(
-            "\u3053\u3053\u306b\u6bcd\u97f3\u5909\u63db\u7d50\u679c\u304c\u8868\u793a\u3055\u308c\u307e\u3059"
-        )
-        self.wav_info_label = QLabel(
-            "WAV\u60c5\u5831: \u672a\u8aad\u307f\u8fbc\u307f"
-        )
-        self.wav_waveform_view = WaveformView()
+        self.text_preview_label = self.left_info_panel.text_preview_label
+        self.text_preview = self.left_info_panel.text_preview
+        self.hiragana_preview_label = self.left_info_panel.hiragana_preview_label
+        self.hiragana_preview = self.left_info_panel.hiragana_preview
+        self.vowel_preview_label = self.left_info_panel.vowel_preview_label
+        self.vowel_preview = self.left_info_panel.vowel_preview
+        self.wav_info_label = self.left_info_panel.wav_info_label
+
+        self.right_display_container = RightDisplayContainer(self)
+        self.wav_waveform_view = self.right_display_container.wav_waveform_view
+        self.preview_area = self.right_display_container.preview_area
+        self.viewport_scrollbar = self.right_display_container.viewport_scrollbar
         self.status_panel = StatusPanel("\u51fa\u529b\u72b6\u614b: \u672a\u5b9f\u884c")
         self.playback_controller = PlaybackController(self)
         self.view_sync = ViewSync(self)
+        self._syncing_viewport_scrollbar = False
         self._sync_view_action_checks()
 
-        self.text_button.clicked.connect(self._open_text_file)
-        self.wav_button.clicked.connect(self._open_wav_file)
-        self.process_button.clicked.connect(self._run_processing_requested)
-        self.output_button.clicked.connect(self._save_vmd_file)
         self.morph_upper_limit_input.valueChanged.connect(self._on_morph_upper_limit_changed)
 
-        morph_upper_limit_layout = QHBoxLayout()
-        morph_upper_limit_layout.addWidget(self.morph_upper_limit_label)
-        morph_upper_limit_layout.addWidget(self.morph_upper_limit_input)
-
-        center_layout = QHBoxLayout()
-
-        left_column_layout = QVBoxLayout()
-        left_column_layout.addWidget(self.text_path_label)
-        left_column_layout.addWidget(self.wav_path_label)
-        left_column_layout.addWidget(self.text_preview_label)
-        left_column_layout.addWidget(self.text_preview)
-        left_column_layout.addWidget(self.hiragana_preview_label)
-        left_column_layout.addWidget(self.hiragana_preview)
-        left_column_layout.addWidget(self.vowel_preview_label)
-        left_column_layout.addWidget(self.vowel_preview)
-        left_column_layout.addWidget(self.wav_info_label)
-
-        right_column_layout = QVBoxLayout()
-        right_column_layout.addWidget(self.wav_waveform_view, 3)
-
-        self.preview_area = PreviewArea()
-        right_column_layout.addWidget(self.preview_area, 2)
+        self._connect_operation_panel()
         self._connect_playback_layer()
         self._connect_viewport_layer()
-
-        center_layout.addLayout(left_column_layout, 1)
-        center_layout.addLayout(right_column_layout, 1)
+        self.center_content_container = CenterContentContainer(
+            self.left_info_panel,
+            self.right_display_container,
+            self,
+        )
+        self.center_splitter = self.center_content_container.splitter
+        self.center_splitter.splitterMoved.connect(self._on_center_splitter_moved)
+        self.apply_ui_settings(self.default_ui_settings())
 
         layout.addWidget(self.operation_panel)
-        layout.addLayout(morph_upper_limit_layout)
-        layout.addLayout(center_layout)
+        layout.addWidget(self.morph_upper_limit_row)
+        layout.addWidget(self.center_content_container, 1)
         layout.addWidget(self.status_panel)
 
         self.setLayout(layout)
         self._update_action_states()
 
     def _connect_playback_layer(self) -> None:
-        self.operation_panel.play_requested.connect(self._on_play_requested)
-        self.operation_panel.stop_requested.connect(self._on_stop_requested)
         self.playback_controller.playback_active_changed.connect(
             self._on_playback_active_changed
         )
@@ -189,15 +172,19 @@ class MainWindow(QWidget):
         self.view_sync.shared_position_reset.connect(self._on_shared_position_reset)
 
     def _connect_viewport_layer(self) -> None:
-        self.operation_panel.zoom_in_requested.connect(self._on_zoom_in_requested)
-        self.operation_panel.zoom_out_requested.connect(self._on_zoom_out_requested)
         self.wav_waveform_view.pan_requested.connect(self._on_pan_requested)
         self.preview_area.pan_requested.connect(self._on_pan_requested)
+        self.viewport_scrollbar.valueChanged.connect(
+            self._on_viewport_scrollbar_value_changed
+        )
         self.view_sync.shared_viewport_sec_changed.connect(
             self.wav_waveform_view.set_viewport_sec
         )
         self.view_sync.shared_viewport_sec_changed.connect(
             self.preview_area.set_viewport_sec
+        )
+        self.view_sync.shared_viewport_sec_changed.connect(
+            self._sync_viewport_scrollbar_to_shared_viewport
         )
         self.view_sync.shared_viewport_reset.connect(
             self.wav_waveform_view.clear_viewport_sec
@@ -205,6 +192,22 @@ class MainWindow(QWidget):
         self.view_sync.shared_viewport_reset.connect(
             self.preview_area.clear_viewport_sec
         )
+        self.view_sync.shared_viewport_reset.connect(
+            self._reset_viewport_scrollbar_position
+        )
+        self._sync_viewport_scrollbar_to_shared_viewport(
+            *self.view_sync.shared_viewport_sec()
+        )
+
+    def _connect_operation_panel(self) -> None:
+        self.operation_panel.open_text_requested.connect(self._open_text_file)
+        self.operation_panel.open_wav_requested.connect(self._open_wav_file)
+        self.operation_panel.run_processing_requested.connect(self._run_processing_requested)
+        self.operation_panel.save_requested.connect(self._save_vmd_file)
+        self.operation_panel.play_requested.connect(self._on_play_requested)
+        self.operation_panel.stop_requested.connect(self._on_stop_requested)
+        self.operation_panel.zoom_in_requested.connect(self._on_zoom_in_requested)
+        self.operation_panel.zoom_out_requested.connect(self._on_zoom_out_requested)
 
     # Common GUI entry points (buttons and menu actions should share these).
     def _open_text_file(self) -> None:
@@ -279,6 +282,31 @@ class MainWindow(QWidget):
     def _on_pan_requested(self, delta_sec: float) -> None:
         self._apply_pan_delta_to_shared_viewport(delta_sec)
 
+    def _on_viewport_scrollbar_value_changed(self, raw_value: int) -> None:
+        if self._syncing_viewport_scrollbar:
+            return
+        if not self._has_loaded_wav_for_viewport():
+            return
+
+        duration_sec = self._current_wav_duration_sec()
+        if duration_sec <= 0.0:
+            return
+
+        current_start_sec, current_end_sec = self._resolved_current_viewport_for_pan(
+            duration_sec
+        )
+        current_span_sec = current_end_sec - current_start_sec
+        if current_span_sec <= 0.0:
+            return
+
+        max_start_sec = max(duration_sec - current_span_sec, 0.0)
+        resolved_start_sec = min(
+            max(self._scrollbar_value_to_sec(raw_value), 0.0),
+            max_start_sec,
+        )
+        resolved_end_sec = min(resolved_start_sec + current_span_sec, duration_sec)
+        self.view_sync.update_shared_viewport_sec(resolved_start_sec, resolved_end_sec)
+
     def _step_zoom_level(self, step: int) -> None:
         if step == 0:
             return
@@ -302,9 +330,28 @@ class MainWindow(QWidget):
             self.view_sync.update_shared_viewport_sec(0.0, 0.0)
             return
         zoom_factor = self._current_zoom_factor()
-        visible_duration_sec = duration_sec / zoom_factor
-        visible_duration_sec = min(max(visible_duration_sec, 0.0), duration_sec)
-        self.view_sync.update_shared_viewport_sec(0.0, visible_duration_sec)
+        new_span_sec = duration_sec / zoom_factor
+        new_span_sec = min(max(new_span_sec, 0.0), duration_sec)
+        if new_span_sec >= duration_sec - 1e-9:
+            self.view_sync.update_shared_viewport_sec(0.0, duration_sec)
+            return
+
+        current_start_sec, current_end_sec = self._resolved_current_viewport_for_pan(
+            duration_sec
+        )
+        current_center_sec = self._clamp_sec_within_duration(
+            (current_start_sec + current_end_sec) * 0.5,
+            duration_sec,
+        )
+        new_start_sec, new_end_sec = self._build_center_preserving_viewport(
+            duration_sec,
+            current_center_sec,
+            new_span_sec,
+        )
+        if new_end_sec <= new_start_sec:
+            self.view_sync.update_shared_viewport_sec(0.0, duration_sec)
+            return
+        self.view_sync.update_shared_viewport_sec(new_start_sec, new_end_sec)
 
     def _apply_pan_delta_to_shared_viewport(self, delta_sec: float) -> None:
         if not self._has_loaded_wav_for_viewport():
@@ -336,6 +383,93 @@ class MainWindow(QWidget):
         next_end_sec = next_start_sec + current_span_sec
         self.view_sync.update_shared_viewport_sec(next_start_sec, next_end_sec)
 
+    def _sync_viewport_scrollbar_to_shared_viewport(
+        self,
+        start_sec: float,
+        end_sec: float,
+    ) -> None:
+        scrollbar_state = self._build_viewport_scrollbar_state(start_sec, end_sec)
+
+        self._syncing_viewport_scrollbar = True
+        try:
+            self.viewport_scrollbar.setEnabled(scrollbar_state["enabled"])
+            self.viewport_scrollbar.setRange(
+                scrollbar_state["minimum"],
+                scrollbar_state["maximum"],
+            )
+            self.viewport_scrollbar.setPageStep(scrollbar_state["page_step"])
+            self.viewport_scrollbar.setSingleStep(scrollbar_state["single_step"])
+            self.viewport_scrollbar.setValue(scrollbar_state["value"])
+        finally:
+            self._syncing_viewport_scrollbar = False
+
+    def _reset_viewport_scrollbar_position(self) -> None:
+        self._sync_viewport_scrollbar_to_shared_viewport(0.0, 0.0)
+
+    def _build_viewport_scrollbar_state(
+        self,
+        start_sec: float,
+        end_sec: float,
+    ) -> dict[str, int | bool]:
+        default_state: dict[str, int | bool] = {
+            "enabled": False,
+            "minimum": 0,
+            "maximum": 0,
+            "page_step": 1,
+            "single_step": 1,
+            "value": 0,
+        }
+        if not self._has_loaded_wav_for_viewport():
+            return default_state
+
+        duration_sec = self._current_wav_duration_sec()
+        if duration_sec <= 0.0:
+            return default_state
+
+        normalized_start_sec = min(
+            max(self._normalize_non_negative_sec(start_sec), 0.0),
+            duration_sec,
+        )
+        normalized_end_sec = min(
+            max(self._normalize_non_negative_sec(end_sec), 0.0),
+            duration_sec,
+        )
+        if normalized_end_sec < normalized_start_sec:
+            normalized_start_sec, normalized_end_sec = (
+                normalized_end_sec,
+                normalized_start_sec,
+            )
+        if normalized_end_sec <= normalized_start_sec:
+            normalized_start_sec, normalized_end_sec = (0.0, duration_sec)
+
+        viewport_span_sec = max(normalized_end_sec - normalized_start_sec, 0.0)
+        total_value = self._sec_to_scrollbar_value(duration_sec)
+        page_step_value = min(
+            max(self._sec_to_scrollbar_value(viewport_span_sec), 1),
+            max(total_value, 1),
+        )
+        maximum_value = max(total_value - page_step_value, 0)
+        single_step_value = max(page_step_value // 16, 1)
+        current_value = min(max(self._sec_to_scrollbar_value(normalized_start_sec), 0), maximum_value)
+
+        # Snap the scrollbar to the exact edges when the viewport is effectively clamped.
+        # This reduces the "pulled away from the edge" feel caused by sec->int rounding.
+        if normalized_start_sec <= 1e-6:
+            current_value = 0
+        elif normalized_end_sec >= duration_sec - 1e-6:
+            current_value = maximum_value
+
+        can_scroll = maximum_value > 0 and page_step_value < total_value
+
+        return {
+            "enabled": can_scroll,
+            "minimum": 0,
+            "maximum": maximum_value,
+            "page_step": page_step_value,
+            "single_step": single_step_value,
+            "value": current_value,
+        }
+
     def _resolved_current_viewport_for_pan(self, duration_sec: float) -> tuple[float, float]:
         shared_start_sec, shared_end_sec = self.view_sync.shared_viewport_sec()
         start_sec = self._normalize_non_negative_sec(shared_start_sec)
@@ -347,6 +481,46 @@ class MainWindow(QWidget):
         end_sec = min(end_sec, duration_sec)
         if end_sec <= start_sec:
             return (0.0, duration_sec)
+        return (start_sec, end_sec)
+
+    def _build_center_preserving_viewport(
+        self,
+        duration_sec: float,
+        center_sec: float,
+        span_sec: float,
+    ) -> tuple[float, float]:
+        resolved_duration_sec = self._normalize_non_negative_sec(duration_sec)
+        if resolved_duration_sec <= 0.0:
+            return (0.0, 0.0)
+
+        resolved_span_sec = min(
+            max(self._normalize_non_negative_sec(span_sec), 0.0),
+            resolved_duration_sec,
+        )
+        if resolved_span_sec >= resolved_duration_sec - 1e-9:
+            return (0.0, resolved_duration_sec)
+        if resolved_span_sec <= 0.0:
+            return (0.0, resolved_duration_sec)
+
+        resolved_center_sec = self._clamp_sec_within_duration(
+            center_sec,
+            resolved_duration_sec,
+        )
+        half_span_sec = resolved_span_sec * 0.5
+        start_sec = resolved_center_sec - half_span_sec
+        end_sec = resolved_center_sec + half_span_sec
+
+        if start_sec < 0.0:
+            end_sec -= start_sec
+            start_sec = 0.0
+        if end_sec > resolved_duration_sec:
+            overshoot_sec = end_sec - resolved_duration_sec
+            start_sec -= overshoot_sec
+            end_sec = resolved_duration_sec
+
+        max_start_sec = max(resolved_duration_sec - resolved_span_sec, 0.0)
+        start_sec = min(max(start_sec, 0.0), max_start_sec)
+        end_sec = min(start_sec + resolved_span_sec, resolved_duration_sec)
         return (start_sec, end_sec)
 
     def _current_zoom_factor(self) -> float:
@@ -376,6 +550,15 @@ class MainWindow(QWidget):
             return 0.0
         return max(resolved, 0.0)
 
+    def _clamp_sec_within_duration(self, value_sec: float, duration_sec: float) -> float:
+        resolved_duration_sec = self._normalize_non_negative_sec(duration_sec)
+        if resolved_duration_sec <= 0.0:
+            return 0.0
+        return min(
+            max(self._normalize_non_negative_sec(value_sec), 0.0),
+            resolved_duration_sec,
+        )
+
     def _normalize_finite_sec_delta(self, value: float) -> float:
         try:
             resolved = float(value)
@@ -384,6 +567,17 @@ class MainWindow(QWidget):
         if not math.isfinite(resolved):
             return 0.0
         return resolved
+
+    def _sec_to_scrollbar_value(self, value_sec: float) -> int:
+        normalized_sec = self._normalize_non_negative_sec(value_sec)
+        return max(int(round(normalized_sec * _VIEWPORT_SCROLLBAR_UNITS_PER_SEC)), 0)
+
+    def _scrollbar_value_to_sec(self, scrollbar_value: int) -> float:
+        try:
+            resolved_value = int(scrollbar_value)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(resolved_value, 0) / _VIEWPORT_SCROLLBAR_UNITS_PER_SEC
 
     def _snapshot_zoom_and_viewport_state(self) -> tuple[int, float, float]:
         viewport_start_sec, viewport_end_sec = self.view_sync.shared_viewport_sec()
@@ -465,11 +659,8 @@ class MainWindow(QWidget):
         self._set_ready_status()
 
     def _format_playback_status(self, position_sec: float) -> str:
-        frame_no = self._seconds_to_frame(position_sec)
-        return f"{_PLAYBACK_STATUS_PREFIX} (現在フレーム: {frame_no})"
-
-    def _seconds_to_frame(self, seconds: float) -> int:
-        return max(0, int(round(max(float(seconds), 0.0) * _STATUS_FRAME_FPS)))
+        del position_sec
+        return _PLAYBACK_STATUS_PREFIX
 
     def _status_allows_playback_frame_override(self, status_text: str) -> bool:
         if self._is_playback_status_text(status_text):
@@ -480,19 +671,12 @@ class MainWindow(QWidget):
         return status_text.startswith(_PLAYBACK_STATUS_PREFIX)
 
     def _is_ready_status_text(self, status_text: str) -> bool:
-        ready_prefixes = (
-            "出力状態: 解析未実行 (TEXT/WAV読込済み)",
-            "出力状態: 入力準備中 (TEXT読込済み / WAV未読込)",
-            "出力状態: 入力準備中 (WAV読込済み / TEXT未読込)",
-            "出力状態: 入力準備中 (TEXT/WAV未読込)",
-            "出力状態: 解析実行済み (",
-        )
-        return any(status_text.startswith(prefix) for prefix in ready_prefixes)
+        return any(status_text.startswith(prefix) for prefix in StatusTexts.READY_PREFIXES)
 
     def _ensure_processing_dialog(self) -> QProgressDialog:
         if self._processing_dialog is None:
-            dialog = QProgressDialog("処理中です...", "", 0, 0, self)
-            dialog.setWindowTitle("処理中")
+            dialog = QProgressDialog(MainWindowStrings.PROCESSING_DIALOG_LABEL, "", 0, 0, self)
+            dialog.setWindowTitle(MainWindowStrings.PROCESSING_DIALOG_TITLE)
             dialog.setCancelButton(None)
             dialog.setWindowModality(Qt.ApplicationModal)
             dialog.setAutoClose(False)
@@ -520,26 +704,35 @@ class MainWindow(QWidget):
     def _begin_processing_session(self) -> None:
         self._is_processing = True
         self._update_action_states()
-        self._set_output_status("出力状態: 解析中")
+        self._set_output_status(StatusTexts.PROCESSING)
         self._show_processing_dialog()
         QApplication.processEvents()
 
     def _end_processing_session(self) -> None:
         self._hide_processing_dialog()
         self._is_processing = False
-        if self.status_panel.status_text() == "出力状態: 解析中":
-            self._set_output_status("出力状態: 失敗")
+        if self.status_panel.status_text() == StatusTexts.PROCESSING:
+            self._set_output_status(StatusTexts.FAILURE)
+        self._play_analysis_completion_sound()
         self._update_action_states()
+
+    def _play_analysis_completion_sound(self) -> None:
+        if winsound is None:
+            return
+        try:
+            winsound.MessageBeep(winsound.MB_ICONASTERISK)
+        except RuntimeError:
+            return
 
     def _show_version_info(self) -> None:
         pyopenjtalk_version = self._resolve_installed_version(["pyopenjtalk"])
         whisper_version = self._resolve_installed_version(["openai-whisper", "whisper"])
         QMessageBox.information(
             self,
-            "バージョン情報",
+            MainWindowStrings.VERSION_INFO_TITLE,
             "\n".join(
                 [
-                    "MMD AutoLip Tool Ver 0.3.5.4",
+                    MainWindowStrings.VERSION_INFO_APP_VERSION,
                     f"pyopenjtalk: {pyopenjtalk_version}",
                     f"whisper: {whisper_version}",
                 ]
@@ -594,7 +787,7 @@ class MainWindow(QWidget):
     def _build_menu_bar(self) -> QMenuBar:
         menu_bar = QMenuBar(self)
 
-        file_menu = menu_bar.addMenu("File")
+        file_menu = menu_bar.addMenu(MainWindowStrings.MENU_FILE)
         self.action_open_text = QAction("TEXT\u3092\u958b\u304f", self)
         self.action_open_wav = QAction("WAV\u3092\u958b\u304f", self)
         self.action_save_vmd = QAction("VMD\u3092\u4fdd\u5b58", self)
@@ -608,19 +801,27 @@ class MainWindow(QWidget):
         file_menu.addSeparator()
         file_menu.addAction(self.action_exit)
 
-        run_menu = menu_bar.addMenu("Run")
+        run_menu = menu_bar.addMenu(MainWindowStrings.MENU_RUN)
         self.action_run_processing = QAction("\u51e6\u7406\u5b9f\u884c", self)
         self.action_reanalyze = QAction("\u518d\u89e3\u6790", self)
         run_menu.addAction(self.action_run_processing)
         run_menu.addAction(self.action_reanalyze)
 
-        view_menu = menu_bar.addMenu("View")
+        view_menu = menu_bar.addMenu(MainWindowStrings.MENU_VIEW)
         self.action_show_30fps_lines = QAction("30fps\u7e26\u7dda\u3092\u8868\u793a", self)
         self.action_show_vowel_labels = QAction("\u6bcd\u97f3\u30e9\u30d9\u30eb\u3092\u8868\u793a", self)
         self.action_show_event_ranges = QAction("\u30a4\u30d9\u30f3\u30c8\u533a\u9593\u3092\u8868\u793a", self)
         self.action_zoom_in = QAction("Zoom In", self)
         self.action_zoom_out = QAction("Zoom Out", self)
         self.action_reset_waveform_view = QAction("\u6ce2\u5f62\u8868\u793a\u3092\u521d\u671f\u5316", self)
+        self.theme_action_group = QActionGroup(self)
+        self.theme_action_group.setExclusive(True)
+        self.action_theme_dark = QAction(MainWindowStrings.ACTION_THEME_DARK, self)
+        self.action_theme_light = QAction(MainWindowStrings.ACTION_THEME_LIGHT, self)
+        self.action_theme_dark.setCheckable(True)
+        self.action_theme_light.setCheckable(True)
+        self.theme_action_group.addAction(self.action_theme_dark)
+        self.theme_action_group.addAction(self.action_theme_light)
         self.action_show_30fps_lines.setCheckable(True)
         self.action_show_vowel_labels.setCheckable(True)
         self.action_show_event_ranges.setCheckable(True)
@@ -632,8 +833,12 @@ class MainWindow(QWidget):
         view_menu.addAction(self.action_zoom_out)
         view_menu.addSeparator()
         view_menu.addAction(self.action_reset_waveform_view)
+        view_menu.addSeparator()
+        self.menu_theme = view_menu.addMenu(MainWindowStrings.MENU_VIEW_THEME)
+        self.menu_theme.addAction(self.action_theme_dark)
+        self.menu_theme.addAction(self.action_theme_light)
 
-        help_menu = menu_bar.addMenu("Help")
+        help_menu = menu_bar.addMenu(MainWindowStrings.MENU_HELP)
         self.action_show_version = QAction("\u30d0\u30fc\u30b8\u30e7\u30f3\u60c5\u5831", self)
         help_menu.addAction(self.action_show_version)
 
@@ -655,6 +860,12 @@ class MainWindow(QWidget):
         self.action_zoom_in.triggered.connect(self._on_zoom_in_requested)
         self.action_zoom_out.triggered.connect(self._on_zoom_out_requested)
         self.action_reset_waveform_view.triggered.connect(self._reset_waveform_view_options)
+        self.action_theme_dark.triggered.connect(
+            lambda _checked=False: self.apply_theme(ThemeStrings.DARK)
+        )
+        self.action_theme_light.triggered.connect(
+            lambda _checked=False: self.apply_theme(ThemeStrings.LIGHT)
+        )
         self.action_show_version.triggered.connect(self._show_version_info)
 
     def _sync_view_action_checks(self) -> None:
@@ -668,6 +879,305 @@ class MainWindow(QWidget):
         ):
             previous_blocked = action.blockSignals(True)
             action.setChecked(checked)
+            action.blockSignals(previous_blocked)
+
+    def current_theme(self) -> str:
+        return self._current_theme
+
+    def default_theme(self) -> str:
+        return _DEFAULT_THEME
+
+    def default_center_splitter_ratio(self) -> tuple[int, int]:
+        return _DEFAULT_CENTER_SPLITTER_RATIO
+
+    def current_center_splitter_ratio(self) -> tuple[int, int]:
+        sizes = self.center_splitter.sizes()
+        resolved_ratio = self._normalize_center_splitter_ratio(sizes)
+        self._current_center_splitter_ratio = resolved_ratio
+        return resolved_ratio
+
+    def apply_center_splitter_ratio(self, ratio: Sequence[int] | None) -> tuple[int, int]:
+        resolved_ratio = self._normalize_center_splitter_ratio(ratio)
+        self._current_center_splitter_ratio = resolved_ratio
+        self.center_splitter.setStretchFactor(0, resolved_ratio[0])
+        self.center_splitter.setStretchFactor(1, resolved_ratio[1])
+        self.center_splitter.setSizes(list(resolved_ratio))
+        return resolved_ratio
+
+    def default_ui_settings(self) -> dict[str, object]:
+        return {
+            _UI_SETTING_KEY_THEME: self.default_theme(),
+            _UI_SETTING_KEY_CENTER_SPLITTER_RATIO: list(self.default_center_splitter_ratio()),
+        }
+
+    def current_ui_settings(self) -> dict[str, object]:
+        return {
+            _UI_SETTING_KEY_THEME: self.current_theme(),
+            _UI_SETTING_KEY_CENTER_SPLITTER_RATIO: list(self.current_center_splitter_ratio()),
+        }
+
+    def apply_ui_settings(self, settings: Mapping[str, object] | None) -> None:
+        resolved_settings = dict(settings or {})
+        self.apply_theme(resolved_settings.get(_UI_SETTING_KEY_THEME, self.default_theme()))
+        self.apply_center_splitter_ratio(
+            resolved_settings.get(
+                _UI_SETTING_KEY_CENTER_SPLITTER_RATIO,
+                self.default_center_splitter_ratio(),
+            )
+        )
+
+    def apply_theme(self, theme_name: str) -> None:
+        resolved_theme = str(theme_name).strip().lower()
+        if resolved_theme not in ThemeStrings.SUPPORTED:
+            resolved_theme = self.default_theme()
+        self._current_theme = resolved_theme
+
+        QApplication.instance().setProperty("appTheme", resolved_theme)
+        for widget in (
+            self,
+            self.menu_bar,
+            self.operation_panel,
+            self.morph_upper_limit_row,
+            self.left_info_panel,
+            self.right_display_container,
+            self.center_content_container,
+            self.status_panel,
+        ):
+            widget.setProperty("appTheme", resolved_theme)
+
+        self.wav_waveform_view.set_theme(resolved_theme)
+        self.preview_area.set_theme(resolved_theme)
+        QApplication.instance().setStyleSheet(
+            self._build_qt_theme_stylesheet(resolved_theme)
+        )
+        self._sync_theme_action_checks()
+
+    def _on_center_splitter_moved(self, _pos: int, _index: int) -> None:
+        self._current_center_splitter_ratio = self.current_center_splitter_ratio()
+
+    def _normalize_center_splitter_ratio(
+        self,
+        ratio: Sequence[int] | None,
+    ) -> tuple[int, int]:
+        if ratio is None or len(ratio) < 2:
+            return self.default_center_splitter_ratio()
+
+        try:
+            left_value = int(ratio[0])
+            right_value = int(ratio[1])
+        except (TypeError, ValueError, IndexError):
+            return self.default_center_splitter_ratio()
+
+        if left_value <= 0 or right_value <= 0:
+            return self.default_center_splitter_ratio()
+        return (left_value, right_value)
+
+    def _build_qt_theme_stylesheet(self, theme_name: str) -> str:
+        if theme_name == ThemeStrings.LIGHT:
+            colors = {
+                "window_bg": "#f4f6f8",
+                "panel_bg": "#ffffff",
+                "panel_alt_bg": "#f8fafc",
+                "surface_bg": "#ffffff",
+                "input_bg": "#ffffff",
+                "border": "#c9d2dc",
+                "border_strong": "#94a3b8",
+                "text": "#17212b",
+                "text_muted": "#5b6775",
+                "accent": "#2563eb",
+                "accent_hover": "#1d4ed8",
+                "accent_pressed": "#1e40af",
+                "menu_hover": "#dbeafe",
+                "menu_border": "#cbd5e1",
+                "selection_bg": "#bfdbfe",
+                "selection_text": "#0f172a",
+                "splitter": "#d7dee7",
+                "button_disabled_bg": "#e5e7eb",
+                "button_disabled_text": "#94a3b8",
+            }
+        else:
+            colors = {
+                "window_bg": "#1e232a",
+                "panel_bg": "#252b34",
+                "panel_alt_bg": "#2c3440",
+                "surface_bg": "#20262f",
+                "input_bg": "#1b2129",
+                "border": "#394150",
+                "border_strong": "#596274",
+                "text": "#e5e7eb",
+                "text_muted": "#aeb6c2",
+                "accent": "#3b82f6",
+                "accent_hover": "#60a5fa",
+                "accent_pressed": "#2563eb",
+                "menu_hover": "#334155",
+                "menu_border": "#475569",
+                "selection_bg": "#1d4ed8",
+                "selection_text": "#f8fafc",
+                "splitter": "#334155",
+                "button_disabled_bg": "#303744",
+                "button_disabled_text": "#7b8594",
+            }
+
+        return """
+QWidget#MainWindowRoot {{
+    background-color: {window_bg};
+    color: {text};
+}}
+QMenuBar#MainMenuBar {{
+    background-color: {panel_bg};
+    color: {text};
+    border: 1px solid {border};
+}}
+QMenuBar#MainMenuBar::item {{
+    background: transparent;
+    padding: 4px 10px;
+}}
+QMenuBar#MainMenuBar::item:selected {{
+    background-color: {menu_hover};
+}}
+QMenu {{
+    background-color: {panel_bg};
+    color: {text};
+    border: 1px solid {menu_border};
+}}
+QMenu::item {{
+    padding: 6px 22px 6px 22px;
+}}
+QMenu::item:selected {{
+    background-color: {menu_hover};
+}}
+QWidget#OperationPanel,
+QWidget#OperationGroup,
+QWidget#LeftInfoPanel,
+QWidget#RightDisplayContainer,
+QWidget#MorphUpperLimitRow,
+QWidget#CenterContentContainer,
+QWidget#InfoSection,
+QWidget#DisplaySection,
+QWidget#SectionHeader {{
+    background-color: {panel_bg};
+    color: {text};
+}}
+QFrame#StatusPanel {{
+    background-color: {panel_alt_bg};
+    color: {text};
+    border: 1px solid {border};
+    border-radius: 6px;
+}}
+QLabel {{
+    color: {text};
+    background: transparent;
+}}
+QLabel#SectionTitle {{
+    color: {text};
+    font-weight: 600;
+}}
+QLabel#StatusStateLabel {{
+    color: {text};
+    font-weight: 600;
+}}
+QLabel#StatusMessageLabel {{
+    color: {text_muted};
+}}
+QFrame#SectionDivider {{
+    color: {border_strong};
+    background-color: {border_strong};
+    max-height: 1px;
+}}
+QScrollBar#RightViewportScrollBar:horizontal {{
+    background-color: {surface_bg};
+    border: 1px solid {border};
+    border-radius: 6px;
+    min-height: 18px;
+    margin-top: 2px;
+}}
+QScrollBar#RightViewportScrollBar::handle:horizontal {{
+    background-color: {border_strong};
+    border-radius: 5px;
+    min-width: 28px;
+}}
+QScrollBar#RightViewportScrollBar::handle:horizontal:hover {{
+    background-color: {accent_hover};
+}}
+QScrollBar#RightViewportScrollBar::handle:horizontal:pressed {{
+    background-color: {accent};
+}}
+QScrollBar#RightViewportScrollBar::add-line:horizontal,
+QScrollBar#RightViewportScrollBar::sub-line:horizontal {{
+    width: 0px;
+    background: transparent;
+    border: none;
+}}
+QScrollBar#RightViewportScrollBar::add-page:horizontal,
+QScrollBar#RightViewportScrollBar::sub-page:horizontal {{
+    background-color: transparent;
+}}
+QScrollBar#RightViewportScrollBar:disabled {{
+    background-color: {button_disabled_bg};
+    border-color: {border};
+}}
+QScrollBar#RightViewportScrollBar::handle:horizontal:disabled {{
+    background-color: {button_disabled_text};
+}}
+QToolButton#OperationButton {{
+    background-color: {surface_bg};
+    color: {text};
+    border: 1px solid {border};
+    border-radius: 8px;
+    padding: 6px 8px;
+}}
+QToolButton#OperationButton:hover {{
+    border-color: {accent_hover};
+    background-color: {panel_alt_bg};
+}}
+QToolButton#OperationButton:pressed {{
+    border-color: {accent_pressed};
+    background-color: {menu_hover};
+}}
+QToolButton#OperationButton:checked {{
+    border-color: {accent};
+}}
+QToolButton#OperationButton:disabled {{
+    background-color: {button_disabled_bg};
+    color: {button_disabled_text};
+    border-color: {border};
+}}
+QPlainTextEdit,
+QDoubleSpinBox {{
+    background-color: {input_bg};
+    color: {text};
+    border: 1px solid {border};
+    border-radius: 6px;
+    selection-background-color: {selection_bg};
+    selection-color: {selection_text};
+}}
+QDoubleSpinBox {{
+    padding: 4px 6px;
+}}
+QDoubleSpinBox::up-button,
+QDoubleSpinBox::down-button {{
+    background-color: {surface_bg};
+    border-left: 1px solid {border};
+    width: 16px;
+}}
+QDoubleSpinBox::up-button:hover,
+QDoubleSpinBox::down-button:hover {{
+    background-color: {menu_hover};
+}}
+QSplitter#CenterSplitter::handle {{
+    background-color: {splitter};
+    width: 6px;
+}}
+""".format(**colors)
+
+    def _sync_theme_action_checks(self) -> None:
+        current_theme = self.current_theme()
+        for action, theme_name in (
+            (self.action_theme_dark, ThemeStrings.DARK),
+            (self.action_theme_light, ThemeStrings.LIGHT),
+        ):
+            previous_blocked = action.blockSignals(True)
+            action.setChecked(current_theme == theme_name)
             action.blockSignals(previous_blocked)
 
     def _on_show_30fps_lines_toggled(self, checked: bool) -> None:
@@ -953,9 +1463,10 @@ class MainWindow(QWidget):
         self.selected_wav_analysis = None
         self._invalidate_current_timing_plan()
         self._set_file_path_label(self.wav_path_label, "WAV", None)
-        self.wav_info_label.setText("WAV\u60c5\u5831: \u672a\u8aad\u307f\u8fbc\u307f")
+        self.wav_info_label.setText(MainWindowStrings.WAV_INFO_NOT_LOADED)
         self.wav_waveform_view.clear_morph_labels()
         self.wav_waveform_view.show_placeholder(placeholder_message)
+        self.preview_area.set_timeline_duration_sec(0.0)
 
     def _validate_wav_load_result(self, wav_info: WavAnalysisResult, waveform_preview) -> str | None:
         if wav_info.sample_rate_hz <= 0:
@@ -997,7 +1508,7 @@ class MainWindow(QWidget):
             return _fail_wav_load(
                 title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
                 message="WAV\u30d5\u30a1\u30a4\u30eb\u306e\u30d1\u30b9\u304c\u7a7a\u3067\u3059\u3002",
-                status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
+                status=StatusTexts.WAV_LOAD_FAILURE,
             )
 
         wav_path = Path(normalized_path)
@@ -1067,13 +1578,16 @@ class MainWindow(QWidget):
         self.selected_wav_analysis = wav_info
         self.playback_controller.set_wav_path(normalized_path)
         self._invalidate_current_timing_plan()
+        self.preview_area.set_timeline_duration_sec(wav_info.duration_sec)
         self._set_file_path_label(self.wav_path_label, "WAV", self.selected_wav_path)
         self.wav_info_label.setText(
-            "WAV\u60c5\u5831: "
-            f"\u30d5\u30a1\u30a4\u30eb\u540d={wav_path.name} / "
-            f"\u518d\u751f\u6642\u9593={wav_info.duration_sec:.3f}s / "
-            f"\u30b5\u30f3\u30d7\u30ea\u30f3\u30b0\u5468\u6ce2\u6570={wav_info.sample_rate_hz}Hz / "
-            f"\u767a\u8a71={wav_info.speech_start_sec:.3f}s-{wav_info.speech_end_sec:.3f}s"
+            MainWindowStrings.WAV_INFO_TEMPLATE.format(
+                file_name=wav_path.name,
+                duration_sec=wav_info.duration_sec,
+                sample_rate_hz=wav_info.sample_rate_hz,
+                speech_start_sec=wav_info.speech_start_sec,
+                speech_end_sec=wav_info.speech_end_sec,
+            )
         )
         self.wav_waveform_view.plot_waveform(
             waveform_preview.samples,
@@ -1095,7 +1609,7 @@ class MainWindow(QWidget):
                 self._show_warning(
                     title="読み込みエラー",
                     message=f"最近使ったTEXTを開けません: {recent_path_error}",
-                    status="出力状態: TEXT読込失敗",
+                    status=StatusTexts.TEXT_LOAD_FAILURE,
                 )
                 return
             if self._load_text_file(file_path):
@@ -1110,7 +1624,7 @@ class MainWindow(QWidget):
             self._show_warning(
                 title="\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc",
                 message=f"最近使ったTEXTの読み込み中に予期しないエラーが発生しました: {error}",
-                status="出力状態: TEXT読込失敗",
+                status=StatusTexts.TEXT_LOAD_FAILURE,
             )
 
     def _open_recent_wav_file(self, file_path: str) -> None:
@@ -1124,7 +1638,7 @@ class MainWindow(QWidget):
                 self._show_warning(
                     title="読み込みエラー",
                     message=f"最近使ったWAVを開けません: {recent_path_error}",
-                    status="出力状態: WAV読込失敗",
+                    status=StatusTexts.WAV_LOAD_FAILURE,
                 )
                 return
             if self._load_wav_file(file_path):
@@ -1139,7 +1653,7 @@ class MainWindow(QWidget):
             self._show_warning(
                 title="\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc",
                 message=f"最近使ったWAVの読み込み中に予期しないエラーが発生しました: {error}",
-                status="出力状態: WAV読込失敗",
+                status=StatusTexts.WAV_LOAD_FAILURE,
             )
 
     def _add_recent_text_file(self, file_path: str) -> None:
@@ -1251,7 +1765,7 @@ class MainWindow(QWidget):
             self._show_warning(
                 title="出力エラー",
                 message="VMDの保存先パスが空です。",
-                status="出力状態: 失敗",
+                status=StatusTexts.FAILURE,
             )
             return None
 
@@ -1263,7 +1777,7 @@ class MainWindow(QWidget):
             self._show_warning(
                 title="出力エラー",
                 message="VMDの保存先パスが不正です。",
-                status="出力状態: 失敗",
+                status=StatusTexts.FAILURE,
             )
             return None
 
@@ -1272,7 +1786,7 @@ class MainWindow(QWidget):
             self._show_warning(
                 title="出力エラー",
                 message="VMDの保存先パスが不正です。",
-                status="出力状態: 失敗",
+                status=StatusTexts.FAILURE,
             )
             return None
 
@@ -1282,7 +1796,7 @@ class MainWindow(QWidget):
                 self._show_warning(
                     title="出力エラー",
                     message="保存先にフォルダが指定されています。ファイル名を指定してください。",
-                    status="出力状態: 失敗",
+                    status=StatusTexts.FAILURE,
                 )
                 return None
 
@@ -1291,21 +1805,21 @@ class MainWindow(QWidget):
                 self._show_warning(
                     title="出力エラー",
                     message="保存先フォルダが不正です。",
-                    status="出力状態: 失敗",
+                    status=StatusTexts.FAILURE,
                 )
                 return None
             if parent_dir.exists() and not parent_dir.is_dir():
                 self._show_warning(
                     title="出力エラー",
                     message="保存先フォルダが不正です。",
-                    status="出力状態: 失敗",
+                    status=StatusTexts.FAILURE,
                 )
                 return None
         except OSError as error:
             self._show_warning(
                 title="出力エラー",
                 message=f"保存先の確認中にエラーが発生しました: {error}",
-                status="出力状態: 失敗",
+                status=StatusTexts.FAILURE,
             )
             return None
 
@@ -1383,23 +1897,26 @@ class MainWindow(QWidget):
             return
         except Exception as error:
             self._show_warning(
-                title="\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc",
-                message=f"\u51e6\u7406\u4e2d\u306b\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f: {error}",
-                status="\u51fa\u529b\u72b6\u614b: \u5931\u6557",
+                title=MainWindowStrings.UNEXPECTED_ERROR_TITLE,
+                message=MainWindowStrings.UNEXPECTED_ERROR_MESSAGE.format(error=error),
+                status=StatusTexts.FAILURE,
             )
             return
 
         QMessageBox.information(
             self,
-            "\u51fa\u529b\u5b8c\u4e86",
-            f"VMD\u3092\u51fa\u529b\u3057\u307e\u3057\u305f:\\n{result.output_path}",
+            MainWindowStrings.OUTPUT_COMPLETE_TITLE,
+            MainWindowStrings.OUTPUT_COMPLETE_MESSAGE.format(output_path=result.output_path),
         )
-        timing_label = "Whisper\u6642\u9593\u30a2\u30f3\u30ab\u30fc"
+        timing_label = MainWindowStrings.TIMING_LABEL_OUTPUT_WHISPER
         if not result.timing_source.startswith("whisper_"):
-            timing_label = "\u5747\u7b49\u914d\u5206(\u30d5\u30a9\u30fc\u30eb\u30d0\u30c3\u30af)"
+            timing_label = MainWindowStrings.TIMING_LABEL_FALLBACK
 
         self._set_output_status(
-            f"\u51fa\u529b\u72b6\u614b: \u6210\u529f ({result.output_path.name} / {timing_label})"
+            StatusTexts.SUCCESS_TEMPLATE.format(
+                output_name=result.output_path.name,
+                timing_label=timing_label,
+            )
         )
 
     def _run_processing(self) -> None:
@@ -1551,23 +2068,23 @@ class MainWindow(QWidget):
         self._update_action_states()
 
         if text_loaded and wav_loaded and not self.current_timing_plan:
-            self._set_output_status("\u51fa\u529b\u72b6\u614b: \u89e3\u6790\u672a\u5b9f\u884c (TEXT/WAV\u8aad\u8fbc\u6e08\u307f)")
+            self._set_output_status(StatusTexts.READY_ANALYSIS_PENDING)
             return
         if text_loaded and not wav_loaded:
-            self._set_output_status("\u51fa\u529b\u72b6\u614b: \u5165\u529b\u6e96\u5099\u4e2d (TEXT\u8aad\u8fbc\u6e08\u307f / WAV\u672a\u8aad\u8fbc)")
+            self._set_output_status(StatusTexts.READY_TEXT_ONLY)
             return
         if wav_loaded and not text_loaded:
-            self._set_output_status("\u51fa\u529b\u72b6\u614b: \u5165\u529b\u6e96\u5099\u4e2d (WAV\u8aad\u8fbc\u6e08\u307f / TEXT\u672a\u8aad\u8fbc)")
+            self._set_output_status(StatusTexts.READY_WAV_ONLY)
             return
         if not self.current_timing_plan:
-            self._set_output_status("\u51fa\u529b\u72b6\u614b: \u5165\u529b\u6e96\u5099\u4e2d (TEXT/WAV\u672a\u8aad\u8fbc)")
+            self._set_output_status(StatusTexts.READY_NOT_LOADED)
             return
 
         timing_source = self.current_timing_plan.source
         if timing_source.startswith("whisper_"):
-            timing_label = "Whisper\u533a\u9593\u914d\u5206"
+            timing_label = MainWindowStrings.TIMING_LABEL_READY_WHISPER
         else:
-            timing_label = "\u5747\u7b49\u914d\u5206(\u30d5\u30a9\u30fc\u30eb\u30d0\u30c3\u30af)"
+            timing_label = MainWindowStrings.TIMING_LABEL_FALLBACK
         self._set_output_status(
             f"\u51fa\u529b\u72b6\u614b: \u89e3\u6790\u5b9f\u884c\u6e08\u307f ({timing_label} / \u533a\u9593={len(self.current_timing_plan.anchors)} / \u6bcd\u97f3={len(self.current_timing_plan.timeline)})"
         )
@@ -1653,8 +2170,19 @@ class MainWindow(QWidget):
         can_zoom_in = action_states["can_zoom_in"]
         can_zoom_out = action_states["can_zoom_out"]
 
-        self.text_button.setEnabled(can_open_text)
-        self.wav_button.setEnabled(can_open_wav)
+        self.operation_panel.set_button_enabled_states(
+            {
+                "text": can_open_text,
+                "wav": can_open_wav,
+                "run": can_run,
+                "save": can_save,
+                "play": can_play,
+                "stop": can_stop,
+                "zoom_in": can_zoom_in,
+                "zoom_out": can_zoom_out,
+            }
+        )
+
         self.action_open_text.setEnabled(can_open_text)
         self.action_open_wav.setEnabled(can_open_wav)
         self.menu_recent_text.setEnabled(can_open_recent_text)
@@ -1665,12 +2193,6 @@ class MainWindow(QWidget):
             action.setEnabled(can_open_recent_wav)
         self.morph_upper_limit_input.setEnabled(can_adjust_morph_upper_limit)
 
-        self.process_button.setEnabled(can_run)
-        self.output_button.setEnabled(can_save)
-        self.play_button.setEnabled(can_play)
-        self.stop_button.setEnabled(can_stop)
-        self.zoom_in_button.setEnabled(can_zoom_in)
-        self.zoom_out_button.setEnabled(can_zoom_out)
         self.action_zoom_in.setEnabled(can_zoom_in)
         self.action_zoom_out.setEnabled(can_zoom_out)
         self.action_run_processing.setEnabled(can_run)

@@ -9,6 +9,8 @@ from matplotlib.lines import Line2D
 from matplotlib.transforms import blended_transform_factory
 from PySide6.QtCore import Qt, Signal
 
+from gui.i18n_strings import ThemeStrings
+
 _JP_FONT_FAMILIES = ["Yu Gothic", "Meiryo", "MS Gothic", "sans-serif"]
 _FRAME_RATE = 30.0
 
@@ -18,6 +20,39 @@ if TYPE_CHECKING:
 
 class WaveformView(FigureCanvas):
     pan_requested = Signal(float)
+
+    _THEME_COLORS = {
+        ThemeStrings.DARK: {
+            "figure_bg": "#20262f",
+            "axes_bg": "#20262f",
+            "placeholder_text": "#aeb6c2",
+            "waveform": "#7cc6fe",
+            "axis_text": "#d8dee9",
+            "grid": "#516072",
+            "frame_grid": "#6b7280",
+            "event_fill": "#334155",
+            "event_edge": "#94a3b8",
+            "label_text": "#d8dee9",
+            "cursor": "#f87171",
+            "spine": "#556072",
+            "tick": "#b8c0cc",
+        },
+        ThemeStrings.LIGHT: {
+            "figure_bg": "#ffffff",
+            "axes_bg": "#ffffff",
+            "placeholder_text": "#667085",
+            "waveform": "#2c7fb8",
+            "axis_text": "#344054",
+            "grid": "#d0d7de",
+            "frame_grid": "#98a2b3",
+            "event_fill": "#dbeafe",
+            "event_edge": "#93c5fd",
+            "label_text": "#344054",
+            "cursor": "#d62728",
+            "spine": "#cbd5e1",
+            "tick": "#667085",
+        },
+    }
 
     def __init__(self) -> None:
         self._figure = Figure(figsize=(5, 2), dpi=100)
@@ -42,11 +77,24 @@ class WaveformView(FigureCanvas):
         self._pan_press_cid: int | None = None
         self._pan_move_cid: int | None = None
         self._pan_release_cid: int | None = None
+        self._theme_name = ThemeStrings.DARK
+        self._placeholder_message = "Waveform preview (not loaded)"
         self.setMinimumHeight(140)
         self._connect_pan_interaction()
-        self.show_placeholder("Waveform preview (not loaded)")
+        self.show_placeholder(self._placeholder_message)
+
+    def set_theme(self, theme_name: str) -> None:
+        resolved_theme = self._normalize_theme_name(theme_name)
+        if self._theme_name == resolved_theme:
+            return
+        self._theme_name = resolved_theme
+        if self._samples:
+            self._render_waveform()
+            return
+        self.show_placeholder(self._placeholder_message)
 
     def show_placeholder(self, message: str) -> None:
+        self._placeholder_message = str(message)
         self._samples = []
         self._duration_sec = 0.0
         self._viewport_start_sec = None
@@ -62,14 +110,14 @@ class WaveformView(FigureCanvas):
         self._axes.text(
             0.5,
             0.5,
-            message,
+            self._placeholder_message,
             transform=self._axes.transAxes,
             ha="center",
             va="center",
             fontsize=9,
-            color="#666666",
+            color=self._theme_colors()["placeholder_text"],
         )
-        self._axes.set_frame_on(True)
+        self._apply_axes_theme()
         self._figure.tight_layout()
         self.draw_idle()
 
@@ -196,22 +244,38 @@ class WaveformView(FigureCanvas):
     def _render_waveform(self) -> None:
         self._axes.clear()
         self._playback_cursor_line = None
+        self._apply_axes_theme()
         if self._duration_sec > 0 and len(self._samples) > 1:
             step = self._duration_sec / (len(self._samples) - 1)
             x_values = [step * index for index in range(len(self._samples))]
-            self._axes.plot(x_values, self._samples, linewidth=0.8, color="#2c7fb8")
+            self._axes.plot(
+                x_values,
+                self._samples,
+                linewidth=0.8,
+                color=self._theme_colors()["waveform"],
+            )
             visible_start_sec, visible_end_sec = self._resolved_visible_range_sec()
             self._axes.set_xlim(visible_start_sec, visible_end_sec)
             self._axes.set_xlabel("Frame (30fps)")
             self._apply_frame_axis_ticks(visible_start_sec, visible_end_sec)
             self._draw_overlays()
         else:
-            self._axes.plot(self._samples, linewidth=0.8, color="#2c7fb8")
+            self._axes.plot(
+                self._samples,
+                linewidth=0.8,
+                color=self._theme_colors()["waveform"],
+            )
             self._axes.set_xlabel("Sample")
 
         self._axes.set_ylim(-1.05, 1.05)
-        self._axes.set_ylabel("Amp")
-        self._axes.grid(True, alpha=0.25, linestyle="-", linewidth=0.5)
+        self._axes.set_ylabel("")
+        self._axes.grid(
+            True,
+            alpha=0.3,
+            linestyle="-",
+            linewidth=0.5,
+            color=self._theme_colors()["grid"],
+        )
         self._figure.tight_layout()
         self.draw_idle()
 
@@ -251,7 +315,7 @@ class WaveformView(FigureCanvas):
             x_positions,
             ymin=-1.05,
             ymax=1.05,
-            colors="#888888",
+            colors=self._theme_colors()["frame_grid"],
             alpha=0.18,
             linestyles="--",
             linewidth=0.5,
@@ -275,8 +339,8 @@ class WaveformView(FigureCanvas):
             self._axes.axvspan(
                 clamped_start,
                 clamped_end,
-                facecolor="#f0f4ff",
-                edgecolor="#9bb0d9",
+                facecolor=self._theme_colors()["event_fill"],
+                edgecolor=self._theme_colors()["event_edge"],
                 alpha=0.22,
                 linewidth=0.4,
                 zorder=0.4,
@@ -305,7 +369,7 @@ class WaveformView(FigureCanvas):
                 ha="center",
                 va="top",
                 fontsize=9,
-                color="#444444",
+                color=self._theme_colors()["label_text"],
                 fontfamily=_JP_FONT_FAMILIES,
             )
 
@@ -324,7 +388,7 @@ class WaveformView(FigureCanvas):
             x=clamped_sec,
             ymin=0.0,
             ymax=1.0,
-            color="#d62728",
+            color=self._theme_colors()["cursor"],
             linewidth=1.2,
             alpha=0.95,
             zorder=9.0,
@@ -455,6 +519,26 @@ class WaveformView(FigureCanvas):
         major_labels = [str(frame) for frame in major_frames]
         self._axes.set_xticks(major_tick_seconds)
         self._axes.set_xticklabels(major_labels)
+
+    def _apply_axes_theme(self) -> None:
+        colors = self._theme_colors()
+        self._figure.patch.set_facecolor(colors["figure_bg"])
+        self._axes.set_facecolor(colors["axes_bg"])
+        self._axes.tick_params(axis="x", colors=colors["tick"])
+        self._axes.tick_params(axis="y", colors=colors["tick"])
+        self._axes.xaxis.label.set_color(colors["axis_text"])
+        self._axes.yaxis.label.set_color(colors["axis_text"])
+        for spine in self._axes.spines.values():
+            spine.set_color(colors["spine"])
+
+    def _theme_colors(self) -> dict[str, str]:
+        return self._THEME_COLORS[self._theme_name]
+
+    def _normalize_theme_name(self, theme_name: str) -> str:
+        resolved_theme = str(theme_name).strip().lower()
+        if resolved_theme not in ThemeStrings.SUPPORTED:
+            return ThemeStrings.DARK
+        return resolved_theme
 
     def _build_major_frame_ticks(self, start_sec: float, end_sec: float) -> list[int]:
         start_frame = max(0, self._seconds_to_frame_ceil(start_sec))
