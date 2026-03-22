@@ -1,4 +1,4 @@
-# MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
+﻿# MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
 
 ## 方針
 

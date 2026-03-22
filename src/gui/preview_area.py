@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import QWidget
 
+from gui.i18n_strings import ThemeStrings
 from gui.preview_transform import PREVIEW_ROW_VOWELS, PreviewData, PreviewRow, empty_preview_data
 
 _FRAME_RATE = 30.0
@@ -19,6 +20,30 @@ _ROW_COLORS: dict[str, QColor] = {
         ("#d1495b", "#edae49", "#66a182", "#2e86ab", "#5a4e7c"),
     )
 }
+_THEME_COLORS = {
+    ThemeStrings.DARK: {
+        "background": "#20262f",
+        "timeline_border": "#556072",
+        "axis_separator": "#4b5563",
+        "row_grid": "#3b4552",
+        "major_grid": "#556072",
+        "minor_grid": "#394150",
+        "axis_text": "#aeb6c2",
+        "row_label": "#e5e7eb",
+        "cursor": "#f87171",
+    },
+    ThemeStrings.LIGHT: {
+        "background": "#ffffff",
+        "timeline_border": "#cbd5e1",
+        "axis_separator": "#d9d9d9",
+        "row_grid": "#e6e6e6",
+        "major_grid": "#d5d5d5",
+        "minor_grid": "#ececec",
+        "axis_text": "#667085",
+        "row_label": "#333333",
+        "cursor": "#d62728",
+    },
+}
 
 
 class PreviewArea(QWidget):
@@ -27,15 +52,31 @@ class PreviewArea(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self._preview_data: PreviewData = empty_preview_data()
+        self._timeline_duration_sec: float = 0.0
         self._viewport_start_sec: float | None = None
         self._viewport_end_sec: float | None = None
         self._playback_position_sec: float | None = None
         self._pan_drag_active = False
         self._pan_drag_last_x: float | None = None
+        self._theme_name = ThemeStrings.DARK
         self.setMinimumHeight(140)
+
+    def set_theme(self, theme_name: str) -> None:
+        resolved_theme = self._normalize_theme_name(theme_name)
+        if self._theme_name == resolved_theme:
+            return
+        self._theme_name = resolved_theme
+        self.update()
 
     def set_preview_data(self, preview_data: PreviewData) -> None:
         self._preview_data = preview_data
+        self.update()
+
+    def set_timeline_duration_sec(self, duration_sec: float) -> None:
+        normalized_duration_sec = self._normalize_non_negative_sec(duration_sec)
+        if abs(self._timeline_duration_sec - normalized_duration_sec) <= 1e-6:
+            return
+        self._timeline_duration_sec = normalized_duration_sec
         self.update()
 
     def clear_preview(self) -> None:
@@ -74,7 +115,7 @@ class PreviewArea(QWidget):
         self.update()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if event.button() == Qt.LeftButton and self._pan_interaction_rect().contains(event.position()):
+        if event.button() == Qt.LeftButton and self._pan_interaction_rect().contains(self._event_position(event)):
             self._pan_drag_active = True
             self._pan_drag_last_x = float(event.position().x())
             self.setCursor(Qt.ClosedHandCursor)
@@ -121,9 +162,10 @@ class PreviewArea(QWidget):
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
+        colors = self._theme_colors()
 
         canvas = self.rect()
-        painter.fillRect(canvas, QColor("#ffffff"))
+        painter.fillRect(canvas, QColor(colors["background"]))
 
         if canvas.width() <= 4 or canvas.height() <= 4:
             return
@@ -155,10 +197,10 @@ class PreviewArea(QWidget):
         row_count = len(rows)
         row_height = row_timeline_rect.height() / max(row_count, 1)
 
-        painter.setPen(QPen(QColor("#cccccc"), 1))
+        painter.setPen(QPen(QColor(colors["timeline_border"]), 1))
         painter.drawRect(timeline_rect)
         if frame_axis_rect.height() > 0.0:
-            painter.setPen(QPen(QColor("#d9d9d9"), 1))
+            painter.setPen(QPen(QColor(colors["axis_separator"]), 1))
             painter.drawLine(
                 int(timeline_rect.left()),
                 int(frame_axis_rect.bottom()),
@@ -198,9 +240,12 @@ class PreviewArea(QWidget):
         return empty_preview_data().rows
 
     def _pan_interaction_rect(self) -> QRectF:
-        canvas = self.rect()
+        canvas = QRectF(self.rect())
         inner = canvas.adjusted(_OUTER_MARGIN, _OUTER_MARGIN, -_OUTER_MARGIN, -_OUTER_MARGIN)
         return inner.adjusted(_LABEL_WIDTH + _LABEL_TIMELINE_GAP, 0, 0, 0)
+
+    def _event_position(self, event: QMouseEvent) -> QPointF:
+        return QPointF(event.position())
 
     def _draw_row_label(
         self,
@@ -211,13 +256,13 @@ class PreviewArea(QWidget):
         vowel: str,
     ) -> None:
         label_rect = QRectF(inner.left(), top, 18, row_height)
-        painter.setPen(QColor("#333333"))
+        painter.setPen(QColor(self._theme_colors()["row_label"]))
         painter.drawText(label_rect, int(Qt.AlignVCenter | Qt.AlignCenter), vowel)
 
     def _draw_row_grid(self, painter: QPainter, row_rect: QRectF, row_index: int, row_count: int) -> None:
         if row_index + 1 >= row_count:
             return
-        painter.setPen(QPen(QColor("#e6e6e6"), 1))
+        painter.setPen(QPen(QColor(self._theme_colors()["row_grid"]), 1))
         painter.drawLine(
             int(row_rect.left()),
             int(row_rect.bottom()),
@@ -238,7 +283,7 @@ class PreviewArea(QWidget):
 
         visible_span_sec = visible_end_sec - visible_start_sec
         if visible_span_sec <= 0.0:
-            painter.setPen(QPen(QColor("#777777"), 1))
+            painter.setPen(QPen(QColor(self._theme_colors()["axis_text"]), 1))
             painter.drawText(
                 QRectF(frame_axis_rect.left() + 2.0, frame_axis_rect.top(), 32.0, frame_axis_rect.height()),
                 int(Qt.AlignLeft | Qt.AlignVCenter),
@@ -257,7 +302,7 @@ class PreviewArea(QWidget):
             major_frames,
         )
 
-        painter.setPen(QPen(QColor("#ececec"), 1))
+        painter.setPen(QPen(QColor(self._theme_colors()["minor_grid"]), 1))
         for frame_no in minor_frames:
             sec = self._frame_to_seconds(frame_no)
             x = self._seconds_to_x(sec, timeline_rect, visible_start_sec, visible_end_sec)
@@ -274,7 +319,7 @@ class PreviewArea(QWidget):
                 int(frame_axis_rect.bottom()),
             )
 
-        painter.setPen(QPen(QColor("#d5d5d5"), 1))
+        painter.setPen(QPen(QColor(self._theme_colors()["major_grid"]), 1))
         for frame_no in major_frames:
             sec = self._frame_to_seconds(frame_no)
             x = self._seconds_to_x(sec, timeline_rect, visible_start_sec, visible_end_sec)
@@ -285,7 +330,7 @@ class PreviewArea(QWidget):
                 int(timeline_rect.bottom()),
             )
 
-        painter.setPen(QPen(QColor("#666666"), 1))
+        painter.setPen(QPen(QColor(self._theme_colors()["axis_text"]), 1))
         metrics = painter.fontMetrics()
         min_spacing = 4.0
         last_label_right = -1e9
@@ -354,7 +399,7 @@ class PreviewArea(QWidget):
 
     def _resolved_visible_range_sec(self, rows: list[PreviewRow]) -> tuple[float, float]:
         full_start_sec = 0.0
-        full_end_sec = max(self._max_end_sec(rows), 0.0)
+        full_end_sec = max(self._timeline_duration_sec, self._max_end_sec(rows), 0.0)
         if full_end_sec <= full_start_sec:
             return (full_start_sec, full_start_sec)
         if self._viewport_start_sec is None or self._viewport_end_sec is None:
@@ -465,6 +510,15 @@ class PreviewArea(QWidget):
         clamped_ratio = min(max(ratio, 0.0), 1.0)
         return timeline_rect.left() + (timeline_rect.width() * clamped_ratio)
 
+    def _theme_colors(self) -> dict[str, str]:
+        return _THEME_COLORS[self._theme_name]
+
+    def _normalize_theme_name(self, theme_name: str) -> str:
+        resolved_theme = str(theme_name).strip().lower()
+        if resolved_theme not in ThemeStrings.SUPPORTED:
+            return ThemeStrings.DARK
+        return resolved_theme
+
     def _normalize_viewport_sec(self, start_sec: float, end_sec: float) -> tuple[float, float]:
         normalized_start = self._normalize_non_negative_sec(start_sec)
         normalized_end = self._normalize_non_negative_sec(end_sec)
@@ -509,7 +563,7 @@ class PreviewArea(QWidget):
         ratio = (self._playback_position_sec - visible_start_sec) / visible_span_sec
         x = timeline_rect.left() + (timeline_rect.width() * min(max(ratio, 0.0), 1.0))
 
-        painter.setPen(QPen(QColor("#d62728"), 1))
+        painter.setPen(QPen(QColor(self._theme_colors()["cursor"]), 1))
         painter.drawLine(
             int(x),
             int(timeline_rect.top()),

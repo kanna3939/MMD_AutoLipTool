@@ -1,4 +1,4 @@
-# MS8B Implementation Handoff
+﻿# MS8B Implementation Handoff
 
 ## 1. 文書目的
 

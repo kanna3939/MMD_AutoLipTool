@@ -1,4 +1,4 @@
-# Version Control Log
+﻿# Version Control Log
 
 このファイルは、セッション単位で変更内容を追記するためのログです。
 下へ追記して運用してください（既存エントリは編集せず、必要時のみ訂正注記を追加）。
@@ -18,6 +18,76 @@
   - <補足>
 - Verification:
   - <実行コマンドと結果>
+
+---
+
+## Entry 2026-03-22 / Session: ms9-final-doc-priority-and-receptacle-clarification
+
+- Date: 2026-03-22
+- Session: ms9-final-doc-priority-and-receptacle-clarification
+- Summary:
+  - MS9 詳細要件の正本を `docs/MS9_GUI_Requirements.md` とし、`Specification_Prompt_v3.md` より優先して解釈する方針を文書上で明示した。
+  - `Specification_Prompt_v3.md` の `StatusPanel` 記述を、単なる文字列表示器と誤読されないよう調整した。
+  - `i18n_strings.py` / `settings_store.py` について、「MS9 では全面導入不要だが、受け皿整理は対象」と読めるように整理した。
+- Modified Files:
+  - `docs/MS9_GUI_Requirements.md`: MS9 詳細要件の正本であること、全体仕様文書との優先順位、受け皿整理の扱いを明確化
+  - `docs/Specification_Prompt_v3.md`: `OperationPanel` / `StatusPanel` / 受け皿整理の解釈を MS9 要件書と衝突しない形へ調整
+  - `docs/Version_Control.md`: 本エントリを追記
+- Added Files:
+  - なし
+- Notes:
+  - 今回は文書整合作業のみで、コード実装や GUI 動作変更は行っていない。
+  - `docs/repo_milestone.md` は現時点の記述で十分と判断し、今回は更新対象から外した。
+- Verification:
+  - `docs/MS9_GUI_Requirements.md` / `docs/Specification_Prompt_v3.md` / `docs/repo_milestone.md` / `docs/Version_Control.md` の該当箇所を読解して優先順位と用語整合を確認
+
+---
+
+## Entry 2026-03-22 / Session: ms9-docs-alignment-and-milestone-restructure
+
+- Date: 2026-03-22
+- Session: ms9-docs-alignment-and-milestone-restructure
+- Summary:
+  - MS9 詳細要件を `docs/MS9_GUI_Requirements.md` 正本として扱う前提で、仕様書・README・版管理文書の参照関係を整理した。
+  - `Specification_Prompt_v3.md` では、実装済み GUI モジュールと未実装の予定ファイルを明示的に分離した。
+  - `README.md` の古い現状整理を、現行の `docs/` 配下文書構成と MS9 / MS10 前提に合わせて更新した。
+- Modified Files:
+  - `docs/Specification_Prompt_v3.md`: 予定ファイルの明示、実装済み責務と未実装予定責務の分離、MS9 正本位置づけの追記
+  - `README.md`: 文書参照先の整理、古いルート前提の現状整理を現行構成へ更新
+  - `docs/Version_Control.md`: 本エントリを追記
+- Added Files:
+  - なし
+- Notes:
+  - 今回はドキュメント整備のみで、ソースコードの編集・追加は行っていない。
+  - `docs/MS9_GUI_Requirements.md` は MS9 詳細要件の正本として扱う前提で整理した。
+- Verification:
+  - 文書相互参照の整合を読解で確認
+  - `README.md` / `docs/Specification_Prompt_v3.md` / `docs/repo_milestone.md` / `docs/MS9_GUI_Requirements.md` の用語とマイルストーン番号を突き合わせて確認
+
+---
+
+## Entry 2026-03-22 / Session: ms8d2-zoom-center-basis-fix-and-docs-sync
+
+- Date: 2026-03-22
+- Session: ms8d2-zoom-center-basis-fix-and-docs-sync
+- Summary:
+  - MS8D-2 の Zoom 基準不一致を補正し、Pan 後の Zoom でも shared viewport の左端を 0.0 秒へ戻さず、現在 viewport の中心を保持して拡大縮小する挙動へ修正した。
+  - Zoom span の再計算時に WAV 全体長境界へ収める補正を追加し、全体表示・左右端近傍・不正値回避の導線を既存初期化/復帰ロジックと両立させた。
+  - `docs/repo_milestone.md`、`docs/MS8D-2_Requirements_and_Spec_Update.md`、`docs/Specification_Prompt_v3.md` に本修正内容を反映した。
+- Modified Files:
+  - `src/gui/main_window.py`: `_apply_zoom_level_to_shared_viewport()` を中心保持 Zoom に変更し、左右境界補正と全体表示復帰条件を追加
+  - `docs/repo_milestone.md`: 2026-03-22 の MS8D-2 完了メモへ Zoom 基準補正を追記
+  - `docs/MS8D-2_Requirements_and_Spec_Update.md`: Zoom の正しい基準と境界補正仕様、2026-03-22 実装修正メモを追記
+  - `docs/Specification_Prompt_v3.md`: Zoom In / Zoom Out の仕様に「現在 viewport の中心保持」を追記
+  - `docs/Version_Control.md`: 本エントリを追記
+- Added Files:
+  - なし
+- Notes:
+  - Pan 導線、shared viewport 同期、Zoom 有効/無効条件、初期化/復帰時の全体表示リセット導線は変更していない。
+  - 今回の修正は通常の Zoom 操作時のみの補正であり、MS8E 以降の作業は含まない。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m py_compile src\gui\main_window.py`
+  - `PYTHONPATH=src` 相当で `MainWindow._apply_zoom_level_to_shared_viewport()` のスタブ検証を実行し、Pan 後 Zoom、左右端近傍、全体表示復帰を確認
 
 ---
 
@@ -720,4 +790,47 @@
   - `git status --short` / `git branch --show-current` / `git remote -v`
   - `rg -n "Ver 0.3.5.4|0.3.5.4" README.md pyproject.toml src/gui/main_window.py docs/Specification_Prompt_v3.md docs/repo_milestone.md`
   - `.\.venv\Scripts\python.exe -m py_compile src\gui\main_window.py src\gui\view_sync.py src\gui\waveform_view.py src\gui\preview_area.py src\gui\operation_panel.py src\gui\playback_controller.py src\gui\preview_transform.py`
+---
+## Entry 2026-03-22 / Session: ms9-post-implementation-doc-sync-and-ms9-2-handoff
+
+- Date: 2026-03-22
+- Session: ms9-post-implementation-doc-sync-and-ms9-2-handoff
+- Summary:
+  - MS9 本体実装、および MS9 追加改修として導入した右表示領域共通の横スクロールバー実装後の到達状態を、主要ドキュメントへ同期。
+  - 文書上で、MS9 本体完了、右表示領域共通 scrollbar の実装済み範囲、関連不具合修正（PreviewArea 末尾伸び補正 / PreviewArea mousePressEvent 型整合 / 端部クランプ時体感改善）を明文化。
+  - 次セッションでは見た目調整や最終 UX 微修正を `MS9-2` として扱う方針を README / milestone / specification に明示。
+- Modified Files:
+  - `README.md`: MS9 実装済み内容、右表示領域共通 scrollbar 追加改修、次セッション `MS9-2` 予定を追記。
+  - `docs/repo_milestone.md`: MS9 完了状態、scrollbar 追加改修の到達点、`MS9-2` の位置づけを追記。
+  - `docs/Specification_Prompt_v3.md`: MS9 実装反映済み事項、scrollbar 追加改修の扱い、`MS9-2` の範囲を追記。
+  - `docs/Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし
+- Notes:
+  - 本エントリは文書整備のみであり、コードファイルの追加修正は含まない。
+  - バージョン番号は引き続き `Ver 0.3.5.4` を維持し、今回はリリース同期ではなく実装到達状態の整理に留める。
+- Verification:
+  - `git diff -- README.md docs/repo_milestone.md docs/Specification_Prompt_v3.md docs/Version_Control.md`
+  - 文書更新のみであることを確認。
+---
+## Entry 2026-03-22 / Session: release-v0355-local-checkpoint
+
+- Date: 2026-03-22
+- Session: release-v0355-local-checkpoint
+- Summary:
+  - ここまでの MS9 本体、MS9 追加改修（右表示領域共通横スクロールバー）、関連不具合修正、および文書整備までをローカル区切りとして `Ver 0.3.5.5` に同期。
+  - GitHub 側への push は行わず、ローカルコミット用の版数同期に留める。
+- Modified Files:
+  - `README.md`: 版数表記を `Ver 0.3.5.5` に更新。
+  - `pyproject.toml`: プロジェクトバージョンを `0.3.5.5` に更新。
+  - `src/gui/i18n_strings.py`: バージョン情報ダイアログのアプリ版数表記を `Ver 0.3.5.5` に更新。
+  - `docs/Specification_Prompt_v3.md`: 対応リリースを `Ver 0.3.5.5` に更新。
+  - `docs/repo_milestone.md`: リポジトリ全体の反映版表記を `Ver 0.3.5.5` に更新。
+  - `docs/Version_Control.md`: 本エントリを追記。
+- Added Files:
+  - なし
+- Notes:
+  - 本エントリはローカルチェックポイント作成のための版数同期であり、GitHub 側の同期は含まない。
+- Verification:
+  - `rg -n "Ver 0.3.5.5|0.3.5.5" README.md pyproject.toml src/gui/i18n_strings.py docs/Specification_Prompt_v3.md docs/repo_milestone.md`
 ---

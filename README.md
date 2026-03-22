@@ -2,7 +2,7 @@
 
 ## Version
 
-Ver 0.3.5.4
+Ver 0.3.5.5
 
 ## 概要
 
@@ -106,6 +106,36 @@ UTF-8 のテキスト 1 ファイルと PCM WAV 1 ファイルを入力し、母
 - Pan 操作を導入し、波形表示と Preview Area の共通ビューポートを同期移動可能化（境界クランプあり）
 - TEXT/WAV パス表示を中間省略 + tooltip フルパスへ更新
 - `pipeline.py` / `writer.py` / `whisper_timing.py` / `preview_transform.py` の責務は拡張せず維持
+
+## 直近更新（2026-03-22 / MS9）
+
+- `main_window.py` の GUI 構築責務を、`central_panels.py` を含むパネル / コンテナ構造へ分散
+- 左情報表示領域を独立パネル化し、右表示領域を `WaveformView + PreviewArea` の独立コンテナとして整理
+- 中央領域を `QSplitter` ベースへ再編し、初期比率を `左35 : 右65` として扱う構造へ移行
+- `OperationPanel` を 3 グループ構造・アイコン + 文字・折り返し配置対応へ整理
+- `StatusPanel` を「状態表示 + メッセージ表示」の 2 領域構成へ整理
+- `i18n_strings.py` を追加し、主要 GUI 文言の受け皿を整備
+- View メニューにテーマ切替導線を追加し、初期テーマをダークとして整理
+- Qt 側テーマ適用と、`WaveformView` / `PreviewArea` 側のテーマ追従を追加
+- 波形表示上の `Amp` 表示を削除
+- 左右分割比率 / テーマ状態の取得・適用受け皿を追加
+- 分析終了時の Windows 標準通知音を追加
+
+## 直近更新（2026-03-22 / MS9 追加改修: 右表示領域共通横スクロールバー）
+
+- 右表示領域下部に、`WaveformView` / `PreviewArea` 共通の横スクロールバーを追加
+- スクロールバーは shared viewport の開始位置を動かす補助手段として実装し、既存のドラッグ Pan は維持
+- Zoom 後も scrollbar の `value / range / pageStep` が shared viewport に追従するよう調整
+- WAV 未読込時および横移動余地なし時は、スクロールバーを表示したまま無効化
+- `PreviewArea` は母音データ終端ではなく WAV 全長基準で viewport を解釈するよう修正し、末尾側での伸びを防止
+- 端部クランプ時は、shared viewport の中心保持を壊さずに scrollbar 表示値を端へ寄せ、体感上の違和感を軽減
+- `PreviewArea` の `QRect.contains(QPointF)` 例外を解消
+
+## 次セッション予定（MS9-2）
+
+- MS9 本体と追加改修の上に、見た目調整・余白調整・最終 UX の微修正を `MS9-2` として継続する
+- 主対象は外観 / 視認性 / 細部操作感であり、shared viewport の正本責務や再生制御仕様の再設計は行わない前提
+- 特に、右表示領域共通スクロールバーの見た目馴染ませ、端部近傍 UX の実機微調整、splitter リサイズ時の見え方確認を次段で扱う
 
 ## MS8A 完了時点メモ（2026-03-20）
 
@@ -235,35 +265,49 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1 -Clean -SmokeLaunch
 - `build.ps1`: Windows用の標準ビルドコマンド
 - `MMD_AutoLipTool.spec`: PyInstallerの固定ビルド設定
 
-## 現状整理（2026-03-19）
+## 文書の参照先
+
+- 全体仕様: `docs/Specification_Prompt_v3.md`
+- マイルストーン管理: `docs/repo_milestone.md`
+- 変更履歴ログ: `docs/Version_Control.md`
+- MS9 詳細要件: `docs/MS9_GUI_Requirements.md`
+
+## 現状整理（2026-03-22）
 
 1. 現在のフォルダ構成（要点）
-    - `src/`, `tests/`, `sample/`, `build/`, `dist/`
-    - ルート主要ファイル: `README.md`, `Specification_Prompt_v2.md`, `repo_milestone.md`, `Version_Control.md`, `requirements.txt`, `pyproject.toml`, `build.ps1`, `MMD_AutoLipTool.spec`
+    - `src/`, `tests/`, `sample/`, `build/`, `dist/`, `docs/`, `assets/`
+    - 主要文書は `docs/` 配下で管理する
 
-2. エントリーポイント候補
+2. エントリーポイント
     - 本命: `src/main.py`（PySide6 GUI起動）
     - 補助: `src/test_gui.py`（最小GUI動作確認）
 
-3. GUI関連ファイル候補
+3. GUI関連の実装中心
     - `src/gui/main_window.py`
+    - `src/gui/operation_panel.py`
+    - `src/gui/status_panel.py`
     - `src/gui/waveform_view.py`
-    - `src/gui/__init__.py`
+    - `src/gui/preview_area.py`
+    - `src/gui/view_sync.py`
+    - `src/gui/playback_controller.py`
+    - `src/gui/preview_transform.py`
 
-4. 今の状態で不足している主要ファイル（運用観点）
+4. 未実装の予定ファイル
+    - `src/gui/frame_utils.py`
+    - `src/gui/i18n_strings.py`
+    - `src/gui/settings_store.py`
+    - `src/gui/layout_helpers.py`
+    - いずれも将来導入予定であり、2026-03-22 時点では未作成
+
+5. 今の状態で不足している主要ファイル（運用観点）
     - `LICENSE`（配布時の明示）
-    - `src/app_io/` 系の責務分離（現状は `core` と `gui` に集約）
+    - `src/app_io/` 系の責務分離（現状は `core` と `gui` に集約、必要時に段階導入）
     - 配布物向けチェックリスト/リリースノート雛形（任意）
-
-5. 最小構成で進める場合の推奨ディレクトリ構成
-    - `src/main.py`
-    - `src/core/`（処理ロジック）
-    - `src/gui/`（UI）
-    - `src/vmd_writer/`（VMD出力）
-    - `src/app_io/`（I/O責務、段階導入）
-    - `tests/`, `sample/`
 
 6. 未実装の内容（現時点）
     - 強制アライメントによる厳密音素境界
     - 高度な音響特徴量ベース最適化
     - 音量連動の詳細チューニングUI（マッピング調整・プリセット等）
+    - 多言語化（MS10）
+    - 設定永続化（MS10）
+    - MS9-2 として扱う見た目最終調整 / 余白微調整 / 実機 UX 微修正

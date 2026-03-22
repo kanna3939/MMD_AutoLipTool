@@ -1,4 +1,4 @@
-# MMD AutoLip Tool 仕様書 v2
+﻿# MMD AutoLip Tool 仕様書 v2
 
 ## 0. 文書情報
 

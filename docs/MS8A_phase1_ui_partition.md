@@ -1,4 +1,4 @@
-# MS8A Phase1 UI Partition
+﻿# MS8A Phase1 UI Partition
 
 ## Scope
 - Phase1 performs only UI partitioning and responsibility clarification for `src/gui/main_window.py`.

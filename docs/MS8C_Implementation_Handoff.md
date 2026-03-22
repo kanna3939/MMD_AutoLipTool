@@ -1,4 +1,4 @@
-# MS8C Implementation Handoff
+﻿# MS8C Implementation Handoff
 
 ## 1. Scope
 MS8C introduced playback control and shared-position synchronization on top of MS8B static preview/waveform rendering.
