@@ -9,7 +9,7 @@ try:
 except ImportError:  # pragma: no cover - non-Windows fallback
     winsound = None
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from core import (
     PipelineError,
     TextProcessingError,
@@ -50,7 +50,15 @@ _PLAYBACK_STATUS_PREFIX = StatusTexts.PLAYBACK
 _DEFAULT_ZOOM_LEVELS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0)
 _PATH_DISPLAY_MAX_FULL_LENGTH = 48
 _DEFAULT_THEME = ThemeStrings.DARK
-_DEFAULT_CENTER_SPLITTER_RATIO = (35, 65)
+_DEFAULT_WINDOW_WIDTH = 1270
+_DEFAULT_WINDOW_HEIGHT = 714
+_MIN_WINDOW_WIDTH = 720
+_MIN_WINDOW_HEIGHT = 405
+_DEFAULT_CENTER_SPLITTER_RATIO = (30, 70)
+_DEFAULT_UI_FONT_FAMILY = '"Yu Gothic UI", "Meiryo", sans-serif'
+_DEFAULT_UI_FONT_SIZE_PT = 11
+_MAIN_LAYOUT_MARGIN = 6
+_MAIN_LAYOUT_SPACING = 6
 _VIEWPORT_SCROLLBAR_UNITS_PER_SEC = 1000
 _UI_SETTING_KEY_THEME = "theme"
 _UI_SETTING_KEY_CENTER_SPLITTER_RATIO = "center_splitter_ratio"
@@ -61,7 +69,8 @@ class MainWindow(QWidget):
         super().__init__()
         self.setObjectName("MainWindowRoot")
         self.setWindowTitle(MainWindowStrings.WINDOW_TITLE)
-        self.resize(760, 560)
+        self.resize(_DEFAULT_WINDOW_WIDTH, _DEFAULT_WINDOW_HEIGHT)
+        self.setMinimumSize(_MIN_WINDOW_WIDTH, _MIN_WINDOW_HEIGHT)
 
         self.selected_text_path: str | None = None
         self.selected_wav_path: str | None = None
@@ -83,6 +92,13 @@ class MainWindow(QWidget):
         self._current_center_splitter_ratio = _DEFAULT_CENTER_SPLITTER_RATIO
 
         layout = QVBoxLayout()
+        layout.setContentsMargins(
+            _MAIN_LAYOUT_MARGIN,
+            _MAIN_LAYOUT_MARGIN,
+            _MAIN_LAYOUT_MARGIN,
+            _MAIN_LAYOUT_MARGIN,
+        )
+        layout.setSpacing(_MAIN_LAYOUT_SPACING)
         self.menu_bar = self._build_menu_bar()
         self.menu_bar.setObjectName("MainMenuBar")
         layout.setMenuBar(self.menu_bar)
@@ -144,6 +160,7 @@ class MainWindow(QWidget):
         layout.addWidget(self.status_panel)
 
         self.setLayout(layout)
+        QTimer.singleShot(0, self._apply_initial_center_splitter_ratio)
         self._update_action_states()
 
     def _connect_playback_layer(self) -> None:
@@ -901,7 +918,9 @@ class MainWindow(QWidget):
         self._current_center_splitter_ratio = resolved_ratio
         self.center_splitter.setStretchFactor(0, resolved_ratio[0])
         self.center_splitter.setStretchFactor(1, resolved_ratio[1])
-        self.center_splitter.setSizes(list(resolved_ratio))
+        self.center_splitter.setSizes(
+            self._build_center_splitter_sizes_from_ratio(resolved_ratio)
+        )
         return resolved_ratio
 
     def default_ui_settings(self) -> dict[str, object]:
@@ -955,6 +974,9 @@ class MainWindow(QWidget):
     def _on_center_splitter_moved(self, _pos: int, _index: int) -> None:
         self._current_center_splitter_ratio = self.current_center_splitter_ratio()
 
+    def _apply_initial_center_splitter_ratio(self) -> None:
+        self.apply_center_splitter_ratio(self._current_center_splitter_ratio)
+
     def _normalize_center_splitter_ratio(
         self,
         ratio: Sequence[int] | None,
@@ -971,6 +993,24 @@ class MainWindow(QWidget):
         if left_value <= 0 or right_value <= 0:
             return self.default_center_splitter_ratio()
         return (left_value, right_value)
+
+    def _build_center_splitter_sizes_from_ratio(
+        self,
+        ratio: Sequence[int],
+    ) -> list[int]:
+        resolved_ratio = self._normalize_center_splitter_ratio(ratio)
+        total_ratio = resolved_ratio[0] + resolved_ratio[1]
+        if total_ratio <= 0:
+            return list(self.default_center_splitter_ratio())
+
+        available_width = max(
+            self.center_splitter.width(),
+            sum(self.center_splitter.sizes()),
+            total_ratio,
+        )
+        left_width = max((available_width * resolved_ratio[0]) // total_ratio, 1)
+        right_width = max(available_width - left_width, 1)
+        return [left_width, right_width]
 
     def _build_qt_theme_stylesheet(self, theme_name: str) -> str:
         if theme_name == ThemeStrings.LIGHT:
@@ -994,6 +1034,15 @@ class MainWindow(QWidget):
                 "splitter": "#d7dee7",
                 "button_disabled_bg": "#e5e7eb",
                 "button_disabled_text": "#94a3b8",
+                "morph_step_bg": "#eef2f7",
+                "morph_step_hover": "#dbeafe",
+                "morph_step_pressed": "#bfdbfe",
+                "morph_step_border": "#94a3b8",
+                "morph_step_text": "#17212b",
+                "morph_step_disabled_bg": "#e5e7eb",
+                "morph_step_disabled_text": "#94a3b8",
+                "ui_font_family": _DEFAULT_UI_FONT_FAMILY,
+                "ui_font_size": _DEFAULT_UI_FONT_SIZE_PT,
             }
         else:
             colors = {
@@ -1016,17 +1065,30 @@ class MainWindow(QWidget):
                 "splitter": "#334155",
                 "button_disabled_bg": "#303744",
                 "button_disabled_text": "#7b8594",
+                "morph_step_bg": "#475569",
+                "morph_step_hover": "#64748b",
+                "morph_step_pressed": "#94a3b8",
+                "morph_step_border": "#94a3b8",
+                "morph_step_text": "#f8fafc",
+                "morph_step_disabled_bg": "#303744",
+                "morph_step_disabled_text": "#7b8594",
+                "ui_font_family": _DEFAULT_UI_FONT_FAMILY,
+                "ui_font_size": _DEFAULT_UI_FONT_SIZE_PT,
             }
 
         return """
 QWidget#MainWindowRoot {{
     background-color: {window_bg};
     color: {text};
+    font-family: {ui_font_family};
+    font-size: {ui_font_size}pt;
 }}
 QMenuBar#MainMenuBar {{
     background-color: {panel_bg};
     color: {text};
     border: 1px solid {border};
+    font-family: {ui_font_family};
+    font-size: {ui_font_size}pt;
 }}
 QMenuBar#MainMenuBar::item {{
     background: transparent;
@@ -1067,6 +1129,8 @@ QFrame#StatusPanel {{
 QLabel {{
     color: {text};
     background: transparent;
+    font-family: {ui_font_family};
+    font-size: {ui_font_size}pt;
 }}
 QLabel#SectionTitle {{
     color: {text};
@@ -1124,7 +1188,9 @@ QToolButton#OperationButton {{
     color: {text};
     border: 1px solid {border};
     border-radius: 8px;
-    padding: 6px 8px;
+    padding: 4px 6px;
+    font-family: {ui_font_family};
+    font-size: {ui_font_size}pt;
 }}
 QToolButton#OperationButton:hover {{
     border-color: {accent_hover};
@@ -1150,19 +1216,31 @@ QDoubleSpinBox {{
     border-radius: 6px;
     selection-background-color: {selection_bg};
     selection-color: {selection_text};
+    font-family: {ui_font_family};
+    font-size: {ui_font_size}pt;
 }}
 QDoubleSpinBox {{
     padding: 4px 6px;
 }}
-QDoubleSpinBox::up-button,
-QDoubleSpinBox::down-button {{
-    background-color: {surface_bg};
-    border-left: 1px solid {border};
-    width: 16px;
+QToolButton#MorphStepButton {{
+    background-color: {morph_step_bg};
+    color: {morph_step_text};
+    border: 1px solid {morph_step_border};
+    border-radius: 4px;
+    padding: 0px;
+    font-family: {ui_font_family};
+    font-size: {ui_font_size}pt;
 }}
-QDoubleSpinBox::up-button:hover,
-QDoubleSpinBox::down-button:hover {{
-    background-color: {menu_hover};
+QToolButton#MorphStepButton:hover {{
+    background-color: {morph_step_hover};
+}}
+QToolButton#MorphStepButton:pressed {{
+    background-color: {morph_step_pressed};
+}}
+QToolButton#MorphStepButton:disabled {{
+    background-color: {morph_step_disabled_bg};
+    color: {morph_step_disabled_text};
+    border-color: {border};
 }}
 QSplitter#CenterSplitter::handle {{
     background-color: {splitter};
