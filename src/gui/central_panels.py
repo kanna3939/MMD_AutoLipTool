@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
@@ -10,6 +11,7 @@ from PySide6.QtWidgets import (
     QScrollBar,
     QSizePolicy,
     QSplitter,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -21,6 +23,12 @@ from gui.i18n_strings import (
 )
 from gui.preview_area import PreviewArea
 from gui.waveform_view import WaveformView
+
+_PANEL_SECTION_SPACING = 6
+_PANEL_STACK_SPACING = 6
+_MORPH_ROW_SPACING = 6
+_NUMERIC_INPUT_DISPLAY_WIDTH = 96
+_MORPH_STEP_BUTTON_WIDTH = 24
 
 
 class LeftInfoPanel(QWidget):
@@ -61,7 +69,7 @@ class LeftInfoPanel(QWidget):
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(_PANEL_STACK_SPACING)
         layout.addWidget(
             self._create_section(
                 LeftInfoPanelStrings.SECTION_TITLE_FILES,
@@ -112,7 +120,7 @@ class LeftInfoPanel(QWidget):
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(_PANEL_SECTION_SPACING)
         layout.addWidget(self._create_section_header(title))
         for widget in widgets:
             layout.addWidget(widget)
@@ -156,7 +164,7 @@ class RightDisplayContainer(QWidget):
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(_PANEL_STACK_SPACING)
         layout.addWidget(
             self._create_section(
                 RightDisplayStrings.SECTION_TITLE_WAVEFORM,
@@ -180,7 +188,7 @@ class RightDisplayContainer(QWidget):
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(_PANEL_SECTION_SPACING)
         layout.addWidget(self._create_section_header(title))
         layout.addWidget(content_widget, stretch)
         section.setLayout(layout)
@@ -239,13 +247,37 @@ class MorphUpperLimitRow(QWidget):
 
         self.label = QLabel(MorphUpperLimitStrings.LABEL, self)
         self.input = QDoubleSpinBox(self)
+        self.input.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.input.setRange(0.0, 10.0)
         self.input.setDecimals(4)
         self.input.setSingleStep(0.05)
         self.input.setValue(0.5)
+        self.input.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.input.setMinimumWidth(_NUMERIC_INPUT_DISPLAY_WIDTH)
+        self.input.setMaximumWidth(_NUMERIC_INPUT_DISPLAY_WIDTH)
+
+        self.decrement_button = QToolButton(self)
+        self.decrement_button.setObjectName("MorphStepButton")
+        self.decrement_button.setText("-")
+        self.decrement_button.setAutoRaise(False)
+        self.decrement_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.decrement_button.setFixedWidth(_MORPH_STEP_BUTTON_WIDTH)
+        self.decrement_button.clicked.connect(self.input.stepDown)
+
+        self.increment_button = QToolButton(self)
+        self.increment_button.setObjectName("MorphStepButton")
+        self.increment_button.setText("+")
+        self.increment_button.setAutoRaise(False)
+        self.increment_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.increment_button.setFixedWidth(_MORPH_STEP_BUTTON_WIDTH)
+        self.increment_button.clicked.connect(self.input.stepUp)
 
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(_MORPH_ROW_SPACING)
         layout.addWidget(self.label)
         layout.addWidget(self.input)
+        layout.addWidget(self.decrement_button)
+        layout.addWidget(self.increment_button)
+        layout.addStretch(1)
         self.setLayout(layout)

@@ -21,6 +21,56 @@
 
 ---
 
+## Entry 2026-03-22 / Session: release-sync-v0356
+
+- Date: 2026-03-22
+- Session: release-sync-v0356
+- Summary:
+  - 現作業ツリーの到達点を `Ver 0.3.5.6` としてリリース同期した。
+  - MS9-2 本実装、局所 UI 修正、関連文書更新を含む状態でバージョン表記を更新した。
+- Modified Files:
+  - `README.md`: 版数表記を `Ver 0.3.5.6` に更新
+  - `pyproject.toml`: プロジェクトバージョンを `0.3.5.6` に更新
+  - `src/gui/i18n_strings.py`: バージョン情報ダイアログのアプリ版数表記を `Ver 0.3.5.6` に更新
+  - `docs/Specification_Prompt_v3.md`: 対応リリースを `Ver 0.3.5.6` に更新
+  - `docs/repo_milestone.md`: リポジトリ全体の反映版表記を `Ver 0.3.5.6` に更新
+  - `docs/Version_Control.md`: 本エントリを追記
+- Added Files:
+  - なし
+- Notes:
+  - 設定永続化や多言語化本実装は含めず、MS10 以降へ持ち越す前提を維持している。
+- Verification:
+  - `rg -n "Ver 0.3.5.6|0.3.5.6" README.md pyproject.toml src/gui/i18n_strings.py docs/Specification_Prompt_v3.md docs/repo_milestone.md`
+
+---
+
+## Entry 2026-03-22 / Session: ms9-2-gui-polish-and-docs-sync
+
+- Date: 2026-03-22
+- Session: ms9-2-gui-polish-and-docs-sync
+- Summary:
+  - MS9-2 として、初期表示サイズ・初期 splitter 比率・操作ボタンの左詰め配置・assets アイコン差し替え・余白密度調整を段階実装した。
+  - モーフ上限値入力欄は短幅固定の `QDoubleSpinBox` を維持しつつ、内蔵スピンボタンを廃止して独立した `-` / `+` ボタン構成へ置換した。
+  - README / 仕様書 / マイルストーン管理文書へ、MS9-2 完了状態と局所修正後の到達点を反映した。
+- Modified Files:
+  - `src/gui/main_window.py`: MS9-2 の初期サイズ・初期 splitter 比率適用補正・テーマ内フォント/余白基準・モーフ入力部局所スタイルを反映
+  - `src/gui/operation_panel.py`: ボタン横長化抑制、主要ボタン 1 行表示、assets アイコン差し替え、左詰めグループ配置、行高調整を反映
+  - `src/gui/central_panels.py`: モーフ上限値入力欄の短幅固定と独立した `-` / `+` ボタン構成を反映
+  - `README.md`: MS9-2 完了状態と現状整理を反映
+  - `docs/repo_milestone.md`: MS9-2 完了メモを追記
+  - `docs/Specification_Prompt_v3.md`: 実装同期注記と MS9-2 反映済み事項を更新
+  - `docs/Version_Control.md`: 本エントリを追記
+- Added Files:
+  - なし
+- Notes:
+  - 設定永続化、多言語化本実装、shared viewport / playback / zoom / scrollbar の責務変更、波形 / Preview 描画ロジック変更は今回も対象外のまま維持した。
+  - `src/gui/i18n_strings.py` はリポジトリ実体ありのため、文書上の「未作成」扱いを解消した。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m py_compile src\gui\main_window.py src\gui\operation_panel.py src\gui\central_panels.py src\gui\status_panel.py`
+  - `QT_QPA_PLATFORM=offscreen` で `MainWindow` を生成し、初期サイズ `1270x714`、最小サイズ `720x405`、初期 splitter 実効比率、操作ボタン size hint、モーフ入力欄 size hint、assets アイコン適用を確認
+
+---
+
 ## Entry 2026-03-22 / Session: ms9-final-doc-priority-and-receptacle-clarification
 
 - Date: 2026-03-22

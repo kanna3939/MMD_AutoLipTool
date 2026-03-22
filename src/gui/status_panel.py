@@ -5,6 +5,10 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy
 
 from gui.i18n_strings import StatusPanelStrings
 
+_STATUS_PANEL_HORIZONTAL_MARGIN = 6
+_STATUS_PANEL_VERTICAL_MARGIN = 4
+_STATUS_PANEL_SPACING = 6
+
 
 class StatusPanel(QFrame):
     """Display-oriented status bar with status and message areas."""
@@ -31,8 +35,13 @@ class StatusPanel(QFrame):
         self._message_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
         layout = QHBoxLayout()
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(12)
+        layout.setContentsMargins(
+            _STATUS_PANEL_HORIZONTAL_MARGIN,
+            _STATUS_PANEL_VERTICAL_MARGIN,
+            _STATUS_PANEL_HORIZONTAL_MARGIN,
+            _STATUS_PANEL_VERTICAL_MARGIN,
+        )
+        layout.setSpacing(_STATUS_PANEL_SPACING)
         layout.addWidget(self._state_label)
         layout.addWidget(self._message_label, 1)
         self.setLayout(layout)

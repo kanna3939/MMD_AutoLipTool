@@ -69,7 +69,7 @@ class MainWindowStrings:
     PROCESSING_DIALOG_LABEL = "処理中です..."
     PROCESSING_DIALOG_TITLE = "処理中"
     VERSION_INFO_TITLE = "バージョン情報"
-    VERSION_INFO_APP_VERSION = "MMD AutoLip Tool Ver 0.3.5.5"
+    VERSION_INFO_APP_VERSION = "MMD AutoLip Tool Ver 0.3.5.6"
     OUTPUT_COMPLETE_TITLE = "出力完了"
     OUTPUT_COMPLETE_MESSAGE = "VMDを出力しました:\n{output_path}"
     UNEXPECTED_ERROR_TITLE = "予期しないエラー"
