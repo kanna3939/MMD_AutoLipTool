@@ -59,10 +59,10 @@ class StatusPanelStrings:
 
 class MainWindowStrings:
     WINDOW_TITLE = "MMD AutoLip Tool"
-    MENU_FILE = "File"
-    MENU_RUN = "Run"
-    MENU_VIEW = "View"
-    MENU_HELP = "Help"
+    MENU_FILE = "ファイル"
+    MENU_RUN = "処理"
+    MENU_VIEW = "ビュー"
+    MENU_HELP = "ヘルプ"
     MENU_VIEW_THEME = "テーマ"
     ACTION_THEME_DARK = "ダーク"
     ACTION_THEME_LIGHT = "ライト"
