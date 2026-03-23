@@ -50,8 +50,8 @@ _PLAYBACK_STATUS_PREFIX = StatusTexts.PLAYBACK
 _DEFAULT_ZOOM_LEVELS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0)
 _PATH_DISPLAY_MAX_FULL_LENGTH = 48
 _DEFAULT_THEME = ThemeStrings.DARK
-_DEFAULT_WINDOW_WIDTH = 1270
-_DEFAULT_WINDOW_HEIGHT = 714
+_DEFAULT_WINDOW_WIDTH = 1280
+_DEFAULT_WINDOW_HEIGHT = 740
 _MIN_WINDOW_WIDTH = 720
 _MIN_WINDOW_HEIGHT = 405
 _DEFAULT_CENTER_SPLITTER_RATIO = (30, 70)
@@ -1080,15 +1080,11 @@ class MainWindow(QWidget):
 QWidget#MainWindowRoot {{
     background-color: {window_bg};
     color: {text};
-    font-family: {ui_font_family};
-    font-size: {ui_font_size}pt;
 }}
 QMenuBar#MainMenuBar {{
     background-color: {panel_bg};
     color: {text};
     border: 1px solid {border};
-    font-family: {ui_font_family};
-    font-size: {ui_font_size}pt;
 }}
 QMenuBar#MainMenuBar::item {{
     background: transparent;
@@ -1189,8 +1185,6 @@ QToolButton#OperationButton {{
     border: 1px solid {border};
     border-radius: 8px;
     padding: 4px 6px;
-    font-family: {ui_font_family};
-    font-size: {ui_font_size}pt;
 }}
 QToolButton#OperationButton:hover {{
     border-color: {accent_hover};
