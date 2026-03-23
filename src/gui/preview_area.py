@@ -58,6 +58,7 @@ class PreviewArea(QWidget):
         self._playback_position_sec: float | None = None
         self._pan_drag_active = False
         self._pan_drag_last_x: float | None = None
+        self._waveform_plot_area_rect: tuple[float, float, float, float] | None = None
         self._theme_name = ThemeStrings.DARK
         self.setMinimumHeight(140)
 
@@ -78,6 +79,16 @@ class PreviewArea(QWidget):
             return
         self._timeline_duration_sec = normalized_duration_sec
         self.update()
+
+    def set_waveform_plot_area_rect(self, rect: tuple[float, float, float, float] | None) -> None:
+        if self._waveform_plot_area_rect == rect:
+            return
+        self._waveform_plot_area_rect = rect
+        self.update()
+
+    @property
+    def waveform_plot_area_rect(self) -> tuple[float, float, float, float] | None:
+        return self._waveform_plot_area_rect
 
     def clear_preview(self) -> None:
         self._preview_data = empty_preview_data()
@@ -171,9 +182,8 @@ class PreviewArea(QWidget):
             return
 
         margin = _OUTER_MARGIN
-        label_width = _LABEL_WIDTH
         inner = canvas.adjusted(margin, margin, -margin, -margin)
-        timeline_rect = inner.adjusted(label_width + _LABEL_TIMELINE_GAP, 0, 0, 0)
+        timeline_rect = self._resolve_timeline_rect(inner)
         if timeline_rect.width() <= 2.0 or timeline_rect.height() <= 2.0:
             return
 
@@ -218,7 +228,7 @@ class PreviewArea(QWidget):
         for row_index, row in enumerate(rows):
             top = row_timeline_rect.top() + (row_height * row_index)
             row_rect = QRectF(row_timeline_rect.left(), top, row_timeline_rect.width(), row_height)
-            self._draw_row_label(painter, inner, top, row_height, row.vowel)
+            self._draw_row_label(painter, inner, timeline_rect, top, row_height, row.vowel)
             self._draw_row_grid(painter, row_rect, row_index, row_count)
             self._draw_row_segments(
                 painter,
@@ -242,6 +252,12 @@ class PreviewArea(QWidget):
     def _pan_interaction_rect(self) -> QRectF:
         canvas = QRectF(self.rect())
         inner = canvas.adjusted(_OUTER_MARGIN, _OUTER_MARGIN, -_OUTER_MARGIN, -_OUTER_MARGIN)
+        return self._resolve_timeline_rect(inner)
+
+    def _resolve_timeline_rect(self, inner: QRectF) -> QRectF:
+        if self._waveform_plot_area_rect is not None:
+            plot_x, _, plot_width, _ = self._waveform_plot_area_rect
+            return QRectF(plot_x, inner.top(), plot_width, inner.height())
         return inner.adjusted(_LABEL_WIDTH + _LABEL_TIMELINE_GAP, 0, 0, 0)
 
     def _event_position(self, event: QMouseEvent) -> QPointF:
@@ -251,13 +267,16 @@ class PreviewArea(QWidget):
         self,
         painter: QPainter,
         inner: QRectF,
+        timeline_rect: QRectF,
         top: float,
         row_height: float,
         vowel: str,
     ) -> None:
-        label_rect = QRectF(inner.left(), top, 18, row_height)
+        label_right = timeline_rect.left() - _LABEL_TIMELINE_GAP
+        label_width = label_right - inner.left()
+        label_rect = QRectF(inner.left(), top, label_width, row_height)
         painter.setPen(QColor(self._theme_colors()["row_label"]))
-        painter.drawText(label_rect, int(Qt.AlignVCenter | Qt.AlignCenter), vowel)
+        painter.drawText(label_rect, int(Qt.AlignVCenter | Qt.AlignRight), vowel)
 
     def _draw_row_grid(self, painter: QPainter, row_rect: QRectF, row_index: int, row_count: int) -> None:
         if row_index + 1 >= row_count:
