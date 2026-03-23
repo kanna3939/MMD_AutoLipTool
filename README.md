@@ -1,4 +1,4 @@
-﻿# MMD AutoLip Tool
+# MMD AutoLip Tool
 
 ## Version
 
@@ -141,6 +141,14 @@ UTF-8 のテキスト 1 ファイルと PCM WAV 1 ファイルを入力し、母
 - モーフ上限値入力は短幅固定の `QDoubleSpinBox` を維持しつつ、内蔵スピンボタンを廃止して独立した `-` / `+` ボタンへ置換
 - モーフ上限値入力まわりはダーク / ライト両テーマで視認できる局所スタイルへ整理し、既存の値範囲・step・signal 接続は維持
 
+## 直近更新（2026-03-23 / SEC01・SEC02）
+
+- セキュリティおよび安全性向上を目的とする SEC01 / SEC02 の実装完了（Ver 0.3.5.6 同期維持）
+- TEXT文字数（5000字）、WAV再生時間（15分）、VMDフレーム数（22000フレーム）の絶対上限制御を追加
+- TEXTの異常文字、規定長超過行のエラー検証およびZWJ等を含む絵文字のホワイトリスト例外化を追加
+- TEXT読込時の文字コードフォールバック（UTF-8 → Shift_JIS → UTF-16）を追加
+- VMD保存時のファイル同名上書き確認ダイアログ制御を追加
+
 ## MS8A 完了時点メモ（2026-03-20）
 
 - ※以下は MS8A 完了時点の履歴メモ。
@@ -276,7 +284,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1 -Clean -SmokeLaunch
 - 変更履歴ログ: `docs/Version_Control.md`
 - MS9 詳細要件: `docs/MS9_GUI_Requirements.md`
 
-## 現状整理（2026-03-22）
+## 現状整理（2026-03-23）
 
 1. 現在のフォルダ構成（要点）
     - `src/`, `tests/`, `sample/`, `build/`, `dist/`, `docs/`, `assets/`
@@ -314,3 +322,4 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1 -Clean -SmokeLaunch
     - 音量連動の詳細チューニングUI（マッピング調整・プリセット等）
     - 多言語化（MS10）
     - 設定永続化（MS10）
+    - ※セキュリティ・安全性仕様（SEC01/SEC02）は Ver 0.3.5.6 にて実装済み

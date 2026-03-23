@@ -89,3 +89,8 @@ If an existing structure is already present, adapt to it instead of forcing a re
 - If repository context is unclear, inspect the current files first and summarize the structure before making broad edits.
 - If a task can be split into a safer first step, prefer the safer first step.
 - If asked to implement something large, propose a minimal first milestone before expanding.
+
+## Language
+
+- Use language Japanese.
+- 日本語で会話を行い、日本語で回答すること。

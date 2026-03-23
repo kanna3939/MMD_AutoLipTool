@@ -21,6 +21,32 @@
 
 ---
 
+## Entry 2026-03-23 / Session: sec01-sec02-implementation
+
+- Date: 2026-03-23
+- Session: sec01-sec02-implementation
+- Summary:
+  - セキュリティおよび安全性向上を目的とする「実装リストSEC01」「実装リストSEC02」を実装完了した。
+  - TEXT長・WAV長・VMD上限フレーム数の静的ガード（SEC01）と、詳細なTEXT/WAVバリデーション、VMD上書き防止（SEC02）を組み込んだ。
+  - バージョン表記は `Ver 0.3.5.6` を維持し、ドキュメントのみ同期更新した。
+- Modified Files:
+  - `src/core/text_processing.py`: TEXT制限（上限5000字、制御文字、行長、記号長大行）、ZWJ等のホワイトリスト化を追加
+  - `src/core/audio_processing.py`: WAV制限（上限15分）、非対応フォーマット例外のメッセージ改善を追加
+  - `src/vmd_writer/writer.py`: VMD上限（22000フレーム）の安全ガードを追加
+  - `src/gui/main_window.py`: TEXT文字コードフォールバック読込、VMD上書き確認ダイアログを追加
+  - `tests/test_text_processing.py`: 絵文字（ZWJ等）許容パターンのテストを追加
+  - `docs/repo_milestone.md`: SEC01/SEC02 進捗メモを追記
+  - `docs/Version_Control.md`: 本エントリを追記
+- Added Files:
+  - なし
+- Notes:
+  - バージョン表記（`Ver 0.3.5.6`）は変更していない。
+  - 絵文字（ZWJ等）が制御文字として弾かれるバグを SEC02 フェーズ4 で併せて解決済み。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m unittest discover -s tests` を実行し、全件（37件）PASSを確認。
+
+---
+
 ## Entry 2026-03-22 / Session: release-sync-v0356
 
 - Date: 2026-03-22
@@ -884,3 +910,23 @@
 - Verification:
   - `rg -n "Ver 0.3.5.5|0.3.5.5" README.md pyproject.toml src/gui/i18n_strings.py docs/Specification_Prompt_v3.md docs/repo_milestone.md`
 ---
+
+## Entry 2026-03-23 / Session: app-icon-and-splash-screen
+
+- Date: 2026-03-23
+- Session: app-icon-and-splash-screen
+- Summary:
+  - アプリケーションアイコン（GUIおよびEXE本体）を設定した。
+  - アプリ起動時のスプラッシュスクリーン表示処理（QSplashScreen）を追加した。
+  - PyInstaller環境とローカル開発環境の両方でリソースパスを安全に解決する仕組みを導入した。
+- Modified Files:
+  - `src/main.py`: パス解決処理、アプリアイコン適用（タスクバーID宣言含む）、スプラッシュスクリーン表示処理を追加。
+  - `MMD_AutoLipTool.spec`: EXEファイルへのアイコン設定、アセット画像の同梱指定を追加。
+  - `docs/Version_Control.md`: 本エントリを追記。
+  - `docs/Specification_Prompt_v3.md`: アイコンとスプラッシュに関する仕様を追記。
+- Added Files:
+  - なし
+- Notes:
+  - アセット画像（`assets/icons/MMD_AutoLipTool.ico`, `assets/MMD_AutoLipTool_splash.png`）の存在を前提とする。
+- Verification:
+  - ローカル実行およびビルド後のEXE起動にて、タスクバー・タイトルバーのアイコンとスプラッシュの表示を確認。

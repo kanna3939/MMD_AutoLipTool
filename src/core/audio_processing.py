@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from math import sqrt
 import wave
 
+MAX_WAV_DURATION_SEC = 900.0
+
 RMS_WINDOW_MS = 25.0
 RMS_HOP_MS = 10.0
 RMS_SMOOTHING_FRAMES = 3
@@ -58,9 +60,16 @@ def analyze_wav_file(file_path: str, silence_threshold: float = 0.02) -> WavAnal
             if sample_width not in (1, 2, 3, 4):
                 raise ValueError(f"Unsupported sample width: {sample_width} bytes")
 
+            if sample_rate_hz not in (44100, 48000):
+                raise ValueError(f"Unsupported sample rate: {sample_rate_hz}Hz (Only 44.1kHz / 48kHz supported)")
+
+            duration_sec = frame_count / sample_rate_hz
+            if duration_sec > MAX_WAV_DURATION_SEC:
+                raise ValueError(f"WAV duration ({duration_sec:.1f}s) exceeds maximum limit ({MAX_WAV_DURATION_SEC}s).")
+
             raw_frames = wav_file.readframes(frame_count)
     except (wave.Error, EOFError) as error:
-        raise ValueError(f"Invalid WAV file: {error}") from error
+        raise ValueError(f"対応していないWAV形式（PCM以外等）、またはファイルが破損しています: {error}") from error
 
     duration_sec = frame_count / sample_rate_hz
     speech_range = _detect_speech_frame_range(
@@ -195,9 +204,16 @@ def _read_wav_pcm(file_path: str) -> tuple[int, int, int, int, bytes]:
             if sample_width not in (1, 2, 3, 4):
                 raise ValueError(f"Unsupported sample width: {sample_width} bytes")
 
+            if sample_rate_hz not in (44100, 48000):
+                raise ValueError(f"Unsupported sample rate: {sample_rate_hz}Hz (Only 44.1kHz / 48kHz supported)")
+
+            duration_sec = frame_count / sample_rate_hz
+            if duration_sec > MAX_WAV_DURATION_SEC:
+                raise ValueError(f"WAV duration ({duration_sec:.1f}s) exceeds maximum limit ({MAX_WAV_DURATION_SEC}s).")
+
             raw_frames = wav_file.readframes(frame_count)
     except (wave.Error, EOFError) as error:
-        raise ValueError(f"Invalid WAV file: {error}") from error
+        raise ValueError(f"対応していないWAV形式（PCM以外等）、またはファイルが破損しています: {error}") from error
 
     return sample_rate_hz, frame_count, channel_count, sample_width, raw_frames
 
