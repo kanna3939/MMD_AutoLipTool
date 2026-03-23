@@ -1410,19 +1410,26 @@ QSplitter#CenterSplitter::handle {{
                 status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
             )
 
+        text_content = None
         try:
-            text_content = text_path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            return _fail_text_load(
-                title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
-                message="UTF-8\u306eTEXT\u30d5\u30a1\u30a4\u30eb\u3067\u306f\u306a\u3044\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059\u3002",
-                status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
-            )
+            for encoding in ("utf-8", "shift_jis", "utf-16"):
+                try:
+                    text_content = text_path.read_text(encoding=encoding)
+                    break
+                except UnicodeDecodeError:
+                    continue
         except OSError as error:
             return _fail_text_load(
-                title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
-                message=f"TEXT\u30d5\u30a1\u30a4\u30eb\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093: {error}",
-                status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
+                title="読み込みエラー",
+                message=f"TEXTファイルを読み込めません: {error}",
+                status="出力状態: TEXT読込失敗",
+            )
+
+        if text_content is None:
+            return _fail_text_load(
+                title="読み込みエラー",
+                message="対応する文字コード（UTF-8, Shift_JIS, UTF-16）でTEXTファイルを読み込めませんでした。",
+                status="出力状態: TEXT読込失敗",
             )
 
         previous_text_state = None
@@ -1941,6 +1948,18 @@ QSplitter#CenterSplitter::handle {{
         out_path = self._resolve_vmd_output_path(output_path)
         if out_path is None:
             return
+
+        if Path(out_path).exists():
+            reply = QMessageBox.question(
+                self,
+                "上書き確認",
+                f"ファイル '{Path(out_path).name}' は既に存在します。\n上書きしてもよろしいですか？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.No:
+                self._set_output_status("出力状態: キャンセル")
+                return
 
         try:
             timing_plan = self._ensure_timing_plan()
