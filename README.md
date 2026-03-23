@@ -2,7 +2,7 @@
 
 ## Version
 
-Ver 0.3.5.6
+Ver 0.3.5.7
 
 ## 概要
 
@@ -286,7 +286,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1 -Clean -SmokeLaunch
 - 変更履歴ログ: `docs/Version_Control.md`
 - MS9 詳細要件: `docs/MS9_GUI_Requirements.md`
 
-## 現状整理（2026-03-23）
+## 現状整理（2026-03-24）
 
 1. 現在のフォルダ構成（要点）
     - `src/`, `tests/`, `sample/`, `build/`, `dist/`, `docs/`, `assets/`

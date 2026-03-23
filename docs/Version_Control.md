@@ -30,14 +30,17 @@
   - WaveformView（Matplotlib）のAxes物理座標を正基準とし、PreviewAreaが動的にその矩形をコピーして描画基準とする構造を導入した。
   - リサイズ、Zoom、Pan、スプリッター操作後も再通知経路（draw_event等）により整合が維持されることを確認した。
   - 母音ラベル（あ、い...）を右寄せにし、グリッドに隣接するように視認性を改善した。
+  - バージョンを `Ver 0.3.5.7` に更新し、リリース同期した。
 - Modified Files:
   - `src/gui/waveform_view.py`: plot area 矩形の外部取得メソッド追加、データ未ロード時のガード緩和
   - `src/gui/preview_area.py`: 外部から波形基準矩形を受け取って描画範囲を決定するよう変更、ラベル右寄せ、グリッド基準投影の修正
-  - `src/gui/main_window.py`: Matplotlib イベントフックによる同期要求パスの追加、初期/動的な同期配線
+  - `src/gui/main_window.py`: Matplotlib イベントフックによる同期要求パスの追加、初期/動的な同期配線、バージョン更新
+  - `pyproject.toml`: バージョン更新
+  - `README.md`: バージョン更新、横軸整合とラベル右寄せの改善追記
   - `docs/GUIFIX_Implementation_Plan.md`: 全フェーズ (1-10) の検証と結果を記録
-  - `docs/repo_milestone.md`: GUIFIX06 の完了を追記
-  - `docs/Version_Control.md`: 本エントリを追記
-  - `README.md`: 横軸整合とラベル右寄せの機能改善を追記
+  - `docs/repo_milestone.md`: GUIFIX06 の完了を追記、バージョン更新
+  - `docs/Specification_Prompt_v3.md`: 対応リリース更新
+  - `docs/Version_Control.md`: 本エントリを追加
 - Added Files:
   - なし
 - Notes:
