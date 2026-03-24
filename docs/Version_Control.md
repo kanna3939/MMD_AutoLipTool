@@ -1,4 +1,4 @@
-﻿# Version Control Log
+# Version Control Log
 
 このファイルは、セッション単位で変更内容を追記するためのログです。
 下へ追記して運用してください（既存エントリは編集せず、必要時のみ訂正注記を追加）。
@@ -18,6 +18,36 @@
   - <補足>
 - Verification:
   - <実行コマンドと結果>
+
+---
+
+## Entry 2026-03-23 / Session: guifix06-waveform-preview-alignment
+
+- Date: 2026-03-23
+- Session: guifix06-waveform-preview-alignment
+- Summary:
+  - 波形表示と母音プレビュー表示の横軸基準不一致問題（GUIFIX06）を解消した。
+  - WaveformView（Matplotlib）のAxes物理座標を正基準とし、PreviewAreaが動的にその矩形をコピーして描画基準とする構造を導入した。
+  - リサイズ、Zoom、Pan、スプリッター操作後も再通知経路（draw_event等）により整合が維持されることを確認した。
+  - 母音ラベル（あ、い...）を右寄せにし、グリッドに隣接するように視認性を改善した。
+  - バージョンを `Ver 0.3.5.7` に更新し、リリース同期した。
+- Modified Files:
+  - `src/gui/waveform_view.py`: plot area 矩形の外部取得メソッド追加、データ未ロード時のガード緩和
+  - `src/gui/preview_area.py`: 外部から波形基準矩形を受け取って描画範囲を決定するよう変更、ラベル右寄せ、グリッド基準投影の修正
+  - `src/gui/main_window.py`: Matplotlib イベントフックによる同期要求パスの追加、初期/動的な同期配線、バージョン更新
+  - `pyproject.toml`: バージョン更新
+  - `README.md`: バージョン更新、横軸整合とラベル右寄せの改善追記
+  - `docs/GUIFIX_Implementation_Plan.md`: 全フェーズ (1-10) の検証と結果を記録
+  - `docs/repo_milestone.md`: GUIFIX06 の完了を追記、バージョン更新
+  - `docs/Specification_Prompt_v3.md`: 対応リリース更新
+  - `docs/Version_Control.md`: 本エントリを追加
+- Added Files:
+  - なし
+- Notes:
+  - 既存の秒ベース同期ロジック（ViewSync）は維持しつつ、物理ピクセル投影の基準を波形側へ一本化した。
+  - 初期状態（データ未ロード）での不一致も Phase 9 で解消済み。
+- Verification:
+  - コード解析による論理検証。各イベント（resize/draw/pan/splitter）から `_request_waveform_bounds_sync` への到達を確認。
 
 ---
 

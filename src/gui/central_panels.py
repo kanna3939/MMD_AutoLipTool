@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
+    QScrollArea,
     QScrollBar,
     QSizePolicy,
     QSplitter,
@@ -42,13 +43,17 @@ class LeftInfoPanel(QWidget):
         self.wav_path_label = QLabel(LeftInfoPanelStrings.LABEL_WAV_PATH, self)
         self.text_path_label.setWordWrap(False)
         self.wav_path_label.setWordWrap(False)
+        self._apply_font9(self.text_path_label)
+        self._apply_font9(self.wav_path_label)
 
         self.text_preview_label = QLabel(LeftInfoPanelStrings.LABEL_TEXT_PREVIEW, self)
+        self._apply_font9(self.text_preview_label)
         self.text_preview = QPlainTextEdit(self)
         self.text_preview.setReadOnly(True)
         self.text_preview.setPlaceholderText(LeftInfoPanelStrings.PLACEHOLDER_TEXT_PREVIEW)
 
         self.hiragana_preview_label = QLabel(LeftInfoPanelStrings.LABEL_HIRAGANA_PREVIEW, self)
+        self._apply_font9(self.hiragana_preview_label)
         self.hiragana_preview = QPlainTextEdit(self)
         self.hiragana_preview.setReadOnly(True)
         self.hiragana_preview.setPlaceholderText(
@@ -56,21 +61,24 @@ class LeftInfoPanel(QWidget):
         )
 
         self.vowel_preview_label = QLabel(LeftInfoPanelStrings.LABEL_VOWEL_PREVIEW, self)
+        self._apply_font9(self.vowel_preview_label)
         self.vowel_preview = QPlainTextEdit(self)
         self.vowel_preview.setReadOnly(True)
         self.vowel_preview.setPlaceholderText(LeftInfoPanelStrings.PLACEHOLDER_VOWEL_PREVIEW)
 
         self.wav_info_label = QLabel(LeftInfoPanelStrings.LABEL_WAV_INFO, self)
         self.wav_info_label.setWordWrap(True)
+        self._apply_font9(self.wav_info_label)
+        self.wav_info_label.setMinimumHeight(36)
 
         self._configure_preview_edit(self.text_preview)
         self._configure_preview_edit(self.hiragana_preview)
         self._configure_preview_edit(self.vowel_preview)
 
-        layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(_PANEL_STACK_SPACING)
-        layout.addWidget(
+        inner_layout = QVBoxLayout()
+        inner_layout.setContentsMargins(0, 0, 0, 0)
+        inner_layout.setSpacing(_PANEL_STACK_SPACING)
+        inner_layout.addWidget(
             self._create_section(
                 LeftInfoPanelStrings.SECTION_TITLE_FILES,
                 [
@@ -79,7 +87,7 @@ class LeftInfoPanel(QWidget):
                 ],
             )
         )
-        layout.addWidget(
+        inner_layout.addWidget(
             self._create_section(
                 LeftInfoPanelStrings.SECTION_TITLE_TEXT,
                 [
@@ -88,7 +96,7 @@ class LeftInfoPanel(QWidget):
                 ],
             )
         )
-        layout.addWidget(
+        inner_layout.addWidget(
             self._create_section(
                 LeftInfoPanelStrings.SECTION_TITLE_CONVERSION,
                 [
@@ -99,7 +107,7 @@ class LeftInfoPanel(QWidget):
                 ],
             )
         )
-        layout.addWidget(
+        inner_layout.addWidget(
             self._create_section(
                 LeftInfoPanelStrings.SECTION_TITLE_AUDIO,
                 [
@@ -107,11 +115,29 @@ class LeftInfoPanel(QWidget):
                 ],
             )
         )
-        layout.addStretch(1)
-        self.setLayout(layout)
+        inner_layout.addStretch(1)
+
+        inner_widget = QWidget(self)
+        inner_widget.setObjectName("LeftInfoInnerWidget")
+        inner_widget.setLayout(inner_layout)
+
+        scroll_area = QScrollArea(self)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setWidget(inner_widget)
+
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(scroll_area)
+        self.setLayout(main_layout)
+
+    def _apply_font9(self, widget: QWidget) -> None:
+        current_style = widget.styleSheet()
+        widget.setStyleSheet(current_style + " font-size: 9pt;")
 
     def _configure_preview_edit(self, widget: QPlainTextEdit) -> None:
-        widget.setMinimumHeight(84)
+        self._apply_font9(widget)
+        widget.setFixedHeight(80)
         widget.setTabChangesFocus(True)
 
     def _create_section(self, title: str, widgets: list[QWidget]) -> QWidget:
