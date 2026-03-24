@@ -50,8 +50,8 @@ _PLAYBACK_STATUS_PREFIX = StatusTexts.PLAYBACK
 _DEFAULT_ZOOM_LEVELS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0)
 _PATH_DISPLAY_MAX_FULL_LENGTH = 48
 _DEFAULT_THEME = ThemeStrings.DARK
-_DEFAULT_WINDOW_WIDTH = 1270
-_DEFAULT_WINDOW_HEIGHT = 714
+_DEFAULT_WINDOW_WIDTH = 1280
+_DEFAULT_WINDOW_HEIGHT = 740
 _MIN_WINDOW_WIDTH = 720
 _MIN_WINDOW_HEIGHT = 405
 _DEFAULT_CENTER_SPLITTER_RATIO = (30, 70)
@@ -138,6 +138,7 @@ class MainWindow(QWidget):
         self.playback_controller = PlaybackController(self)
         self.view_sync = ViewSync(self)
         self._syncing_viewport_scrollbar = False
+        self._waveform_bounds_sync_pending = False
         self._sync_view_action_checks()
 
         self.morph_upper_limit_input.valueChanged.connect(self._on_morph_upper_limit_changed)
@@ -160,6 +161,12 @@ class MainWindow(QWidget):
         layout.addWidget(self.status_panel)
 
         self.setLayout(layout)
+
+        # Connect WaveformView resize signals to layout sync
+        self.wav_waveform_view._axes.callbacks.connect('xlim_changed', self._request_waveform_bounds_sync)
+        self.wav_waveform_view._figure.canvas.mpl_connect('resize_event', self._request_waveform_bounds_sync)
+        self.wav_waveform_view._figure.canvas.mpl_connect('draw_event', self._request_waveform_bounds_sync)
+
         QTimer.singleShot(0, self._apply_initial_center_splitter_ratio)
         self._update_action_states()
 
@@ -296,8 +303,20 @@ class MainWindow(QWidget):
     def _on_zoom_out_requested(self) -> None:
         self._step_zoom_level(-1)
 
+    def _request_waveform_bounds_sync(self, *args, **kwargs) -> None:
+        if self._waveform_bounds_sync_pending:
+            return
+        self._waveform_bounds_sync_pending = True
+        QTimer.singleShot(0, self._sync_waveform_bounds_to_preview)
+
+    def _sync_waveform_bounds_to_preview(self) -> None:
+        self._waveform_bounds_sync_pending = False
+        rect = self.wav_waveform_view.plot_area_rect
+        self.preview_area.set_waveform_plot_area_rect(rect)
+
     def _on_pan_requested(self, delta_sec: float) -> None:
         self._apply_pan_delta_to_shared_viewport(delta_sec)
+        self._request_waveform_bounds_sync()
 
     def _on_viewport_scrollbar_value_changed(self, raw_value: int) -> None:
         if self._syncing_viewport_scrollbar:
@@ -323,6 +342,7 @@ class MainWindow(QWidget):
         )
         resolved_end_sec = min(resolved_start_sec + current_span_sec, duration_sec)
         self.view_sync.update_shared_viewport_sec(resolved_start_sec, resolved_end_sec)
+        self._request_waveform_bounds_sync()
 
     def _step_zoom_level(self, step: int) -> None:
         if step == 0:
@@ -337,6 +357,7 @@ class MainWindow(QWidget):
         self._zoom_level_index = next_index
         self._apply_zoom_level_to_shared_viewport()
         self._update_action_states()
+        self._request_waveform_bounds_sync()
 
     def _apply_zoom_level_to_shared_viewport(self) -> None:
         if not self._has_loaded_wav_for_viewport():
@@ -629,8 +650,10 @@ class MainWindow(QWidget):
         )
         if resolved_end_sec <= resolved_start_sec:
             self._apply_zoom_level_to_shared_viewport()
+            self._request_waveform_bounds_sync()
             return
         self.view_sync.update_shared_viewport_sec(resolved_start_sec, resolved_end_sec)
+        self._request_waveform_bounds_sync()
 
     def _reset_shared_viewport_for_current_wav(self) -> None:
         if not self._has_loaded_wav_for_viewport():
@@ -973,6 +996,7 @@ class MainWindow(QWidget):
 
     def _on_center_splitter_moved(self, _pos: int, _index: int) -> None:
         self._current_center_splitter_ratio = self.current_center_splitter_ratio()
+        self._request_waveform_bounds_sync()
 
     def _apply_initial_center_splitter_ratio(self) -> None:
         self.apply_center_splitter_ratio(self._current_center_splitter_ratio)
@@ -1080,15 +1104,11 @@ class MainWindow(QWidget):
 QWidget#MainWindowRoot {{
     background-color: {window_bg};
     color: {text};
-    font-family: {ui_font_family};
-    font-size: {ui_font_size}pt;
 }}
 QMenuBar#MainMenuBar {{
     background-color: {panel_bg};
     color: {text};
     border: 1px solid {border};
-    font-family: {ui_font_family};
-    font-size: {ui_font_size}pt;
 }}
 QMenuBar#MainMenuBar::item {{
     background: transparent;
@@ -1189,8 +1209,6 @@ QToolButton#OperationButton {{
     border: 1px solid {border};
     border-radius: 8px;
     padding: 4px 6px;
-    font-family: {ui_font_family};
-    font-size: {ui_font_size}pt;
 }}
 QToolButton#OperationButton:hover {{
     border-color: {accent_hover};
@@ -1552,6 +1570,7 @@ QSplitter#CenterSplitter::handle {{
         self.wav_waveform_view.clear_morph_labels()
         self.wav_waveform_view.show_placeholder(placeholder_message)
         self.preview_area.set_timeline_duration_sec(0.0)
+        self._request_waveform_bounds_sync()
 
     def _validate_wav_load_result(self, wav_info: WavAnalysisResult, waveform_preview) -> str | None:
         if wav_info.sample_rate_hz <= 0:
@@ -1681,6 +1700,7 @@ QSplitter#CenterSplitter::handle {{
         self.wav_waveform_view.clear_morph_labels()
         self._set_ready_status()
         self._add_recent_wav_file(normalized_path)
+        self._request_waveform_bounds_sync()
         return True
 
     def _open_recent_text_file(self, file_path: str) -> None:
@@ -2047,6 +2067,7 @@ QSplitter#CenterSplitter::handle {{
         self._begin_processing_session()
         try:
             self._refresh_waveform_morph_labels()
+            self._request_waveform_bounds_sync()
             if self.current_timing_plan is None:
                 self._show_warning(
                     title="\u51e6\u7406\u30a8\u30e9\u30fc",

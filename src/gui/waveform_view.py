@@ -231,6 +231,45 @@ class WaveformView(FigureCanvas):
             self._show_event_regions,
         )
 
+    def get_plot_area_rect(self) -> tuple[float, float, float, float] | None:
+        """
+        Returns the actual drawing area (plot area) of the waveform within the widget's coordinate system.
+        This represents the region inside the axes, excluding ticks, labels, and padding.
+        Returns:
+            (x, y, width, height) in pixels relative to the widget's top-left corner,
+            or None if the layout has not been computed yet.
+        """
+        if self._duration_sec < 0.0:
+            return None
+
+        try:
+            # get_window_extent returns the bounding box in display coordinates
+            # For a FigureCanvasQTAgg, the bottom-left is (0,0).
+            bbox = self._axes.get_window_extent()
+            
+            # Matplotlib display coordinates: (0, 0) is bottom-left.
+            # PySide6 widget coordinates: (0, 0) is top-left.
+            # We need to invert the Y axis.
+            canvas_height = self.figure.bbox.height
+            
+            # Convert to PySide6 coordinates
+            x = bbox.x0
+            y = canvas_height - bbox.y1  # Invert Y to measure from the top
+            width = bbox.width
+            height = bbox.height
+            
+            return (float(x), float(y), float(width), float(height))
+        except (AttributeError, ValueError, TypeError):
+            return None
+
+    @property
+    def plot_area_rect(self) -> tuple[float, float, float, float] | None:
+        """
+        Convenience property to access the inner plot area bounds.
+        See get_plot_area_rect for details.
+        """
+        return self.get_plot_area_rect()
+
     def plot_waveform(self, samples: list[float], duration_sec: float) -> None:
         self._samples = samples
         self._duration_sec = duration_sec
