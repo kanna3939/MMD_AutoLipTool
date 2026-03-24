@@ -17,6 +17,8 @@ datas += collect_data_files("whisper")
 datas += collect_data_files("pyopenjtalk")
 datas += collect_data_files("tiktoken")
 datas += collect_data_files("tiktoken_ext")
+datas += [("assets/icons/MMD_AutoLipTool.ico", "assets/icons")]
+datas += [("assets/MMD_AutoLipTool_splash.png", "assets")]
 
 binaries = []
 binaries += collect_dynamic_libs("pyopenjtalk")
@@ -51,6 +53,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon="assets/icons/MMD_AutoLipTool.ico",
 )
 coll = COLLECT(
     exe,

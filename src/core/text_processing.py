@@ -1,5 +1,13 @@
 import unicodedata
 
+MAX_TEXT_LENGTH = 5000
+TEXT_WARNING_CONTROL_CHARS = 1
+TEXT_ERROR_CONTROL_CHARS = 5
+TEXT_WARNING_LINE_LENGTH = 500
+TEXT_ERROR_LINE_LENGTH = 2000
+TEXT_WARNING_SYMBOL_REPEAT = 100
+TEXT_ERROR_SYMBOL_LINE_LENGTH = 300
+
 VOWELS = ("あ", "い", "う", "え", "お")
 
 _A_KANA = set("あぁかがさざただなはばぱまゃやらわゎ")
@@ -86,8 +94,53 @@ def _katakana_to_hiragana(text: str) -> str:
     return "".join(converted)
 
 
+def _validate_and_clean_text(text: str) -> str:
+    if len(text) > MAX_TEXT_LENGTH:
+        raise TextProcessingError(f"TEXT exceeds maximum length limit ({len(text)} > {MAX_TEXT_LENGTH} chars).")
+
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\t", " ")
+
+    control_char_count = 0
+    cleaned_chars = []
+    
+    for line in text.split("\n"):
+        if len(line) > TEXT_ERROR_LINE_LENGTH:
+            raise TextProcessingError(f"Line exceeds maximum length limit ({len(line)} > {TEXT_ERROR_LINE_LENGTH} chars).")
+        
+        is_symbol_only = True
+        for char in line:
+            if char in (" ", "ー"):
+                continue
+            cat = unicodedata.category(char)
+            # Modifier marks (Mn, Me, Mc) and format chars (Cf) shouldn't falsify is_symbol_only
+            if not (cat.startswith("P") or cat.startswith("S") or cat.startswith("Z") or cat.startswith("M") or cat == "Cf"):
+                is_symbol_only = False
+                break
+        
+        if is_symbol_only and len(line) > TEXT_ERROR_SYMBOL_LINE_LENGTH:
+            raise TextProcessingError(f"Symbol-only line exceeds maximum length limit ({len(line)} > {TEXT_ERROR_SYMBOL_LINE_LENGTH} chars).")
+
+    for char in text:
+        cat = unicodedata.category(char)
+        if cat in ("Cc", "Cf") and char != "\n":
+            code = ord(char)
+            # Exempt harmless zero-width, bidi, variation selectors, and tags from the malicious control count.
+            is_harmless = (0x200B <= code <= 0x200F) or (0x2028 <= code <= 0x202F) or (0xFE00 <= code <= 0xFE0F) or (code >= 0xE0000)
+            if not is_harmless:
+                control_char_count += 1
+                if control_char_count >= TEXT_ERROR_CONTROL_CHARS:
+                    raise TextProcessingError(f"Text contains too many control characters (>={TEXT_ERROR_CONTROL_CHARS}).")
+            continue
+        cleaned_chars.append(char)
+
+    return "".join(cleaned_chars)
+
+
 def text_to_hiragana(text: str) -> str:
-    normalized = _normalize_text(text)
+    cleaned = _validate_and_clean_text(text)
+    normalized = _normalize_text(cleaned)
     conversion_input = _strip_ignored_symbols(normalized)
     if not conversion_input:
         raise TextProcessingError(
