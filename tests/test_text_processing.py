@@ -19,8 +19,15 @@ class TextProcessingTests(unittest.TestCase):
         self.assertEqual(text_to_hiragana(text), expected)
 
     def test_text_to_hiragana_removes_punctuation_and_symbols(self) -> None:
-        text = "\u3042\u3001\u3044\u3002\u3046! \u3048? \u304a@#$%"
-        expected = "\u3042\u3044\u3046\u3048\u304a"
+        text = "あ、い。う! え? お@#$%"
+        expected = "あいうえお"
+        self.assertEqual(text_to_hiragana(text), expected)
+
+    def test_text_to_hiragana_ignores_emojis_and_zwj(self) -> None:
+        # Two family emojis contain 6 ZWJ (\u200D) characters.
+        # Validates that ZWJ doesn't trigger the control char limit.
+        text = "あ👨‍👩‍👧‍👦い👨‍👩‍👧‍👦う"
+        expected = "あいう"
         self.assertEqual(text_to_hiragana(text), expected)
 
     @patch("core.text_processing._pyopenjtalk_g2p", return_value="\u30ad\u30e7\u30fc\u30ef\u30ab\u30ca\u30b8")

@@ -9,6 +9,7 @@ VMD_FPS = 30
 MAX_MORPH_VALUE = 0.5
 SUPPORTED_MORPHS = ("\u3042", "\u3044", "\u3046", "\u3048", "\u304a")
 PEAK_SIDE_FRAME_OFFSET = 2
+MAX_MORPH_FRAMES = 22000
 
 _VMD_HEADER = b"Vocaloid Motion Data 0002"
 
@@ -86,6 +87,9 @@ def write_morph_vmd(
 ) -> Path:
     points = _normalize_timeline(timeline)
     morph_frames = _build_interval_morph_frames(points)
+    if len(morph_frames) > MAX_MORPH_FRAMES:
+        raise ValueError(f"Generated morph frames ({len(morph_frames)}) exceed the maximum limit of {MAX_MORPH_FRAMES}.")
+
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
 
