@@ -6,7 +6,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import QWidget
 
-from gui.i18n_strings import ThemeStrings
+from gui.i18n_strings import ThemeStrings, localized_vowel_label, normalize_language
 from gui.preview_transform import PREVIEW_ROW_VOWELS, PreviewData, PreviewRow, empty_preview_data
 
 _FRAME_RATE = 30.0
@@ -60,6 +60,7 @@ class PreviewArea(QWidget):
         self._pan_drag_last_x: float | None = None
         self._waveform_plot_area_rect: tuple[float, float, float, float] | None = None
         self._theme_name = ThemeStrings.DARK
+        self._language = "ja"
         self.setMinimumHeight(140)
 
     def set_theme(self, theme_name: str) -> None:
@@ -68,6 +69,16 @@ class PreviewArea(QWidget):
             return
         self._theme_name = resolved_theme
         self.update()
+
+    def set_language(self, language: str) -> None:
+        resolved_language = normalize_language(language)
+        if self._language == resolved_language:
+            return
+        self._language = resolved_language
+        self.update()
+
+    def retranslate_ui(self, language: str) -> None:
+        self.set_language(language)
 
     def set_preview_data(self, preview_data: PreviewData) -> None:
         self._preview_data = preview_data
@@ -276,7 +287,11 @@ class PreviewArea(QWidget):
         label_width = label_right - inner.left()
         label_rect = QRectF(inner.left(), top, label_width, row_height)
         painter.setPen(QColor(self._theme_colors()["row_label"]))
-        painter.drawText(label_rect, int(Qt.AlignVCenter | Qt.AlignRight), vowel)
+        painter.drawText(
+            label_rect,
+            int(Qt.AlignVCenter | Qt.AlignRight),
+            localized_vowel_label(vowel, self._language),
+        )
 
     def _draw_row_grid(self, painter: QPainter, row_rect: QRectF, row_index: int, row_count: int) -> None:
         if row_index + 1 >= row_count:

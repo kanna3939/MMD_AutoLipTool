@@ -3,7 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy
 
-from gui.i18n_strings import StatusPanelStrings
+from gui.i18n_strings import SUPPORTED_LANGUAGES, StatusPanelStrings
 
 _STATUS_PANEL_HORIZONTAL_MARGIN = 6
 _STATUS_PANEL_VERTICAL_MARGIN = 4
@@ -21,6 +21,8 @@ class StatusPanel(QFrame):
         self.setFrameShadow(QFrame.Sunken)
         self.setFixedHeight(36)
         self._status_text = ""
+        self._status_prefix = StatusPanelStrings.STATUS_PREFIX
+        self._fallback_state_label = StatusPanelStrings.FALLBACK_STATE_LABEL
 
         self._state_label = QLabel("")
         self._state_label.setObjectName("StatusStateLabel")
@@ -69,16 +71,36 @@ class StatusPanel(QFrame):
     def message_text(self) -> str:
         return self._message_label.text()
 
+    def apply_language(self, language: str) -> None:
+        strings = StatusPanelStrings.for_language(language)
+        self._status_prefix = strings["STATUS_PREFIX"]
+        self._fallback_state_label = strings["FALLBACK_STATE_LABEL"]
+        if self._status_text:
+            self.set_status_text(self._status_text)
+
+    def retranslate_ui(self, language: str) -> None:
+        self.apply_language(language)
+
     def _split_status_text(self, text: str) -> tuple[str, str]:
         normalized = text.strip()
         if not normalized:
             return ("", "")
 
-        if normalized.startswith(StatusPanelStrings.STATUS_PREFIX):
-            body = normalized.removeprefix(StatusPanelStrings.STATUS_PREFIX).strip()
+        for known_prefix in self._known_status_prefixes():
+            if not normalized.startswith(known_prefix):
+                continue
+            body = normalized.removeprefix(known_prefix).strip()
             if " (" in body and body.endswith(")"):
                 state_text, detail = body.split(" (", 1)
                 return (state_text.strip(), detail[:-1].strip())
             return (body, "")
 
-        return (StatusPanelStrings.FALLBACK_STATE_LABEL, normalized)
+        return (self._fallback_state_label, normalized)
+
+    def _known_status_prefixes(self) -> tuple[str, ...]:
+        prefixes = [self._status_prefix]
+        for language in SUPPORTED_LANGUAGES:
+            candidate = StatusPanelStrings.for_language(language)["STATUS_PREFIX"]
+            if candidate not in prefixes:
+                prefixes.append(candidate)
+        return tuple(prefixes)

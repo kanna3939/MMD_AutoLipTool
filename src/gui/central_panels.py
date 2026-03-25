@@ -38,6 +38,7 @@ class LeftInfoPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("LeftInfoPanel")
+        self._section_title_labels: dict[str, QLabel] = {}
 
         self.text_path_label = QLabel(LeftInfoPanelStrings.LABEL_TEXT_PATH, self)
         self.wav_path_label = QLabel(LeftInfoPanelStrings.LABEL_WAV_PATH, self)
@@ -85,6 +86,7 @@ class LeftInfoPanel(QWidget):
                     self.text_path_label,
                     self.wav_path_label,
                 ],
+                section_key="files",
             )
         )
         inner_layout.addWidget(
@@ -94,6 +96,7 @@ class LeftInfoPanel(QWidget):
                     self.text_preview_label,
                     self.text_preview,
                 ],
+                section_key="text",
             )
         )
         inner_layout.addWidget(
@@ -105,6 +108,7 @@ class LeftInfoPanel(QWidget):
                     self.vowel_preview_label,
                     self.vowel_preview,
                 ],
+                section_key="conversion",
             )
         )
         inner_layout.addWidget(
@@ -113,6 +117,7 @@ class LeftInfoPanel(QWidget):
                 [
                     self.wav_info_label,
                 ],
+                section_key="audio",
             )
         )
         inner_layout.addStretch(1)
@@ -140,25 +145,33 @@ class LeftInfoPanel(QWidget):
         widget.setFixedHeight(80)
         widget.setTabChangesFocus(True)
 
-    def _create_section(self, title: str, widgets: list[QWidget]) -> QWidget:
+    def _create_section(
+        self,
+        title: str,
+        widgets: list[QWidget],
+        *,
+        section_key: str,
+    ) -> QWidget:
         section = QWidget(self)
         section.setObjectName("InfoSection")
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(_PANEL_SECTION_SPACING)
-        layout.addWidget(self._create_section_header(title))
+        layout.addWidget(self._create_section_header(title, section_key))
         for widget in widgets:
             layout.addWidget(widget)
         section.setLayout(layout)
         return section
 
-    def _create_section_header(self, title: str) -> QWidget:
+    def _create_section_header(self, title: str, key: str | None = None) -> QWidget:
         header = QWidget(self)
         header.setObjectName("SectionHeader")
 
         title_label = QLabel(title, header)
         title_label.setObjectName("SectionTitle")
+        if key is not None:
+            self._section_title_labels[key] = title_label
         divider = QFrame(header)
         divider.setObjectName("SectionDivider")
         divider.setFrameShape(QFrame.HLine)
@@ -172,6 +185,25 @@ class LeftInfoPanel(QWidget):
         header.setLayout(layout)
         return header
 
+    def apply_language(self, language: str) -> None:
+        strings = LeftInfoPanelStrings.for_language(language)
+        self._section_title_labels["files"].setText(strings["SECTION_TITLE_FILES"])
+        self._section_title_labels["text"].setText(strings["SECTION_TITLE_TEXT"])
+        self._section_title_labels["conversion"].setText(strings["SECTION_TITLE_CONVERSION"])
+        self._section_title_labels["audio"].setText(strings["SECTION_TITLE_AUDIO"])
+        self.text_path_label.setText(strings["LABEL_TEXT_PATH"])
+        self.wav_path_label.setText(strings["LABEL_WAV_PATH"])
+        self.text_preview_label.setText(strings["LABEL_TEXT_PREVIEW"])
+        self.hiragana_preview_label.setText(strings["LABEL_HIRAGANA_PREVIEW"])
+        self.vowel_preview_label.setText(strings["LABEL_VOWEL_PREVIEW"])
+        self.wav_info_label.setText(strings["LABEL_WAV_INFO"])
+        self.text_preview.setPlaceholderText(strings["PLACEHOLDER_TEXT_PREVIEW"])
+        self.hiragana_preview.setPlaceholderText(strings["PLACEHOLDER_HIRAGANA_PREVIEW"])
+        self.vowel_preview.setPlaceholderText(strings["PLACEHOLDER_VOWEL_PREVIEW"])
+
+    def retranslate_ui(self, language: str) -> None:
+        self.apply_language(language)
+
 
 class RightDisplayContainer(QWidget):
     """Display-oriented container for waveform and preview areas."""
@@ -179,6 +211,7 @@ class RightDisplayContainer(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("RightDisplayContainer")
+        self._section_title_labels: dict[str, QLabel] = {}
 
         self.wav_waveform_view = WaveformView()
         self.preview_area = PreviewArea()
@@ -196,6 +229,7 @@ class RightDisplayContainer(QWidget):
                 RightDisplayStrings.SECTION_TITLE_WAVEFORM,
                 self.wav_waveform_view,
                 stretch=3,
+                section_key="waveform",
             )
         )
         layout.addWidget(
@@ -203,29 +237,38 @@ class RightDisplayContainer(QWidget):
                 RightDisplayStrings.SECTION_TITLE_PREVIEW,
                 self.preview_area,
                 stretch=2,
+                section_key="preview",
             )
         )
         layout.addWidget(self.viewport_scrollbar)
         self.setLayout(layout)
 
-    def _create_section(self, title: str, content_widget: QWidget, *, stretch: int) -> QWidget:
+    def _create_section(
+        self,
+        title: str,
+        content_widget: QWidget,
+        *,
+        stretch: int,
+        section_key: str,
+    ) -> QWidget:
         section = QWidget(self)
         section.setObjectName("DisplaySection")
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(_PANEL_SECTION_SPACING)
-        layout.addWidget(self._create_section_header(title))
+        layout.addWidget(self._create_section_header(title, section_key))
         layout.addWidget(content_widget, stretch)
         section.setLayout(layout)
         return section
 
-    def _create_section_header(self, title: str) -> QWidget:
+    def _create_section_header(self, title: str, key: str) -> QWidget:
         header = QWidget(self)
         header.setObjectName("SectionHeader")
 
         title_label = QLabel(title, header)
         title_label.setObjectName("SectionTitle")
+        self._section_title_labels[key] = title_label
         divider = QFrame(header)
         divider.setObjectName("SectionDivider")
         divider.setFrameShape(QFrame.HLine)
@@ -238,6 +281,15 @@ class RightDisplayContainer(QWidget):
         layout.addWidget(divider)
         header.setLayout(layout)
         return header
+
+    def apply_language(self, language: str) -> None:
+        strings = RightDisplayStrings.for_language(language)
+        self._section_title_labels["waveform"].setText(strings["SECTION_TITLE_WAVEFORM"])
+        self._section_title_labels["preview"].setText(strings["SECTION_TITLE_PREVIEW"])
+        self.preview_area.retranslate_ui(language)
+
+    def retranslate_ui(self, language: str) -> None:
+        self.apply_language(language)
 
 
 class CenterContentContainer(QWidget):
@@ -281,10 +333,12 @@ class MorphUpperLimitRow(QWidget):
         self.input.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.input.setMinimumWidth(_NUMERIC_INPUT_DISPLAY_WIDTH)
         self.input.setMaximumWidth(_NUMERIC_INPUT_DISPLAY_WIDTH)
+        self.input.setToolTip(MorphUpperLimitStrings.INPUT_TOOLTIP)
 
         self.decrement_button = QToolButton(self)
         self.decrement_button.setObjectName("MorphStepButton")
         self.decrement_button.setText("-")
+        self.decrement_button.setToolTip(MorphUpperLimitStrings.DECREMENT_TOOLTIP)
         self.decrement_button.setAutoRaise(False)
         self.decrement_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.decrement_button.setFixedWidth(_MORPH_STEP_BUTTON_WIDTH)
@@ -293,6 +347,7 @@ class MorphUpperLimitRow(QWidget):
         self.increment_button = QToolButton(self)
         self.increment_button.setObjectName("MorphStepButton")
         self.increment_button.setText("+")
+        self.increment_button.setToolTip(MorphUpperLimitStrings.INCREMENT_TOOLTIP)
         self.increment_button.setAutoRaise(False)
         self.increment_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.increment_button.setFixedWidth(_MORPH_STEP_BUTTON_WIDTH)
@@ -307,3 +362,13 @@ class MorphUpperLimitRow(QWidget):
         layout.addWidget(self.increment_button)
         layout.addStretch(1)
         self.setLayout(layout)
+
+    def apply_language(self, language: str) -> None:
+        strings = MorphUpperLimitStrings.for_language(language)
+        self.label.setText(strings["LABEL"])
+        self.input.setToolTip(strings["INPUT_TOOLTIP"])
+        self.decrement_button.setToolTip(strings["DECREMENT_TOOLTIP"])
+        self.increment_button.setToolTip(strings["INCREMENT_TOOLTIP"])
+
+    def retranslate_ui(self, language: str) -> None:
+        self.apply_language(language)

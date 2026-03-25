@@ -22,7 +22,7 @@ from core import (
     load_waveform_preview,
     text_to_hiragana,
 )
-from PySide6.QtGui import QAction, QActionGroup
+from PySide6.QtGui import QAction, QActionGroup, QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -39,14 +39,22 @@ from gui.central_panels import (
     MorphUpperLimitRow,
     RightDisplayContainer,
 )
-from gui.i18n_strings import MainWindowStrings, StatusTexts, ThemeStrings
+from gui.i18n_strings import (
+    FileDialogStrings,
+    MainWindowStrings,
+    SUPPORTED_LANGUAGES,
+    normalize_language,
+    StatusTexts,
+    ThemeStrings,
+    WarningDialogStrings,
+)
 from gui.operation_panel import OperationPanel
 from gui.playback_controller import PlaybackController
 from gui.preview_transform import build_preview_data
+from gui.settings_store import SettingsSaveResult, SettingsStore
 from gui.status_panel import StatusPanel
 from gui.view_sync import ViewSync
 
-_PLAYBACK_STATUS_PREFIX = StatusTexts.PLAYBACK
 _DEFAULT_ZOOM_LEVELS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0)
 _PATH_DISPLAY_MAX_FULL_LENGTH = 48
 _DEFAULT_THEME = ThemeStrings.DARK
@@ -55,21 +63,78 @@ _DEFAULT_WINDOW_HEIGHT = 740
 _MIN_WINDOW_WIDTH = 720
 _MIN_WINDOW_HEIGHT = 405
 _DEFAULT_CENTER_SPLITTER_RATIO = (30, 70)
+_DEFAULT_LANGUAGE = "ja"
 _DEFAULT_UI_FONT_FAMILY = '"Yu Gothic UI", "Meiryo", sans-serif'
 _DEFAULT_UI_FONT_SIZE_PT = 11
 _MAIN_LAYOUT_MARGIN = 6
 _MAIN_LAYOUT_SPACING = 6
 _VIEWPORT_SCROLLBAR_UNITS_PER_SEC = 1000
+_DEFERRED_SETTINGS_SAVE_DELAY_MS = 500
 _UI_SETTING_KEY_THEME = "theme"
 _UI_SETTING_KEY_CENTER_SPLITTER_RATIO = "center_splitter_ratio"
+_UI_SETTING_KEY_WINDOW_WIDTH = "window_width"
+_UI_SETTING_KEY_WINDOW_HEIGHT = "window_height"
+_UI_SETTING_KEY_LANGUAGE = "language"
+_UI_SETTING_KEY_MORPH_UPPER_LIMIT = "morph_upper_limit"
+_UI_SETTING_KEY_RECENT_TEXT_FILES = "recent_text_files"
+_UI_SETTING_KEY_RECENT_WAV_FILES = "recent_wav_files"
 
 
 class MainWindow(QWidget):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        startup_settings: Mapping[str, object] | None = None,
+        startup_language: str | None = None,
+        settings_store: SettingsStore | None = None,
+    ) -> None:
         super().__init__()
+        self._settings_store = settings_store
+        self._settings_save_disabled_in_session = bool(
+            settings_store.save_disabled if settings_store is not None else False
+        )
+        self._last_settings_save_result: SettingsSaveResult | None = None
+        self._suspend_settings_persistence = False
+        self._deferred_splitter_save_timer = QTimer(self)
+        self._deferred_splitter_save_timer.setSingleShot(True)
+        self._deferred_splitter_save_timer.timeout.connect(
+            self._flush_deferred_splitter_settings_save
+        )
+        self._deferred_window_size_save_timer = QTimer(self)
+        self._deferred_window_size_save_timer.setSingleShot(True)
+        self._deferred_window_size_save_timer.timeout.connect(
+            self._flush_deferred_window_size_settings_save
+        )
+        self._startup_settings = dict(startup_settings or {})
+        self._current_language = self._resolve_startup_language(
+            startup_language,
+            self._startup_settings,
+        )
+        self._is_restoring_startup_settings = False
+        self._pending_startup_theme = self._resolve_startup_theme(
+            self._startup_settings.get(_UI_SETTING_KEY_THEME)
+        )
+        self._pending_startup_center_splitter_ratio = (
+            self._resolve_startup_center_splitter_ratio(
+                self._startup_settings.get(_UI_SETTING_KEY_CENTER_SPLITTER_RATIO)
+            )
+        )
+        self._pending_startup_morph_upper_limit = self._resolve_startup_morph_upper_limit(
+            self._startup_settings.get(_UI_SETTING_KEY_MORPH_UPPER_LIMIT)
+        )
+        self._pending_recent_text_files = self._resolve_startup_recent_files(
+            self._startup_settings.get(_UI_SETTING_KEY_RECENT_TEXT_FILES)
+        )
+        self._pending_recent_wav_files = self._resolve_startup_recent_files(
+            self._startup_settings.get(_UI_SETTING_KEY_RECENT_WAV_FILES)
+        )
+        startup_window_width, startup_window_height = self._resolve_startup_window_size(
+            self._startup_settings
+        )
+
         self.setObjectName("MainWindowRoot")
-        self.setWindowTitle(MainWindowStrings.WINDOW_TITLE)
-        self.resize(_DEFAULT_WINDOW_WIDTH, _DEFAULT_WINDOW_HEIGHT)
+        self.setWindowTitle(self._main_window_text("WINDOW_TITLE"))
+        self.resize(startup_window_width, startup_window_height)
         self.setMinimumSize(_MIN_WINDOW_WIDTH, _MIN_WINDOW_HEIGHT)
 
         self.selected_text_path: str | None = None
@@ -88,8 +153,8 @@ class MainWindow(QWidget):
         self.recent_wav_files: list[str] = []
         self._zoom_levels: tuple[float, ...] = _DEFAULT_ZOOM_LEVELS
         self._zoom_level_index = 0
-        self._current_theme = _DEFAULT_THEME
-        self._current_center_splitter_ratio = _DEFAULT_CENTER_SPLITTER_RATIO
+        self._current_theme = self._pending_startup_theme
+        self._current_center_splitter_ratio = self._pending_startup_center_splitter_ratio
 
         layout = QVBoxLayout()
         layout.setContentsMargins(
@@ -134,7 +199,7 @@ class MainWindow(QWidget):
         self.wav_waveform_view = self.right_display_container.wav_waveform_view
         self.preview_area = self.right_display_container.preview_area
         self.viewport_scrollbar = self.right_display_container.viewport_scrollbar
-        self.status_panel = StatusPanel("\u51fa\u529b\u72b6\u614b: \u672a\u5b9f\u884c")
+        self.status_panel = StatusPanel(self._main_window_text("INITIAL_STATUS"))
         self.playback_controller = PlaybackController(self)
         self.view_sync = ViewSync(self)
         self._syncing_viewport_scrollbar = False
@@ -153,7 +218,6 @@ class MainWindow(QWidget):
         )
         self.center_splitter = self.center_content_container.splitter
         self.center_splitter.splitterMoved.connect(self._on_center_splitter_moved)
-        self.apply_ui_settings(self.default_ui_settings())
 
         layout.addWidget(self.operation_panel)
         layout.addWidget(self.morph_upper_limit_row)
@@ -167,6 +231,7 @@ class MainWindow(QWidget):
         self.wav_waveform_view._figure.canvas.mpl_connect('resize_event', self._request_waveform_bounds_sync)
         self.wav_waveform_view._figure.canvas.mpl_connect('draw_event', self._request_waveform_bounds_sync)
 
+        self._restore_startup_settings()
         QTimer.singleShot(0, self._apply_initial_center_splitter_ratio)
         self._update_action_states()
 
@@ -700,7 +765,7 @@ class MainWindow(QWidget):
 
     def _format_playback_status(self, position_sec: float) -> str:
         del position_sec
-        return _PLAYBACK_STATUS_PREFIX
+        return StatusTexts.for_language(self._current_language)["PLAYBACK"]
 
     def _status_allows_playback_frame_override(self, status_text: str) -> bool:
         if self._is_playback_status_text(status_text):
@@ -708,15 +773,58 @@ class MainWindow(QWidget):
         return self._is_ready_status_text(status_text)
 
     def _is_playback_status_text(self, status_text: str) -> bool:
-        return status_text.startswith(_PLAYBACK_STATUS_PREFIX)
+        return any(
+            status_text.startswith(StatusTexts.for_language(language)["PLAYBACK"])
+            for language in SUPPORTED_LANGUAGES
+        )
 
     def _is_ready_status_text(self, status_text: str) -> bool:
-        return any(status_text.startswith(prefix) for prefix in StatusTexts.READY_PREFIXES)
+        return any(
+            status_text.startswith(prefix)
+            for language in SUPPORTED_LANGUAGES
+            for prefix in StatusTexts.ready_prefixes_for_language(language)
+        )
+
+    def _refresh_status_text_for_current_language(self) -> None:
+        current_status = self.status_panel.status_text()
+        if not current_status:
+            return
+        if self._is_playback_status_text(current_status):
+            self.status_panel.set_status_text(self._status_text("PLAYBACK"))
+            return
+
+        static_status_keys = (
+            "PROCESSING",
+            "FAILURE",
+            "CANCELED",
+            "TEXT_LOAD_FAILURE",
+            "WAV_LOAD_FAILURE",
+            "TEXT_CONVERSION_FAILURE",
+            "INPUT_MISSING",
+            "ANALYSIS_NOT_RUN",
+            "READY_ANALYSIS_PENDING",
+            "READY_TEXT_ONLY",
+            "READY_WAV_ONLY",
+            "READY_NOT_LOADED",
+        )
+        for key in static_status_keys:
+            if any(
+                current_status == StatusTexts.for_language(language)[key]
+                for language in SUPPORTED_LANGUAGES
+            ):
+                self.status_panel.set_status_text(self._status_text(key))
+                return
+
+        if any(
+            current_status.startswith(StatusTexts.for_language(language)["READY_ANALYSIS_DONE_PREFIX"])
+            for language in SUPPORTED_LANGUAGES
+        ):
+            self._set_ready_status()
 
     def _ensure_processing_dialog(self) -> QProgressDialog:
         if self._processing_dialog is None:
-            dialog = QProgressDialog(MainWindowStrings.PROCESSING_DIALOG_LABEL, "", 0, 0, self)
-            dialog.setWindowTitle(MainWindowStrings.PROCESSING_DIALOG_TITLE)
+            dialog = QProgressDialog(self._main_window_text("PROCESSING_DIALOG_LABEL"), "", 0, 0, self)
+            dialog.setWindowTitle(self._main_window_text("PROCESSING_DIALOG_TITLE"))
             dialog.setCancelButton(None)
             dialog.setWindowModality(Qt.ApplicationModal)
             dialog.setAutoClose(False)
@@ -726,6 +834,8 @@ class MainWindow(QWidget):
             dialog.setWindowFlag(Qt.WindowCloseButtonHint, False)
             dialog.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
             self._processing_dialog = dialog
+        self._processing_dialog.setLabelText(self._main_window_text("PROCESSING_DIALOG_LABEL"))
+        self._processing_dialog.setWindowTitle(self._main_window_text("PROCESSING_DIALOG_TITLE"))
         return self._processing_dialog
 
     def _show_processing_dialog(self) -> None:
@@ -744,15 +854,15 @@ class MainWindow(QWidget):
     def _begin_processing_session(self) -> None:
         self._is_processing = True
         self._update_action_states()
-        self._set_output_status(StatusTexts.PROCESSING)
+        self._set_output_status(self._status_text("PROCESSING"))
         self._show_processing_dialog()
         QApplication.processEvents()
 
     def _end_processing_session(self) -> None:
         self._hide_processing_dialog()
         self._is_processing = False
-        if self.status_panel.status_text() == StatusTexts.PROCESSING:
-            self._set_output_status(StatusTexts.FAILURE)
+        if self.status_panel.status_text() == self._status_text("PROCESSING"):
+            self._set_output_status(self._status_text("FAILURE"))
         self._play_analysis_completion_sound()
         self._update_action_states()
 
@@ -765,16 +875,27 @@ class MainWindow(QWidget):
             return
 
     def _show_version_info(self) -> None:
+        app_version = self._resolve_installed_version(["mmd-autolip-tool"])
         pyopenjtalk_version = self._resolve_installed_version(["pyopenjtalk"])
         whisper_version = self._resolve_installed_version(["openai-whisper", "whisper"])
+        strings = MainWindowStrings.for_language(self._current_language)
         QMessageBox.information(
             self,
-            MainWindowStrings.VERSION_INFO_TITLE,
+            strings["VERSION_INFO_TITLE"],
             "\n".join(
                 [
-                    MainWindowStrings.VERSION_INFO_APP_VERSION,
-                    f"pyopenjtalk: {pyopenjtalk_version}",
-                    f"whisper: {whisper_version}",
+                    strings["VERSION_INFO_APP_VERSION_TEMPLATE"].format(
+                        app_name=strings["APP_DISPLAY_NAME"],
+                        version=app_version,
+                    ),
+                    strings["VERSION_INFO_DEPENDENCY_TEMPLATE"].format(
+                        name="pyopenjtalk",
+                        version=pyopenjtalk_version,
+                    ),
+                    strings["VERSION_INFO_DEPENDENCY_TEMPLATE"].format(
+                        name="whisper",
+                        version=whisper_version,
+                    ),
                 ]
             ),
         )
@@ -785,7 +906,189 @@ class MainWindow(QWidget):
                 return package_version(package_name)
             except PackageNotFoundError:
                 continue
-        return "not installed"
+        return self._main_window_text("VERSION_INFO_NOT_INSTALLED")
+
+    def _main_window_text(self, key: str) -> str:
+        return MainWindowStrings.for_language(self._current_language)[key]
+
+    def _file_dialog_text(self, key: str) -> str:
+        return FileDialogStrings.for_language(self._current_language)[key]
+
+    def _warning_text(self, key: str) -> str:
+        return WarningDialogStrings.for_language(self._current_language)[key]
+
+    def _status_text(self, key: str) -> str:
+        return StatusTexts.for_language(self._current_language)[key]
+
+    def _resolve_startup_language(
+        self,
+        startup_language: str | None,
+        startup_settings: Mapping[str, object],
+    ) -> str:
+        candidate = startup_language
+        if candidate is None:
+            candidate = startup_settings.get(_UI_SETTING_KEY_LANGUAGE)
+        resolved = normalize_language(str(candidate or _DEFAULT_LANGUAGE))
+        if resolved not in ("ja", "en"):
+            return _DEFAULT_LANGUAGE
+        return resolved
+
+    def _resolve_startup_theme(self, theme_name: object) -> str:
+        resolved_theme = str(theme_name or _DEFAULT_THEME).strip().lower()
+        if resolved_theme not in ThemeStrings.SUPPORTED:
+            return _DEFAULT_THEME
+        return resolved_theme
+
+    def _resolve_startup_center_splitter_ratio(
+        self,
+        ratio_value: object,
+    ) -> tuple[int, int]:
+        if isinstance(ratio_value, Sequence) and not isinstance(ratio_value, (str, bytes)):
+            return self._normalize_center_splitter_ratio(ratio_value)
+        try:
+            resolved_ratio = float(ratio_value)
+        except (TypeError, ValueError):
+            return self.default_center_splitter_ratio()
+        if not math.isfinite(resolved_ratio):
+            return self.default_center_splitter_ratio()
+        if not (0.0 < resolved_ratio < 1.0):
+            return self.default_center_splitter_ratio()
+        left = max(int(round(resolved_ratio * 100.0)), 1)
+        right = max(100 - left, 1)
+        return self._normalize_center_splitter_ratio((left, right))
+
+    def _resolve_startup_morph_upper_limit(self, value: object) -> float:
+        try:
+            resolved = float(value)
+        except (TypeError, ValueError):
+            return 0.5
+        if not math.isfinite(resolved):
+            return 0.5
+        return min(max(resolved, 0.0), 10.0)
+
+    def _resolve_startup_recent_files(self, value: object) -> list[str]:
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, str)]
+        return []
+
+    def _resolve_startup_window_size(
+        self,
+        startup_settings: Mapping[str, object],
+    ) -> tuple[int, int]:
+        width = self._normalize_startup_dimension(
+            startup_settings.get(_UI_SETTING_KEY_WINDOW_WIDTH),
+            _DEFAULT_WINDOW_WIDTH,
+        )
+        height = self._normalize_startup_dimension(
+            startup_settings.get(_UI_SETTING_KEY_WINDOW_HEIGHT),
+            _DEFAULT_WINDOW_HEIGHT,
+        )
+        return self._clamp_window_size_to_available_screen(width, height)
+
+    def _normalize_startup_dimension(self, value: object, default: int) -> int:
+        try:
+            resolved = int(value)
+        except (TypeError, ValueError):
+            return default
+        if resolved <= 0:
+            return default
+        return resolved
+
+    def _clamp_window_size_to_available_screen(
+        self,
+        width: int,
+        height: int,
+    ) -> tuple[int, int]:
+        resolved_width = max(int(width), _MIN_WINDOW_WIDTH)
+        resolved_height = max(int(height), _MIN_WINDOW_HEIGHT)
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return (resolved_width, resolved_height)
+        available_geometry = screen.availableGeometry()
+        max_width = max(available_geometry.width(), _MIN_WINDOW_WIDTH)
+        max_height = max(available_geometry.height(), _MIN_WINDOW_HEIGHT)
+        return (
+            min(resolved_width, max_width),
+            min(resolved_height, max_height),
+        )
+
+    def _restore_startup_settings(self) -> None:
+        self._is_restoring_startup_settings = True
+        try:
+            self.apply_center_splitter_ratio(self._pending_startup_center_splitter_ratio)
+            self.apply_language_setting(
+                self._current_language,
+                persist=False,
+                reset_status_text=True,
+            )
+            self.apply_theme(self._pending_startup_theme)
+            self._apply_startup_morph_upper_limit(self._pending_startup_morph_upper_limit)
+            self._restore_startup_recent_files()
+        finally:
+            self._is_restoring_startup_settings = False
+
+    def _apply_initial_language_to_ui(self) -> None:
+        self._retranslate_ui_for_current_language(reset_status_text=True)
+
+    def _retranslate_ui_for_current_language(self, *, reset_status_text: bool) -> None:
+        strings = MainWindowStrings.for_language(self._current_language)
+        self.setWindowTitle(strings["WINDOW_TITLE"])
+        self.file_menu.setTitle(strings["MENU_FILE"])
+        self.run_menu.setTitle(strings["MENU_RUN"])
+        self.view_menu.setTitle(strings["MENU_VIEW"])
+        self.menu_language.setTitle(strings["MENU_VIEW_LANGUAGE"])
+        self.help_menu.setTitle(strings["MENU_HELP"])
+        self.menu_theme.setTitle(strings["MENU_VIEW_THEME"])
+        self.action_open_text.setText(strings["ACTION_OPEN_TEXT"])
+        self.action_open_wav.setText(strings["ACTION_OPEN_WAV"])
+        self.action_save_vmd.setText(strings["ACTION_SAVE_VMD"])
+        self.action_exit.setText(strings["ACTION_EXIT"])
+        self.action_run_processing.setText(strings["ACTION_RUN_PROCESSING"])
+        self.action_reanalyze.setText(strings["ACTION_REANALYZE"])
+        self.action_show_30fps_lines.setText(strings["ACTION_SHOW_30FPS_LINES"])
+        self.action_show_vowel_labels.setText(strings["ACTION_SHOW_VOWEL_LABELS"])
+        self.action_show_event_ranges.setText(strings["ACTION_SHOW_EVENT_RANGES"])
+        self.action_zoom_in.setText(strings["ACTION_ZOOM_IN"])
+        self.action_zoom_out.setText(strings["ACTION_ZOOM_OUT"])
+        self.action_reset_waveform_view.setText(strings["ACTION_RESET_WAVEFORM_VIEW"])
+        self.action_show_version.setText(strings["ACTION_SHOW_VERSION"])
+        self.action_theme_dark.setText(strings["ACTION_THEME_DARK"])
+        self.action_theme_light.setText(strings["ACTION_THEME_LIGHT"])
+        self.menu_recent_text.setTitle(strings["RECENT_TEXT_MENU"])
+        self.menu_recent_wav.setTitle(strings["RECENT_WAV_MENU"])
+        self.action_language_japanese.setText("日本語")
+        self.action_language_english.setText("English")
+        self.operation_panel.retranslate_ui(self._current_language)
+        self.left_info_panel.retranslate_ui(self._current_language)
+        self.right_display_container.retranslate_ui(self._current_language)
+        self.morph_upper_limit_row.retranslate_ui(self._current_language)
+        self.status_panel.retranslate_ui(self._current_language)
+        if reset_status_text:
+            self.status_panel.set_status_text(strings["INITIAL_STATUS"])
+        elif self.playback_controller.is_playing():
+            self.status_panel.set_status_text(self._format_playback_status(0.0))
+        else:
+            self._refresh_status_text_for_current_language()
+        self.wav_waveform_view.retranslate_ui(self._current_language)
+        self._set_file_path_label(self.text_path_label, "TEXT", self.selected_text_path)
+        self._set_file_path_label(self.wav_path_label, "WAV", self.selected_wav_path)
+        self._refresh_wav_info_label_for_current_language()
+        self._refresh_recent_file_menus()
+        self._sync_language_action_checks()
+
+    def _apply_startup_morph_upper_limit(self, morph_upper_limit: float) -> None:
+        previous_blocked = self.morph_upper_limit_input.blockSignals(True)
+        try:
+            self.morph_upper_limit_input.setValue(morph_upper_limit)
+        finally:
+            self.morph_upper_limit_input.blockSignals(previous_blocked)
+
+    def _restore_startup_recent_files(self) -> None:
+        self._apply_recent_file_state(
+            recent_text_files=self._pending_recent_text_files,
+            recent_wav_files=self._pending_recent_wav_files,
+            prune_invalid_paths=True,
+        )
 
     def _set_file_path_label(
         self,
@@ -798,7 +1101,9 @@ class MainWindow(QWidget):
             normalized_path = str(full_path).strip()
 
         if not normalized_path:
-            label.setText(f"{prefix}: \u672a\u9078\u629e")
+            label.setText(
+                f"{prefix}: {self._main_window_text('FILE_NOT_SELECTED_SUFFIX')}"
+            )
             label.setToolTip("")
             return
 
@@ -826,38 +1131,39 @@ class MainWindow(QWidget):
 
     def _build_menu_bar(self) -> QMenuBar:
         menu_bar = QMenuBar(self)
+        strings = MainWindowStrings.for_language(self._current_language)
 
-        file_menu = menu_bar.addMenu(MainWindowStrings.MENU_FILE)
-        self.action_open_text = QAction("TEXT\u3092\u958b\u304f", self)
-        self.action_open_wav = QAction("WAV\u3092\u958b\u304f", self)
-        self.action_save_vmd = QAction("VMD\u3092\u4fdd\u5b58", self)
-        self.action_exit = QAction("\u7d42\u4e86", self)
-        file_menu.addAction(self.action_open_text)
-        file_menu.addAction(self.action_open_wav)
-        self.menu_recent_text = file_menu.addMenu("\u6700\u8fd1\u4f7f\u3063\u305fTEXT")
-        self.menu_recent_wav = file_menu.addMenu("\u6700\u8fd1\u4f7f\u3063\u305fWAV")
-        file_menu.addSeparator()
-        file_menu.addAction(self.action_save_vmd)
-        file_menu.addSeparator()
-        file_menu.addAction(self.action_exit)
+        self.file_menu = menu_bar.addMenu(strings["MENU_FILE"])
+        self.action_open_text = QAction(strings["ACTION_OPEN_TEXT"], self)
+        self.action_open_wav = QAction(strings["ACTION_OPEN_WAV"], self)
+        self.action_save_vmd = QAction(strings["ACTION_SAVE_VMD"], self)
+        self.action_exit = QAction(strings["ACTION_EXIT"], self)
+        self.file_menu.addAction(self.action_open_text)
+        self.file_menu.addAction(self.action_open_wav)
+        self.menu_recent_text = self.file_menu.addMenu(strings["RECENT_TEXT_MENU"])
+        self.menu_recent_wav = self.file_menu.addMenu(strings["RECENT_WAV_MENU"])
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(self.action_save_vmd)
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(self.action_exit)
 
-        run_menu = menu_bar.addMenu(MainWindowStrings.MENU_RUN)
-        self.action_run_processing = QAction("\u51e6\u7406\u5b9f\u884c", self)
-        self.action_reanalyze = QAction("\u518d\u89e3\u6790", self)
-        run_menu.addAction(self.action_run_processing)
-        run_menu.addAction(self.action_reanalyze)
+        self.run_menu = menu_bar.addMenu(strings["MENU_RUN"])
+        self.action_run_processing = QAction(strings["ACTION_RUN_PROCESSING"], self)
+        self.action_reanalyze = QAction(strings["ACTION_REANALYZE"], self)
+        self.run_menu.addAction(self.action_run_processing)
+        self.run_menu.addAction(self.action_reanalyze)
 
-        view_menu = menu_bar.addMenu(MainWindowStrings.MENU_VIEW)
-        self.action_show_30fps_lines = QAction("30fps\u7e26\u7dda\u3092\u8868\u793a", self)
-        self.action_show_vowel_labels = QAction("\u6bcd\u97f3\u30e9\u30d9\u30eb\u3092\u8868\u793a", self)
-        self.action_show_event_ranges = QAction("\u30a4\u30d9\u30f3\u30c8\u533a\u9593\u3092\u8868\u793a", self)
-        self.action_zoom_in = QAction("Zoom In", self)
-        self.action_zoom_out = QAction("Zoom Out", self)
-        self.action_reset_waveform_view = QAction("\u6ce2\u5f62\u8868\u793a\u3092\u521d\u671f\u5316", self)
+        self.view_menu = menu_bar.addMenu(strings["MENU_VIEW"])
+        self.action_show_30fps_lines = QAction(strings["ACTION_SHOW_30FPS_LINES"], self)
+        self.action_show_vowel_labels = QAction(strings["ACTION_SHOW_VOWEL_LABELS"], self)
+        self.action_show_event_ranges = QAction(strings["ACTION_SHOW_EVENT_RANGES"], self)
+        self.action_zoom_in = QAction(strings["ACTION_ZOOM_IN"], self)
+        self.action_zoom_out = QAction(strings["ACTION_ZOOM_OUT"], self)
+        self.action_reset_waveform_view = QAction(strings["ACTION_RESET_WAVEFORM_VIEW"], self)
         self.theme_action_group = QActionGroup(self)
         self.theme_action_group.setExclusive(True)
-        self.action_theme_dark = QAction(MainWindowStrings.ACTION_THEME_DARK, self)
-        self.action_theme_light = QAction(MainWindowStrings.ACTION_THEME_LIGHT, self)
+        self.action_theme_dark = QAction(strings["ACTION_THEME_DARK"], self)
+        self.action_theme_light = QAction(strings["ACTION_THEME_LIGHT"], self)
         self.action_theme_dark.setCheckable(True)
         self.action_theme_light.setCheckable(True)
         self.theme_action_group.addAction(self.action_theme_dark)
@@ -865,22 +1171,34 @@ class MainWindow(QWidget):
         self.action_show_30fps_lines.setCheckable(True)
         self.action_show_vowel_labels.setCheckable(True)
         self.action_show_event_ranges.setCheckable(True)
-        view_menu.addAction(self.action_show_30fps_lines)
-        view_menu.addAction(self.action_show_vowel_labels)
-        view_menu.addAction(self.action_show_event_ranges)
-        view_menu.addSeparator()
-        view_menu.addAction(self.action_zoom_in)
-        view_menu.addAction(self.action_zoom_out)
-        view_menu.addSeparator()
-        view_menu.addAction(self.action_reset_waveform_view)
-        view_menu.addSeparator()
-        self.menu_theme = view_menu.addMenu(MainWindowStrings.MENU_VIEW_THEME)
+        self.view_menu.addAction(self.action_show_30fps_lines)
+        self.view_menu.addAction(self.action_show_vowel_labels)
+        self.view_menu.addAction(self.action_show_event_ranges)
+        self.view_menu.addSeparator()
+        self.view_menu.addAction(self.action_zoom_in)
+        self.view_menu.addAction(self.action_zoom_out)
+        self.view_menu.addSeparator()
+        self.view_menu.addAction(self.action_reset_waveform_view)
+        self.view_menu.addSeparator()
+        self.language_action_group = QActionGroup(self)
+        self.language_action_group.setExclusive(True)
+        self.action_language_japanese = QAction("日本語", self)
+        self.action_language_english = QAction("English", self)
+        self.action_language_japanese.setCheckable(True)
+        self.action_language_english.setCheckable(True)
+        self.language_action_group.addAction(self.action_language_japanese)
+        self.language_action_group.addAction(self.action_language_english)
+        self.menu_language = self.view_menu.addMenu(strings["MENU_VIEW_LANGUAGE"])
+        self.menu_language.addAction(self.action_language_japanese)
+        self.menu_language.addAction(self.action_language_english)
+        self.view_menu.addSeparator()
+        self.menu_theme = self.view_menu.addMenu(strings["MENU_VIEW_THEME"])
         self.menu_theme.addAction(self.action_theme_dark)
         self.menu_theme.addAction(self.action_theme_light)
 
-        help_menu = menu_bar.addMenu(MainWindowStrings.MENU_HELP)
-        self.action_show_version = QAction("\u30d0\u30fc\u30b8\u30e7\u30f3\u60c5\u5831", self)
-        help_menu.addAction(self.action_show_version)
+        self.help_menu = menu_bar.addMenu(strings["MENU_HELP"])
+        self.action_show_version = QAction(strings["ACTION_SHOW_VERSION"], self)
+        self.help_menu.addAction(self.action_show_version)
 
         self._connect_menu_actions()
         self._refresh_recent_file_menus()
@@ -900,6 +1218,12 @@ class MainWindow(QWidget):
         self.action_zoom_in.triggered.connect(self._on_zoom_in_requested)
         self.action_zoom_out.triggered.connect(self._on_zoom_out_requested)
         self.action_reset_waveform_view.triggered.connect(self._reset_waveform_view_options)
+        self.action_language_japanese.triggered.connect(
+            lambda _checked=False: self.apply_language_setting("ja")
+        )
+        self.action_language_english.triggered.connect(
+            lambda _checked=False: self.apply_language_setting("en")
+        )
         self.action_theme_dark.triggered.connect(
             lambda _checked=False: self.apply_theme(ThemeStrings.DARK)
         )
@@ -919,6 +1243,15 @@ class MainWindow(QWidget):
         ):
             previous_blocked = action.blockSignals(True)
             action.setChecked(checked)
+            action.blockSignals(previous_blocked)
+
+    def _sync_language_action_checks(self) -> None:
+        for action, language in (
+            (self.action_language_japanese, "ja"),
+            (self.action_language_english, "en"),
+        ):
+            previous_blocked = action.blockSignals(True)
+            action.setChecked(self._current_language == language)
             action.blockSignals(previous_blocked)
 
     def current_theme(self) -> str:
@@ -947,31 +1280,118 @@ class MainWindow(QWidget):
         return resolved_ratio
 
     def default_ui_settings(self) -> dict[str, object]:
+        defaults = SettingsStore.default_settings()
         return {
-            _UI_SETTING_KEY_THEME: self.default_theme(),
-            _UI_SETTING_KEY_CENTER_SPLITTER_RATIO: list(self.default_center_splitter_ratio()),
+            _UI_SETTING_KEY_THEME: defaults[_UI_SETTING_KEY_THEME],
+            _UI_SETTING_KEY_CENTER_SPLITTER_RATIO: defaults[
+                _UI_SETTING_KEY_CENTER_SPLITTER_RATIO
+            ],
+            _UI_SETTING_KEY_WINDOW_WIDTH: int(defaults[_UI_SETTING_KEY_WINDOW_WIDTH]),
+            _UI_SETTING_KEY_WINDOW_HEIGHT: int(defaults[_UI_SETTING_KEY_WINDOW_HEIGHT]),
+            _UI_SETTING_KEY_LANGUAGE: defaults[_UI_SETTING_KEY_LANGUAGE],
+            _UI_SETTING_KEY_MORPH_UPPER_LIMIT: float(
+                defaults[_UI_SETTING_KEY_MORPH_UPPER_LIMIT]
+            ),
+            _UI_SETTING_KEY_RECENT_TEXT_FILES: list(
+                defaults[_UI_SETTING_KEY_RECENT_TEXT_FILES]
+            ),
+            _UI_SETTING_KEY_RECENT_WAV_FILES: list(
+                defaults[_UI_SETTING_KEY_RECENT_WAV_FILES]
+            ),
         }
 
     def current_ui_settings(self) -> dict[str, object]:
+        current_size = self.size()
         return {
             _UI_SETTING_KEY_THEME: self.current_theme(),
-            _UI_SETTING_KEY_CENTER_SPLITTER_RATIO: list(self.current_center_splitter_ratio()),
+            _UI_SETTING_KEY_CENTER_SPLITTER_RATIO: self._center_splitter_ratio_to_store_value(
+                self._current_center_splitter_ratio
+            ),
+            _UI_SETTING_KEY_WINDOW_WIDTH: max(int(current_size.width()), _MIN_WINDOW_WIDTH),
+            _UI_SETTING_KEY_WINDOW_HEIGHT: max(
+                int(current_size.height()), _MIN_WINDOW_HEIGHT
+            ),
+            _UI_SETTING_KEY_LANGUAGE: normalize_language(self._current_language),
+            _UI_SETTING_KEY_MORPH_UPPER_LIMIT: self._current_upper_limit(),
+            _UI_SETTING_KEY_RECENT_TEXT_FILES: list(self.recent_text_files),
+            _UI_SETTING_KEY_RECENT_WAV_FILES: list(self.recent_wav_files),
         }
 
     def apply_ui_settings(self, settings: Mapping[str, object] | None) -> None:
-        resolved_settings = dict(settings or {})
-        self.apply_theme(resolved_settings.get(_UI_SETTING_KEY_THEME, self.default_theme()))
-        self.apply_center_splitter_ratio(
-            resolved_settings.get(
-                _UI_SETTING_KEY_CENTER_SPLITTER_RATIO,
-                self.default_center_splitter_ratio(),
+        resolved_settings = self.default_ui_settings()
+        resolved_settings.update(dict(settings or {}))
+        previous_suspended = self._suspend_settings_persistence
+        self._suspend_settings_persistence = True
+        try:
+            resolved_window_width, resolved_window_height = self._resolve_startup_window_size(
+                resolved_settings
             )
-        )
+            self.resize(resolved_window_width, resolved_window_height)
+
+            self.apply_center_splitter_ratio(
+                self._resolve_startup_center_splitter_ratio(
+                    resolved_settings.get(_UI_SETTING_KEY_CENTER_SPLITTER_RATIO)
+                )
+            )
+            self.apply_language_setting(
+                str(resolved_settings.get(_UI_SETTING_KEY_LANGUAGE, _DEFAULT_LANGUAGE)),
+                persist=False,
+                reset_status_text=False,
+            )
+            self.apply_theme(
+                str(resolved_settings.get(_UI_SETTING_KEY_THEME, self.default_theme()))
+            )
+            self._apply_startup_morph_upper_limit(
+                self._resolve_startup_morph_upper_limit(
+                    resolved_settings.get(_UI_SETTING_KEY_MORPH_UPPER_LIMIT)
+                )
+            )
+            self._apply_recent_file_state(
+                recent_text_files=resolved_settings.get(_UI_SETTING_KEY_RECENT_TEXT_FILES),
+                recent_wav_files=resolved_settings.get(_UI_SETTING_KEY_RECENT_WAV_FILES),
+            )
+        finally:
+            self._suspend_settings_persistence = previous_suspended
+
+    def request_ui_settings_save(self) -> SettingsSaveResult | None:
+        if self._settings_store is None:
+            return None
+        if self._settings_save_disabled_in_session or not self._settings_store.can_save():
+            self._settings_save_disabled_in_session = True
+            return self._build_save_disabled_result()
+
+        save_result = self._settings_store.save(self.current_ui_settings())
+        self._record_settings_save_result(save_result)
+        return save_result
+
+    def request_recent_history_save(self) -> SettingsSaveResult | None:
+        if self._settings_store is None:
+            return None
+        payload = self.current_ui_settings()
+        payload[_UI_SETTING_KEY_RECENT_TEXT_FILES] = list(self.recent_text_files)
+        payload[_UI_SETTING_KEY_RECENT_WAV_FILES] = list(self.recent_wav_files)
+        if self._settings_save_disabled_in_session or not self._settings_store.can_save():
+            self._settings_save_disabled_in_session = True
+            return self._build_save_disabled_result()
+
+        save_result = self._settings_store.save(payload)
+        self._record_settings_save_result(save_result)
+        return save_result
+
+    def is_settings_save_disabled(self) -> bool:
+        if self._settings_store is None:
+            return True
+        return self._settings_save_disabled_in_session or not self._settings_store.can_save()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._handle_settings_save_result(self.request_recent_history_save())
+        super().closeEvent(event)
 
     def apply_theme(self, theme_name: str) -> None:
         resolved_theme = str(theme_name).strip().lower()
         if resolved_theme not in ThemeStrings.SUPPORTED:
             resolved_theme = self.default_theme()
+        theme_changed = resolved_theme != self._current_theme
         self._current_theme = resolved_theme
 
         QApplication.instance().setProperty("appTheme", resolved_theme)
@@ -993,9 +1413,38 @@ class MainWindow(QWidget):
             self._build_qt_theme_stylesheet(resolved_theme)
         )
         self._sync_theme_action_checks()
+        if theme_changed and self._should_persist_settings():
+            self._handle_settings_save_result(self.request_ui_settings_save())
+
+    def apply_language_setting(
+        self,
+        language: str,
+        *,
+        persist: bool = True,
+        reset_status_text: bool = False,
+    ) -> str:
+        resolved_language = normalize_language(language)
+        language_changed = resolved_language != self._current_language
+        self._current_language = resolved_language
+        self._retranslate_ui_for_current_language(
+            reset_status_text=reset_status_text,
+        )
+        if language_changed and persist and self._should_persist_settings():
+            self._handle_settings_save_result(self.request_ui_settings_save())
+        return resolved_language
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if not self._should_persist_settings():
+            return
+        self._deferred_window_size_save_timer.start(_DEFERRED_SETTINGS_SAVE_DELAY_MS)
 
     def _on_center_splitter_moved(self, _pos: int, _index: int) -> None:
         self._current_center_splitter_ratio = self.current_center_splitter_ratio()
+        if self._is_restoring_startup_settings:
+            return
+        if self._should_persist_settings():
+            self._deferred_splitter_save_timer.start(_DEFERRED_SETTINGS_SAVE_DELAY_MS)
         self._request_waveform_bounds_sync()
 
     def _apply_initial_center_splitter_ratio(self) -> None:
@@ -1035,6 +1484,128 @@ class MainWindow(QWidget):
         left_width = max((available_width * resolved_ratio[0]) // total_ratio, 1)
         right_width = max(available_width - left_width, 1)
         return [left_width, right_width]
+
+    def _center_splitter_ratio_to_store_value(self, ratio: Sequence[int] | None) -> float:
+        resolved_ratio = self._normalize_center_splitter_ratio(ratio)
+        total_ratio = resolved_ratio[0] + resolved_ratio[1]
+        if total_ratio <= 0:
+            return float(SettingsStore.default_settings()[_UI_SETTING_KEY_CENTER_SPLITTER_RATIO])
+        return round(resolved_ratio[0] / total_ratio, 6)
+
+    def _record_settings_save_result(self, save_result: SettingsSaveResult) -> None:
+        self._last_settings_save_result = save_result
+        self._settings_save_disabled_in_session = save_result.save_disabled
+
+    def _build_save_disabled_result(self) -> SettingsSaveResult:
+        settings_path = (
+            self._settings_store.settings_path
+            if self._settings_store is not None
+            else SettingsStore.default_settings_path()
+        )
+        return SettingsSaveResult(
+            attempted=False,
+            succeeded=False,
+            settings_path=settings_path,
+            save_disabled=True,
+            first_failure_in_session=False,
+            error_message=(
+                self._settings_store.last_save_error if self._settings_store is not None else None
+            ),
+        )
+
+    def _refresh_wav_info_label_for_current_language(self) -> None:
+        if not self.selected_wav_analysis or not self.selected_wav_path:
+            self.wav_info_label.setText(self._main_window_text("WAV_INFO_NOT_LOADED"))
+            return
+
+        self.wav_info_label.setText(
+            self._main_window_text("WAV_INFO_TEMPLATE").format(
+                file_name=Path(self.selected_wav_path).name,
+                duration_sec=self.selected_wav_analysis.duration_sec,
+                sample_rate_hz=self.selected_wav_analysis.sample_rate_hz,
+                speech_start_sec=self.selected_wav_analysis.speech_start_sec,
+                speech_end_sec=self.selected_wav_analysis.speech_end_sec,
+            )
+        )
+
+    def _normalize_recent_files_setting(self, value: object) -> list[str]:
+        if not isinstance(value, (list, tuple)):
+            return []
+        normalized_files: list[str] = []
+        seen_paths: set[str] = set()
+        for recent_path in value:
+            if not isinstance(recent_path, str):
+                continue
+            stripped_path = recent_path.strip()
+            if not stripped_path:
+                continue
+            normalized_key = self._normalize_recent_path(stripped_path)
+            if normalized_key in seen_paths:
+                continue
+            seen_paths.add(normalized_key)
+            normalized_files.append(stripped_path)
+            if len(normalized_files) >= self._recent_file_limit:
+                break
+        return normalized_files
+
+    def _apply_recent_file_state(
+        self,
+        *,
+        recent_text_files: object | None = None,
+        recent_wav_files: object | None = None,
+        prune_invalid_paths: bool = False,
+    ) -> None:
+        if recent_text_files is not None:
+            self.recent_text_files = self._normalize_recent_files_setting(
+                recent_text_files
+            )
+            if prune_invalid_paths:
+                self.recent_text_files = self._prune_invalid_recent_files(
+                    self.recent_text_files,
+                    expected_suffix=".txt",
+                )
+        if recent_wav_files is not None:
+            self.recent_wav_files = self._normalize_recent_files_setting(
+                recent_wav_files
+            )
+            if prune_invalid_paths:
+                self.recent_wav_files = self._prune_invalid_recent_files(
+                    self.recent_wav_files,
+                    expected_suffix=".wav",
+                )
+        self._refresh_recent_file_menus()
+
+    def _should_persist_settings(self) -> bool:
+        return (not self._is_restoring_startup_settings) and (
+            not self._suspend_settings_persistence
+        )
+
+    def _flush_deferred_splitter_settings_save(self) -> None:
+        if not self._should_persist_settings():
+            return
+        self._handle_settings_save_result(self.request_ui_settings_save())
+
+    def _flush_deferred_window_size_settings_save(self) -> None:
+        if not self._should_persist_settings():
+            return
+        self._handle_settings_save_result(self.request_ui_settings_save())
+
+    def _handle_settings_save_result(
+        self,
+        save_result: SettingsSaveResult | None,
+    ) -> None:
+        if save_result is None:
+            return
+        if save_result.should_notify_user:
+            self._show_settings_save_warning()
+
+    def _show_settings_save_warning(self) -> None:
+        strings = MainWindowStrings.for_language(self._current_language)
+        QMessageBox.warning(
+            self,
+            strings["SETTINGS_SAVE_WARNING_TITLE"],
+            strings["SETTINGS_SAVE_WARNING_MESSAGE"],
+        )
 
     def _build_qt_theme_stylesheet(self, theme_name: str) -> str:
         if theme_name == ThemeStrings.LIGHT:
@@ -1364,9 +1935,9 @@ QSplitter#CenterSplitter::handle {{
         initial_dir = self._resolve_text_dialog_initial_dir()
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "TEXT\u30d5\u30a1\u30a4\u30eb\u3092\u9078\u629e",
+            self._file_dialog_text("OPEN_TEXT_TITLE"),
             initial_dir,
-            "Text Files (*.txt);;All Files (*)",
+            self._file_dialog_text("TEXT_FILTER"),
         )
         if not file_path:
             return
@@ -1381,8 +1952,8 @@ QSplitter#CenterSplitter::handle {{
     def _show_text_conversion_failed_previews(self) -> None:
         self.selected_hiragana_content = ""
         self.selected_vowel_content = ""
-        self.hiragana_preview.setPlainText("(\u3072\u3089\u304c\u306a\u5909\u63db\u306b\u5931\u6557\u3057\u307e\u3057\u305f)")
-        self.vowel_preview.setPlainText("(\u6bcd\u97f3\u5909\u63db\u306f\u672a\u5b9f\u884c\u3067\u3059)")
+        self.hiragana_preview.setPlainText(self._main_window_text("TEXT_PREVIEW_HIRAGANA_FAILED"))
+        self.vowel_preview.setPlainText(self._main_window_text("TEXT_PREVIEW_VOWEL_PENDING"))
 
     def _load_text_file(self, file_path: str, *, suppress_warning: bool = False) -> bool:
         def _fail_text_load(*, title: str, message: str, status: str) -> bool:
@@ -1402,30 +1973,30 @@ QSplitter#CenterSplitter::handle {{
         normalized_path = file_path.strip()
         if not normalized_path:
             return _fail_text_load(
-                title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
-                message="TEXT\u30d5\u30a1\u30a4\u30eb\u306e\u30d1\u30b9\u304c\u7a7a\u3067\u3059\u3002",
-                status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
+                title=self._warning_text("READ_ERROR_TITLE"),
+                message=self._main_window_text("TEXT_LOAD_EMPTY_PATH"),
+                status=self._status_text("TEXT_LOAD_FAILURE"),
             )
 
         text_path = Path(normalized_path)
         try:
             if not text_path.exists():
                 return _fail_text_load(
-                    title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
-                    message="TEXT\u30d5\u30a1\u30a4\u30eb\u304c\u5b58\u5728\u3057\u307e\u305b\u3093\u3002",
-                    status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
+                    title=self._warning_text("READ_ERROR_TITLE"),
+                    message=self._main_window_text("TEXT_LOAD_NOT_FOUND"),
+                    status=self._status_text("TEXT_LOAD_FAILURE"),
                 )
             if text_path.is_dir():
                 return _fail_text_load(
-                    title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
-                    message="TEXT\u30d5\u30a1\u30a4\u30eb\u3067\u306f\u306a\u304f\u30d5\u30a9\u30eb\u30c0\u304c\u9078\u629e\u3055\u308c\u3066\u3044\u307e\u3059\u3002",
-                    status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
+                    title=self._warning_text("READ_ERROR_TITLE"),
+                    message=self._main_window_text("TEXT_LOAD_DIRECTORY_SELECTED"),
+                    status=self._status_text("TEXT_LOAD_FAILURE"),
                 )
         except OSError as error:
             return _fail_text_load(
-                title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
-                message=f"TEXT\u30d5\u30a1\u30a4\u30eb\u306e\u78ba\u8a8d\u4e2d\u306b\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f: {error}",
-                status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
+                title=self._warning_text("READ_ERROR_TITLE"),
+                message=self._main_window_text("TEXT_LOAD_CHECK_ERROR").format(error=error),
+                status=self._status_text("TEXT_LOAD_FAILURE"),
             )
 
         text_content = None
@@ -1438,16 +2009,16 @@ QSplitter#CenterSplitter::handle {{
                     continue
         except OSError as error:
             return _fail_text_load(
-                title="読み込みエラー",
-                message=f"TEXTファイルを読み込めません: {error}",
-                status="出力状態: TEXT読込失敗",
+                title=self._warning_text("READ_ERROR_TITLE"),
+                message=self._main_window_text("TEXT_LOAD_READ_ERROR").format(error=error),
+                status=self._status_text("TEXT_LOAD_FAILURE"),
             )
 
         if text_content is None:
             return _fail_text_load(
-                title="読み込みエラー",
-                message="対応する文字コード（UTF-8, Shift_JIS, UTF-16）でTEXTファイルを読み込めませんでした。",
-                status="出力状態: TEXT読込失敗",
+                title=self._warning_text("READ_ERROR_TITLE"),
+                message=self._main_window_text("TEXT_LOAD_UNSUPPORTED_ENCODING"),
+                status=self._status_text("TEXT_LOAD_FAILURE"),
             )
 
         previous_text_state = None
@@ -1490,12 +2061,12 @@ QSplitter#CenterSplitter::handle {{
             self._reset_text_analysis_state()
             self.selected_hiragana_content = ""
             self.selected_vowel_content = ""
-            self.hiragana_preview.setPlainText("(\u3072\u3089\u304c\u306a\u5909\u63db\u306f\u672a\u5b9f\u884c\u3067\u3059)")
-            self.vowel_preview.setPlainText("(\u6bcd\u97f3\u5909\u63db\u306f\u672a\u5b9f\u884c\u3067\u3059)")
+            self.hiragana_preview.setPlainText(self._main_window_text("TEXT_PREVIEW_HIRAGANA_PENDING"))
+            self.vowel_preview.setPlainText(self._main_window_text("TEXT_PREVIEW_VOWEL_PENDING"))
             self._show_warning(
-                title="TEXT\u5909\u63db\u30a8\u30e9\u30fc",
-                message="TEXT\u30d5\u30a1\u30a4\u30eb\u304c\u7a7a\u3067\u3059\u3002",
-                status="\u51fa\u529b\u72b6\u614b: TEXT\u5909\u63db\u5931\u6557",
+                title=self._warning_text("TEXT_CONVERSION_ERROR_TITLE"),
+                message=self._main_window_text("TEXT_LOAD_EMPTY_FILE"),
+                status=self._status_text("TEXT_CONVERSION_FAILURE"),
             )
             return False
 
@@ -1512,9 +2083,9 @@ QSplitter#CenterSplitter::handle {{
             self._reset_text_analysis_state()
             self._show_text_conversion_failed_previews()
             self._show_warning(
-                title="TEXT\u5909\u63db\u30a8\u30e9\u30fc",
-                message=f"TEXT\u3092\u304b\u306a/\u3072\u3089\u304c\u306a\u306b\u5909\u63db\u3067\u304d\u307e\u305b\u3093: {error}",
-                status="\u51fa\u529b\u72b6\u614b: TEXT\u5909\u63db\u5931\u6557",
+                title=self._warning_text("TEXT_CONVERSION_ERROR_TITLE"),
+                message=self._main_window_text("TEXT_CONVERSION_ERROR").format(error=error),
+                status=self._status_text("TEXT_CONVERSION_FAILURE"),
             )
             return False
         except Exception as error:
@@ -1524,9 +2095,9 @@ QSplitter#CenterSplitter::handle {{
             self._reset_text_analysis_state()
             self._show_text_conversion_failed_previews()
             self._show_warning(
-                title="\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc",
-                message=f"TEXT\u8aad\u307f\u8fbc\u307f\u4e2d\u306b\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f: {error}",
-                status="\u51fa\u529b\u72b6\u614b: TEXT\u8aad\u8fbc\u5931\u6557",
+                title=self._warning_text("UNEXPECTED_ERROR_TITLE"),
+                message=self._main_window_text("TEXT_LOAD_UNEXPECTED_ERROR").format(error=error),
+                status=self._status_text("TEXT_LOAD_FAILURE"),
             )
             return False
 
@@ -1536,9 +2107,9 @@ QSplitter#CenterSplitter::handle {{
                 return False
             self._reset_text_analysis_state()
             self._show_warning(
-                title="TEXT\u5909\u63db\u30a8\u30e9\u30fc",
-                message="\u6bcd\u97f3\u3092\u62bd\u51fa\u3067\u304d\u308b\u6587\u5b57\u304c\u3042\u308a\u307e\u305b\u3093\u3002",
-                status="\u51fa\u529b\u72b6\u614b: TEXT\u5909\u63db\u5931\u6557",
+                title=self._warning_text("TEXT_CONVERSION_ERROR_TITLE"),
+                message=self._main_window_text("TEXT_CONVERSION_NO_VOWELS"),
+                status=self._status_text("TEXT_CONVERSION_FAILURE"),
             )
             return False
 
@@ -1551,9 +2122,9 @@ QSplitter#CenterSplitter::handle {{
         initial_dir = self._resolve_wav_dialog_initial_dir()
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "WAV\u30d5\u30a1\u30a4\u30eb\u3092\u9078\u629e",
+            self._file_dialog_text("OPEN_WAV_TITLE"),
             initial_dir,
-            "WAV Files (*.wav);;All Files (*)",
+            self._file_dialog_text("WAV_FILTER"),
         )
         if not file_path:
             return
@@ -1561,12 +2132,14 @@ QSplitter#CenterSplitter::handle {{
             self.last_wav_dialog_dir = str(Path(file_path).parent)
             self._try_autocomplete_counterpart_load(file_path)
 
-    def _reset_wav_load_state(self, placeholder_message: str = "Waveform preview (load failed)") -> None:
+    def _reset_wav_load_state(self, placeholder_message: str | None = None) -> None:
+        if placeholder_message is None:
+            placeholder_message = self._main_window_text("WAV_LOAD_FAILED_PLACEHOLDER")
         self.selected_wav_path = None
         self.selected_wav_analysis = None
         self._invalidate_current_timing_plan()
         self._set_file_path_label(self.wav_path_label, "WAV", None)
-        self.wav_info_label.setText(MainWindowStrings.WAV_INFO_NOT_LOADED)
+        self._refresh_wav_info_label_for_current_language()
         self.wav_waveform_view.clear_morph_labels()
         self.wav_waveform_view.show_placeholder(placeholder_message)
         self.preview_area.set_timeline_duration_sec(0.0)
@@ -1574,22 +2147,22 @@ QSplitter#CenterSplitter::handle {{
 
     def _validate_wav_load_result(self, wav_info: WavAnalysisResult, waveform_preview) -> str | None:
         if wav_info.sample_rate_hz <= 0:
-            return "WAV\u306e\u30b5\u30f3\u30d7\u30ea\u30f3\u30b0\u5468\u6ce2\u6570\u304c\u7121\u52b9\u3067\u3059\u3002"
+            return self._main_window_text("WAV_INVALID_SAMPLE_RATE")
         if wav_info.frame_count < 0:
-            return "WAV\u306e\u30d5\u30ec\u30fc\u30e0\u6570\u304c\u7121\u52b9\u3067\u3059\u3002"
+            return self._main_window_text("WAV_INVALID_FRAME_COUNT")
         if wav_info.duration_sec < 0.0:
-            return "WAV\u306e\u518d\u751f\u6642\u9593\u304c\u7121\u52b9\u3067\u3059\u3002"
+            return self._main_window_text("WAV_INVALID_DURATION")
         if wav_info.has_speech:
             if wav_info.speech_start_sec < 0.0:
-                return "WAV\u306e\u767a\u8a71\u958b\u59cb\u6642\u9593\u304c\u7121\u52b9\u3067\u3059\u3002"
+                return self._main_window_text("WAV_INVALID_SPEECH_START")
             if wav_info.speech_end_sec <= wav_info.speech_start_sec:
-                return "WAV\u306e\u767a\u8a71\u533a\u9593\u304c\u7121\u52b9\u3067\u3059\u3002"
+                return self._main_window_text("WAV_INVALID_SPEECH_RANGE")
             if wav_info.speech_end_sec > (wav_info.duration_sec + 1e-9):
-                return "WAV\u306e\u767a\u8a71\u7d42\u4e86\u6642\u9593\u304c\u518d\u751f\u6642\u9593\u3092\u8d85\u3048\u3066\u3044\u307e\u3059\u3002"
+                return self._main_window_text("WAV_INVALID_SPEECH_END")
         if waveform_preview.duration_sec < 0.0:
-            return "WAV\u6ce2\u5f62\u306e\u518d\u751f\u6642\u9593\u304c\u7121\u52b9\u3067\u3059\u3002"
+            return self._main_window_text("WAV_INVALID_PREVIEW_DURATION")
         if waveform_preview.duration_sec > 0.0 and not waveform_preview.samples:
-            return "WAV\u6ce2\u5f62\u306e\u8868\u793a\u30c7\u30fc\u30bf\u304c\u53d6\u5f97\u3067\u304d\u307e\u305b\u3093\u3002"
+            return self._main_window_text("WAV_INVALID_PREVIEW_SAMPLES")
         return None
 
     def _load_wav_file(self, file_path: str, *, suppress_warning: bool = False) -> bool:
@@ -1610,45 +2183,45 @@ QSplitter#CenterSplitter::handle {{
         normalized_path = file_path.strip()
         if not normalized_path:
             return _fail_wav_load(
-                title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
-                message="WAV\u30d5\u30a1\u30a4\u30eb\u306e\u30d1\u30b9\u304c\u7a7a\u3067\u3059\u3002",
-                status=StatusTexts.WAV_LOAD_FAILURE,
+                title=self._warning_text("READ_ERROR_TITLE"),
+                message=self._main_window_text("WAV_LOAD_EMPTY_PATH"),
+                status=self._status_text("WAV_LOAD_FAILURE"),
             )
 
         wav_path = Path(normalized_path)
         try:
             if not wav_path.exists():
                 return _fail_wav_load(
-                    title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
-                    message="WAV\u30d5\u30a1\u30a4\u30eb\u304c\u5b58\u5728\u3057\u307e\u305b\u3093\u3002",
-                    status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
+                    title=self._warning_text("READ_ERROR_TITLE"),
+                    message=self._main_window_text("WAV_LOAD_NOT_FOUND"),
+                    status=self._status_text("WAV_LOAD_FAILURE"),
                 )
             if wav_path.is_dir():
                 return _fail_wav_load(
-                    title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
-                    message="WAV\u30d5\u30a1\u30a4\u30eb\u3067\u306f\u306a\u304f\u30d5\u30a9\u30eb\u30c0\u304c\u9078\u629e\u3055\u308c\u3066\u3044\u307e\u3059\u3002",
-                    status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
+                    title=self._warning_text("READ_ERROR_TITLE"),
+                    message=self._main_window_text("WAV_LOAD_DIRECTORY_SELECTED"),
+                    status=self._status_text("WAV_LOAD_FAILURE"),
                 )
         except OSError as error:
             return _fail_wav_load(
-                title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
-                message=f"WAV\u30d5\u30a1\u30a4\u30eb\u306e\u78ba\u8a8d\u4e2d\u306b\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f: {error}",
-                status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
+                title=self._warning_text("READ_ERROR_TITLE"),
+                message=self._main_window_text("WAV_LOAD_CHECK_ERROR").format(error=error),
+                status=self._status_text("WAV_LOAD_FAILURE"),
             )
 
         try:
             wav_info = analyze_wav_file(normalized_path)
         except (ValueError, OSError, EOFError) as error:
             return _fail_wav_load(
-                title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
-                message=f"WAV\u30d5\u30a1\u30a4\u30eb\u3092\u89e3\u6790\u3067\u304d\u307e\u305b\u3093: {error}",
-                status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
+                title=self._warning_text("READ_ERROR_TITLE"),
+                message=self._main_window_text("WAV_ANALYZE_ERROR").format(error=error),
+                status=self._status_text("WAV_LOAD_FAILURE"),
             )
         except Exception as error:
             return _fail_wav_load(
-                title="\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc",
-                message=f"WAV\u89e3\u6790\u4e2d\u306b\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f: {error}",
-                status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
+                title=self._warning_text("UNEXPECTED_ERROR_TITLE"),
+                message=self._main_window_text("WAV_ANALYZE_UNEXPECTED_ERROR").format(error=error),
+                status=self._status_text("WAV_LOAD_FAILURE"),
             )
 
         try:
@@ -1659,23 +2232,23 @@ QSplitter#CenterSplitter::handle {{
             )
         except (ValueError, OSError, EOFError) as error:
             return _fail_wav_load(
-                title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
-                message=f"WAV\u6ce2\u5f62\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093: {error}",
-                status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
+                title=self._warning_text("READ_ERROR_TITLE"),
+                message=self._main_window_text("WAV_PREVIEW_ERROR").format(error=error),
+                status=self._status_text("WAV_LOAD_FAILURE"),
             )
         except Exception as error:
             return _fail_wav_load(
-                title="\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc",
-                message=f"WAV\u6ce2\u5f62\u53d6\u5f97\u4e2d\u306b\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f: {error}",
-                status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
+                title=self._warning_text("UNEXPECTED_ERROR_TITLE"),
+                message=self._main_window_text("WAV_PREVIEW_UNEXPECTED_ERROR").format(error=error),
+                status=self._status_text("WAV_LOAD_FAILURE"),
             )
 
         wav_load_error = self._validate_wav_load_result(wav_info, waveform_preview)
         if wav_load_error:
             return _fail_wav_load(
-                title="\u8aad\u307f\u8fbc\u307f\u30a8\u30e9\u30fc",
-                message=f"WAV\u60c5\u5831\u304c\u7121\u52b9\u3067\u3059: {wav_load_error}",
-                status="\u51fa\u529b\u72b6\u614b: WAV\u8aad\u8fbc\u5931\u6557",
+                title=self._warning_text("READ_ERROR_TITLE"),
+                message=self._main_window_text("WAV_INVALID_INFO").format(detail=wav_load_error),
+                status=self._status_text("WAV_LOAD_FAILURE"),
             )
 
         self.selected_wav_path = normalized_path
@@ -1684,15 +2257,7 @@ QSplitter#CenterSplitter::handle {{
         self._invalidate_current_timing_plan()
         self.preview_area.set_timeline_duration_sec(wav_info.duration_sec)
         self._set_file_path_label(self.wav_path_label, "WAV", self.selected_wav_path)
-        self.wav_info_label.setText(
-            MainWindowStrings.WAV_INFO_TEMPLATE.format(
-                file_name=wav_path.name,
-                duration_sec=wav_info.duration_sec,
-                sample_rate_hz=wav_info.sample_rate_hz,
-                speech_start_sec=wav_info.speech_start_sec,
-                speech_end_sec=wav_info.speech_end_sec,
-            )
-        )
+        self._refresh_wav_info_label_for_current_language()
         self.wav_waveform_view.plot_waveform(
             waveform_preview.samples,
             waveform_preview.duration_sec,
@@ -1712,9 +2277,11 @@ QSplitter#CenterSplitter::handle {{
             if recent_path_error:
                 self._remove_recent_text_file(file_path)
                 self._show_warning(
-                    title="読み込みエラー",
-                    message=f"最近使ったTEXTを開けません: {recent_path_error}",
-                    status=StatusTexts.TEXT_LOAD_FAILURE,
+                    title=self._warning_text("READ_ERROR_TITLE"),
+                    message=self._main_window_text("RECENT_TEXT_OPEN_FAILED").format(
+                        detail=recent_path_error
+                    ),
+                    status=self._status_text("TEXT_LOAD_FAILURE"),
                 )
                 return
             if self._load_text_file(file_path):
@@ -1727,9 +2294,11 @@ QSplitter#CenterSplitter::handle {{
             self._remove_recent_text_file(file_path)
             self._reset_text_analysis_state()
             self._show_warning(
-                title="\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc",
-                message=f"最近使ったTEXTの読み込み中に予期しないエラーが発生しました: {error}",
-                status=StatusTexts.TEXT_LOAD_FAILURE,
+                title=self._warning_text("UNEXPECTED_ERROR_TITLE"),
+                message=self._main_window_text("RECENT_TEXT_UNEXPECTED_ERROR").format(
+                    error=error
+                ),
+                status=self._status_text("TEXT_LOAD_FAILURE"),
             )
 
     def _open_recent_wav_file(self, file_path: str) -> None:
@@ -1741,9 +2310,11 @@ QSplitter#CenterSplitter::handle {{
             if recent_path_error:
                 self._remove_recent_wav_file(file_path)
                 self._show_warning(
-                    title="読み込みエラー",
-                    message=f"最近使ったWAVを開けません: {recent_path_error}",
-                    status=StatusTexts.WAV_LOAD_FAILURE,
+                    title=self._warning_text("READ_ERROR_TITLE"),
+                    message=self._main_window_text("RECENT_WAV_OPEN_FAILED").format(
+                        detail=recent_path_error
+                    ),
+                    status=self._status_text("WAV_LOAD_FAILURE"),
                 )
                 return
             if self._load_wav_file(file_path):
@@ -1756,9 +2327,11 @@ QSplitter#CenterSplitter::handle {{
             self._remove_recent_wav_file(file_path)
             self._reset_wav_load_state()
             self._show_warning(
-                title="\u4e88\u671f\u3057\u306a\u3044\u30a8\u30e9\u30fc",
-                message=f"最近使ったWAVの読み込み中に予期しないエラーが発生しました: {error}",
-                status=StatusTexts.WAV_LOAD_FAILURE,
+                title=self._warning_text("UNEXPECTED_ERROR_TITLE"),
+                message=self._main_window_text("RECENT_WAV_UNEXPECTED_ERROR").format(
+                    error=error
+                ),
+                status=self._status_text("WAV_LOAD_FAILURE"),
             )
 
     def _add_recent_text_file(self, file_path: str) -> None:
@@ -1801,6 +2374,22 @@ QSplitter#CenterSplitter::handle {{
     def _normalize_recent_path(self, file_path: str) -> str:
         return os.path.normcase(os.path.normpath(file_path))
 
+    def _prune_invalid_recent_files(
+        self,
+        recent_files: list[str],
+        *,
+        expected_suffix: str,
+    ) -> list[str]:
+        valid_files: list[str] = []
+        for file_path in recent_files:
+            if self._validate_recent_file_path(
+                file_path=file_path,
+                expected_suffix=expected_suffix,
+            ):
+                continue
+            valid_files.append(file_path)
+        return valid_files
+
     def _validate_recent_file_path(
         self,
         *,
@@ -1809,19 +2398,21 @@ QSplitter#CenterSplitter::handle {{
     ) -> str | None:
         normalized_path = file_path.strip()
         if not normalized_path:
-            return "履歴パスが空です。"
+            return self._main_window_text("RECENT_INVALID_EMPTY_PATH")
 
         path = Path(normalized_path)
         try:
             if not path.exists():
-                return "ファイルが存在しません。"
+                return self._main_window_text("RECENT_INVALID_NOT_FOUND")
             if path.is_dir():
-                return "フォルダが指定されています。"
+                return self._main_window_text("RECENT_INVALID_DIRECTORY")
         except OSError as error:
-            return f"ファイル確認中にエラーが発生しました: {error}"
+            return self._main_window_text("RECENT_INVALID_CHECK_ERROR").format(error=error)
 
         if path.suffix.lower() != expected_suffix:
-            return f"{expected_suffix} ファイルではありません。"
+            return self._main_window_text("RECENT_INVALID_SUFFIX").format(
+                expected_suffix=expected_suffix
+            )
 
         return None
 
@@ -1851,14 +2442,16 @@ QSplitter#CenterSplitter::handle {{
     ) -> None:
         menu.clear()
         if not recent_files:
-            empty_action = QAction("(\u5c65\u6b74\u306a\u3057)", self)
+            empty_action = QAction(self._main_window_text("EMPTY_RECENT_FILES"), self)
             empty_action.setEnabled(False)
+            empty_action.setData("__recent_placeholder__")
             menu.addAction(empty_action)
-            menu.setEnabled(False)
+            menu.setEnabled(True)
             return
         menu.setEnabled(True)
         for recent_path in recent_files:
             action = QAction(recent_path, self)
+            action.setData(recent_path)
             action.triggered.connect(
                 lambda _checked=False, selected_path=recent_path: on_selected(selected_path)
             )
@@ -1868,9 +2461,9 @@ QSplitter#CenterSplitter::handle {{
         normalized_output_path = raw_output_path.strip()
         if not normalized_output_path:
             self._show_warning(
-                title="出力エラー",
-                message="VMDの保存先パスが空です。",
-                status=StatusTexts.FAILURE,
+                title=self._warning_text("OUTPUT_ERROR_TITLE"),
+                message=self._main_window_text("VMD_OUTPUT_EMPTY_PATH"),
+                status=self._status_text("FAILURE"),
             )
             return None
 
@@ -1880,18 +2473,18 @@ QSplitter#CenterSplitter::handle {{
                 out_path = out_path.with_suffix(".vmd")
         except ValueError:
             self._show_warning(
-                title="出力エラー",
-                message="VMDの保存先パスが不正です。",
-                status=StatusTexts.FAILURE,
+                title=self._warning_text("OUTPUT_ERROR_TITLE"),
+                message=self._main_window_text("VMD_OUTPUT_INVALID_PATH"),
+                status=self._status_text("FAILURE"),
             )
             return None
 
         final_output_path = str(out_path).strip()
         if not final_output_path:
             self._show_warning(
-                title="出力エラー",
-                message="VMDの保存先パスが不正です。",
-                status=StatusTexts.FAILURE,
+                title=self._warning_text("OUTPUT_ERROR_TITLE"),
+                message=self._main_window_text("VMD_OUTPUT_INVALID_PATH"),
+                status=self._status_text("FAILURE"),
             )
             return None
 
@@ -1899,32 +2492,32 @@ QSplitter#CenterSplitter::handle {{
         try:
             if out_path.exists() and out_path.is_dir():
                 self._show_warning(
-                    title="出力エラー",
-                    message="保存先にフォルダが指定されています。ファイル名を指定してください。",
-                    status=StatusTexts.FAILURE,
+                    title=self._warning_text("OUTPUT_ERROR_TITLE"),
+                    message=self._main_window_text("VMD_OUTPUT_DIRECTORY_SELECTED"),
+                    status=self._status_text("FAILURE"),
                 )
                 return None
 
             parent_dir = out_path.parent
             if not str(parent_dir).strip():
                 self._show_warning(
-                    title="出力エラー",
-                    message="保存先フォルダが不正です。",
-                    status=StatusTexts.FAILURE,
+                    title=self._warning_text("OUTPUT_ERROR_TITLE"),
+                    message=self._main_window_text("VMD_OUTPUT_PARENT_INVALID"),
+                    status=self._status_text("FAILURE"),
                 )
                 return None
             if parent_dir.exists() and not parent_dir.is_dir():
                 self._show_warning(
-                    title="出力エラー",
-                    message="保存先フォルダが不正です。",
-                    status=StatusTexts.FAILURE,
+                    title=self._warning_text("OUTPUT_ERROR_TITLE"),
+                    message=self._main_window_text("VMD_OUTPUT_PARENT_INVALID"),
+                    status=self._status_text("FAILURE"),
                 )
                 return None
         except OSError as error:
             self._show_warning(
-                title="出力エラー",
-                message=f"保存先の確認中にエラーが発生しました: {error}",
-                status=StatusTexts.FAILURE,
+                title=self._warning_text("OUTPUT_ERROR_TITLE"),
+                message=self._main_window_text("VMD_OUTPUT_CHECK_ERROR").format(error=error),
+                status=self._status_text("FAILURE"),
             )
             return None
 
@@ -1933,36 +2526,36 @@ QSplitter#CenterSplitter::handle {{
     def _export_vmd(self) -> None:
         if self.selected_text_path and self.selected_wav_path and not self.selected_vowel_content:
             self._show_warning(
-                title="\u5165\u529b\u4e0d\u8db3",
-                message="TEXT\u304b\u3089\u6709\u52b9\u306a\u3072\u3089\u304c\u306a/\u6bcd\u97f3\u5217\u3092\u751f\u6210\u3067\u304d\u3066\u3044\u307e\u305b\u3093\u3002TEXT\u3092\u898b\u76f4\u3057\u3066\u518d\u8aad\u307f\u8fbc\u307f\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
-                status="\u51fa\u529b\u72b6\u614b: TEXT\u5909\u63db\u5931\u6557",
+                title=self._warning_text("INPUT_MISSING_TITLE"),
+                message=self._main_window_text("EXPORT_INVALID_TEXT_CONVERSION"),
+                status=self._status_text("TEXT_CONVERSION_FAILURE"),
             )
             return
 
         if not self._has_required_inputs():
             self._show_warning(
-                title="\u5165\u529b\u4e0d\u8db3",
-                message="TEXT\u3068WAV\u306e\u4e21\u65b9\u3092\u8aad\u307f\u8fbc\u3093\u3067\u304b\u3089\u51fa\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
-                status="\u51fa\u529b\u72b6\u614b: \u5165\u529b\u4e0d\u8db3",
+                title=self._warning_text("INPUT_MISSING_TITLE"),
+                message=self._main_window_text("EXPORT_MISSING_INPUTS"),
+                status=self._status_text("INPUT_MISSING"),
             )
             return
 
         if self.current_timing_plan is None:
             self._show_warning(
-                title="\u672a\u89e3\u6790",
-                message="\u51e6\u7406\u5b9f\u884c\u30dc\u30bf\u30f3\u3067\u89e3\u6790\u3057\u3066\u304b\u3089\u51fa\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
-                status="\u51fa\u529b\u72b6\u614b: \u89e3\u6790\u672a\u5b9f\u884c",
+                title=self._warning_text("ANALYSIS_NOT_RUN_TITLE"),
+                message=self._main_window_text("EXPORT_ANALYSIS_NOT_RUN"),
+                status=self._status_text("ANALYSIS_NOT_RUN"),
             )
             return
 
         output_path, _ = QFileDialog.getSaveFileName(
             self,
-            "VMD\u30d5\u30a1\u30a4\u30eb\u306e\u4fdd\u5b58\u5148\u3092\u9078\u629e",
+            self._file_dialog_text("SAVE_VMD_TITLE"),
             "",
-            "VMD Files (*.vmd);;All Files (*)",
+            self._file_dialog_text("VMD_FILTER"),
         )
         if not output_path:
-            self._set_output_status("\u51fa\u529b\u72b6\u614b: \u30ad\u30e3\u30f3\u30bb\u30eb")
+            self._set_output_status(self._status_text("CANCELED"))
             return
 
         out_path = self._resolve_vmd_output_path(output_path)
@@ -1972,13 +2565,15 @@ QSplitter#CenterSplitter::handle {{
         if Path(out_path).exists():
             reply = QMessageBox.question(
                 self,
-                "上書き確認",
-                f"ファイル '{Path(out_path).name}' は既に存在します。\n上書きしてもよろしいですか？",
+                self._warning_text("OVERWRITE_CONFIRM_TITLE"),
+                self._main_window_text("EXPORT_OVERWRITE_CONFIRM_MESSAGE").format(
+                    file_name=Path(out_path).name
+                ),
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No
             )
             if reply == QMessageBox.No:
-                self._set_output_status("出力状態: キャンセル")
+                self._set_output_status(self._status_text("CANCELED"))
                 return
 
         try:
@@ -1993,44 +2588,44 @@ QSplitter#CenterSplitter::handle {{
             self.current_timing_plan = timing_plan
         except ValueError as error:
             self._show_warning(
-                title="\u51fa\u529b\u30a8\u30e9\u30fc",
-                message=f"\u6bcd\u97f3\u30bf\u30a4\u30df\u30f3\u30b0\u3092\u6c7a\u5b9a\u3067\u304d\u307e\u305b\u3093: {error}",
-                status="\u51fa\u529b\u72b6\u614b: \u5931\u6557",
+                title=self._warning_text("OUTPUT_ERROR_TITLE"),
+                message=self._main_window_text("EXPORT_TIMING_ERROR").format(error=error),
+                status=self._status_text("FAILURE"),
             )
             return
         except PipelineError as error:
             self._show_warning(
-                title="\u51fa\u529b\u30a8\u30e9\u30fc",
-                message=f"VMD\u306e\u51fa\u529b\u306b\u5931\u6557\u3057\u307e\u3057\u305f: {error}",
-                status="\u51fa\u529b\u72b6\u614b: \u5931\u6557",
+                title=self._warning_text("OUTPUT_ERROR_TITLE"),
+                message=self._main_window_text("EXPORT_PIPELINE_ERROR").format(error=error),
+                status=self._status_text("FAILURE"),
             )
             return
         except OSError as error:
             self._show_warning(
-                title="\u51fa\u529b\u30a8\u30e9\u30fc",
-                message=f"VMD\u4fdd\u5b58\u6642\u306b\u30d5\u30a1\u30a4\u30eb\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f: {error}",
-                status="\u51fa\u529b\u72b6\u614b: \u5931\u6557",
+                title=self._warning_text("OUTPUT_ERROR_TITLE"),
+                message=self._main_window_text("EXPORT_FILE_ERROR").format(error=error),
+                status=self._status_text("FAILURE"),
             )
             return
         except Exception as error:
             self._show_warning(
-                title=MainWindowStrings.UNEXPECTED_ERROR_TITLE,
-                message=MainWindowStrings.UNEXPECTED_ERROR_MESSAGE.format(error=error),
-                status=StatusTexts.FAILURE,
+                title=self._warning_text("UNEXPECTED_ERROR_TITLE"),
+                message=self._main_window_text("UNEXPECTED_ERROR_MESSAGE").format(error=error),
+                status=self._status_text("FAILURE"),
             )
             return
 
         QMessageBox.information(
             self,
-            MainWindowStrings.OUTPUT_COMPLETE_TITLE,
-            MainWindowStrings.OUTPUT_COMPLETE_MESSAGE.format(output_path=result.output_path),
+            self._main_window_text("OUTPUT_COMPLETE_TITLE"),
+            self._main_window_text("OUTPUT_COMPLETE_MESSAGE").format(output_path=result.output_path),
         )
-        timing_label = MainWindowStrings.TIMING_LABEL_OUTPUT_WHISPER
+        timing_label = self._main_window_text("TIMING_LABEL_OUTPUT_WHISPER")
         if not result.timing_source.startswith("whisper_"):
-            timing_label = MainWindowStrings.TIMING_LABEL_FALLBACK
+            timing_label = self._main_window_text("TIMING_LABEL_FALLBACK")
 
         self._set_output_status(
-            StatusTexts.SUCCESS_TEMPLATE.format(
+            self._status_text("SUCCESS_TEMPLATE").format(
                 output_name=result.output_path.name,
                 timing_label=timing_label,
             )
@@ -2042,25 +2637,25 @@ QSplitter#CenterSplitter::handle {{
         if not self.selected_text_content:
             self._invalidate_current_timing_plan()
             self._show_warning(
-                title="\u5165\u529b\u4e0d\u8db3",
-                message="TEXT\u3092\u8aad\u307f\u8fbc\u3093\u3067\u304b\u3089\u51e6\u7406\u5b9f\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
-                status="\u51fa\u529b\u72b6\u614b: \u5165\u529b\u4e0d\u8db3",
+                title=self._warning_text("INPUT_MISSING_TITLE"),
+                message=self._main_window_text("PROCESSING_MISSING_TEXT"),
+                status=self._status_text("INPUT_MISSING"),
             )
             return
         if not self.selected_wav_analysis or not self.selected_wav_path:
             self._invalidate_current_timing_plan()
             self._show_warning(
-                title="\u5165\u529b\u4e0d\u8db3",
-                message="WAV\u3092\u8aad\u307f\u8fbc\u3093\u3067\u304b\u3089\u51e6\u7406\u5b9f\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
-                status="\u51fa\u529b\u72b6\u614b: \u5165\u529b\u4e0d\u8db3",
+                title=self._warning_text("INPUT_MISSING_TITLE"),
+                message=self._main_window_text("PROCESSING_MISSING_WAV"),
+                status=self._status_text("INPUT_MISSING"),
             )
             return
         if not self.selected_vowel_content:
             self._invalidate_current_timing_plan()
             self._show_warning(
-                title="\u5165\u529b\u4e0d\u8db3",
-                message="TEXT\u304b\u3089\u6709\u52b9\u306a\u3072\u3089\u304c\u306a/\u6bcd\u97f3\u5217\u3092\u751f\u6210\u3067\u304d\u3066\u3044\u307e\u305b\u3093\u3002",
-                status="\u51fa\u529b\u72b6\u614b: TEXT\u5909\u63db\u5931\u6557",
+                title=self._warning_text("INPUT_MISSING_TITLE"),
+                message=self._main_window_text("PROCESSING_MISSING_VOWELS"),
+                status=self._status_text("TEXT_CONVERSION_FAILURE"),
             )
             return
 
@@ -2070,9 +2665,9 @@ QSplitter#CenterSplitter::handle {{
             self._request_waveform_bounds_sync()
             if self.current_timing_plan is None:
                 self._show_warning(
-                    title="\u51e6\u7406\u30a8\u30e9\u30fc",
-                    message="\u97f3\u58f0\u51e6\u7406\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002",
-                    status="\u51fa\u529b\u72b6\u614b: \u5931\u6557",
+                    title=self._warning_text("PROCESSING_ERROR_TITLE"),
+                    message=self._main_window_text("PROCESSING_FAILED"),
+                    status=self._status_text("FAILURE"),
                 )
                 return
             self._set_ready_status()
@@ -2120,7 +2715,7 @@ QSplitter#CenterSplitter::handle {{
         if self.selected_vowel_content:
             self.vowel_preview.setPlainText(self.selected_vowel_content)
         else:
-            self.vowel_preview.setPlainText("(\u6bcd\u97f3\u306e\u62bd\u51fa\u7d50\u679c\u306f\u3042\u308a\u307e\u305b\u3093)")
+            self.vowel_preview.setPlainText(self._main_window_text("TEXT_PREVIEW_NO_VOWELS"))
 
     def _refresh_waveform_morph_labels(self) -> None:
         if (
@@ -2164,18 +2759,19 @@ QSplitter#CenterSplitter::handle {{
         if self.current_timing_plan is not None:
             return self.current_timing_plan
         if not self.selected_text_content:
-            raise ValueError("TEXT \u304c\u307e\u3060\u6e96\u5099\u3067\u304d\u3066\u3044\u307e\u305b\u3093\u3002")
+            raise ValueError(self._main_window_text("TIMING_PLAN_TEXT_NOT_READY"))
         if not self.selected_wav_analysis or not self.selected_wav_path:
-            raise ValueError("WAV \u304c\u307e\u3060\u6e96\u5099\u3067\u304d\u3066\u3044\u307e\u305b\u3093\u3002")
-        raise ValueError(
-            "\u89e3\u6790\u304c\u307e\u3060\u5b9f\u884c\u3055\u308c\u3066\u3044\u307e\u305b\u3093\u3002"
-            "\u300c\u51e6\u7406\u5b9f\u884c\u300d\u3092\u62bc\u3057\u3066\u304b\u3089\u51fa\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
-        )
+            raise ValueError(self._main_window_text("TIMING_PLAN_WAV_NOT_READY"))
+        raise ValueError(self._main_window_text("TIMING_PLAN_NOT_ANALYZED"))
 
     def _on_morph_upper_limit_changed(self, _: float) -> None:
+        if self._is_restoring_startup_settings:
+            return
         self._invalidate_current_timing_plan()
         self.wav_waveform_view.clear_morph_labels()
         self._set_ready_status()
+        if self._should_persist_settings():
+            self._handle_settings_save_result(self.request_ui_settings_save())
 
     def _current_upper_limit(self) -> float:
         return float(self.morph_upper_limit_input.value())
@@ -2186,25 +2782,29 @@ QSplitter#CenterSplitter::handle {{
         self._update_action_states()
 
         if text_loaded and wav_loaded and not self.current_timing_plan:
-            self._set_output_status(StatusTexts.READY_ANALYSIS_PENDING)
+            self._set_output_status(self._status_text("READY_ANALYSIS_PENDING"))
             return
         if text_loaded and not wav_loaded:
-            self._set_output_status(StatusTexts.READY_TEXT_ONLY)
+            self._set_output_status(self._status_text("READY_TEXT_ONLY"))
             return
         if wav_loaded and not text_loaded:
-            self._set_output_status(StatusTexts.READY_WAV_ONLY)
+            self._set_output_status(self._status_text("READY_WAV_ONLY"))
             return
         if not self.current_timing_plan:
-            self._set_output_status(StatusTexts.READY_NOT_LOADED)
+            self._set_output_status(self._status_text("READY_NOT_LOADED"))
             return
 
         timing_source = self.current_timing_plan.source
         if timing_source.startswith("whisper_"):
-            timing_label = MainWindowStrings.TIMING_LABEL_READY_WHISPER
+            timing_label = self._main_window_text("TIMING_LABEL_READY_WHISPER")
         else:
-            timing_label = MainWindowStrings.TIMING_LABEL_FALLBACK
+            timing_label = self._main_window_text("TIMING_LABEL_FALLBACK")
         self._set_output_status(
-            f"\u51fa\u529b\u72b6\u614b: \u89e3\u6790\u5b9f\u884c\u6e08\u307f ({timing_label} / \u533a\u9593={len(self.current_timing_plan.anchors)} / \u6bcd\u97f3={len(self.current_timing_plan.timeline)})"
+            self._status_text("READY_ANALYSIS_DONE_TEMPLATE").format(
+                timing_label=timing_label,
+                anchor_count=len(self.current_timing_plan.anchors),
+                vowel_count=len(self.current_timing_plan.timeline),
+            )
         )
 
     def _update_action_states(self) -> None:
@@ -2247,8 +2847,8 @@ QSplitter#CenterSplitter::handle {{
         return {
             "can_open_text": True,
             "can_open_wav": True,
-            "can_open_recent_text": has_recent_text,
-            "can_open_recent_wav": has_recent_wav,
+            "can_open_recent_text": True,
+            "can_open_recent_wav": True,
             "can_adjust_morph_upper_limit": True,
             "can_run": can_run,
             "can_save": can_save,
@@ -2305,10 +2905,14 @@ QSplitter#CenterSplitter::handle {{
         self.action_open_wav.setEnabled(can_open_wav)
         self.menu_recent_text.setEnabled(can_open_recent_text)
         self.menu_recent_wav.setEnabled(can_open_recent_wav)
-        for action in self.menu_recent_text.actions():
-            action.setEnabled(can_open_recent_text)
-        for action in self.menu_recent_wav.actions():
-            action.setEnabled(can_open_recent_wav)
+        self._set_recent_menu_action_enabled_state(
+            self.menu_recent_text,
+            enabled=can_open_recent_text,
+        )
+        self._set_recent_menu_action_enabled_state(
+            self.menu_recent_wav,
+            enabled=can_open_recent_wav,
+        )
         self.morph_upper_limit_input.setEnabled(can_adjust_morph_upper_limit)
 
         self.action_zoom_in.setEnabled(can_zoom_in)
@@ -2316,3 +2920,10 @@ QSplitter#CenterSplitter::handle {{
         self.action_run_processing.setEnabled(can_run)
         self.action_reanalyze.setEnabled(can_run)
         self.action_save_vmd.setEnabled(can_save)
+
+    def _set_recent_menu_action_enabled_state(self, menu, *, enabled: bool) -> None:
+        for action in menu.actions():
+            if action.data() == "__recent_placeholder__":
+                action.setEnabled(False)
+                continue
+            action.setEnabled(enabled)

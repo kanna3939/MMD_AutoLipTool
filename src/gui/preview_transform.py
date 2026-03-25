@@ -4,7 +4,9 @@ from dataclasses import dataclass
 import math
 from typing import Any, Protocol, Sequence
 
-PREVIEW_ROW_VOWELS: tuple[str, str, str, str, str] = ("あ", "い", "う", "え", "お")
+from gui.i18n_strings import INTERNAL_VOWEL_ORDER
+
+PREVIEW_ROW_VOWELS: tuple[str, str, str, str, str] = INTERNAL_VOWEL_ORDER
 
 
 class TimelinePointLike(Protocol):
@@ -38,7 +40,9 @@ class PreviewData:
 
 
 def empty_preview_data() -> PreviewData:
-    return PreviewData(rows=[PreviewRow(vowel=vowel, segments=[]) for vowel in PREVIEW_ROW_VOWELS])
+    return PreviewData(
+        rows=[PreviewRow(vowel=vowel, segments=[]) for vowel in PREVIEW_ROW_VOWELS]
+    )
 
 
 def build_preview_data(timeline: Sequence[TimelinePointLike] | None) -> PreviewData:
