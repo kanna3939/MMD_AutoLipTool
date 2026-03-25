@@ -1,4 +1,47 @@
 # Version Control Log
+## Entry 2026-03-25 / Session: release-v0358-ms10-sync
+
+- Date: 2026-03-25
+- Session: release-v0358-ms10-sync
+- Summary:
+  - MS10 対応の実装と関連ドキュメント更新を、`Ver 0.3.5.8` として同期した。
+  - 設定永続化、多言語化、recent 履歴、波形表示 / Preview の言語反映を含む到達状態をリリース版として整理した。
+- Modified Files:
+  - `README.md`: 版数表記を `Ver 0.3.5.8` に更新。
+  - `pyproject.toml`: プロジェクトバージョンを `0.3.5.8` に更新。
+  - `docs/Specification_Prompt_v3.md`: 対応リリースを `Ver 0.3.5.8` に更新。
+  - `docs/repo_milestone.md`: MS10 実装完了状態を反映したうえで `Ver 0.3.5.8` 同期メモを追記。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - 今回のリリース同期には MS10 実装本体と、その文書反映を含む。
+  - IDE 設定ファイル、`__pycache__`、ローカル設定 `.ini` はリリース対象に含めない。
+- Verification:
+  - `rg -n "Ver 0.3.5.8|0.3.5.8" README.md pyproject.toml docs/Specification_Prompt_v3.md docs/repo_milestone.md docs/Version_Control.md`
+
+---
+## Entry 2026-03-25 / Session: ms10-doc-sync
+
+- Date: 2026-03-25
+- Session: ms10-doc-sync
+- Summary:
+  - MS10 の実装到達状態に合わせて、関連ドキュメントの現状記述を同期した。
+  - 設定永続化、多言語化、recent 履歴、波形表示 / Preview の言語反映、Matplotlib 和文フォント対応までを文書へ反映した。
+  - 実装済み範囲と対象外範囲が文書上で読み取れるように整理した。
+- Modified Files:
+  - `docs/MS10_Implementation_Plan.md`: 実装反映結果セクションを追加し、MS10 の実到達状態を明文化。
+  - `docs/repo_milestone.md`: MS10 実装完了メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - 今回はドキュメント反映のみであり、追加の機能実装や仕様変更は含まない。
+  - 波形表示オプション永続化、再生カーソル平滑化、再生ロジック再設計は引き続き対象外のまま維持。
+- Verification:
+  - `git diff -- docs/MS10_Implementation_Plan.md docs/repo_milestone.md docs/Version_Control.md`
+
+---
 
 このファイルは、セッション単位で変更内容を追記するためのログです。
 下へ追記して運用してください（既存エントリは編集せず、必要時のみ訂正注記を追加）。

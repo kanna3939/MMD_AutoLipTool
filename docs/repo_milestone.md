@@ -1,4 +1,26 @@
-# MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
+﻿# MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
+## 2026-03-25 / MS10 実装完了メモ
+
+- 対象: MS10 多言語化・設定永続化
+- 実装反映:
+  - `src/gui/settings_store.py` を追加し、`MMD_AutoLipTool.ini` による設定保存・復元導線を実装
+  - `src/main.py` で起動時設定読込と OS 言語フォールバックを接続
+  - `src/gui/main_window.py` でテーマ / splitter 比率 / ウィンドウサイズ / 言語 / モーフ最大値 / recent TEXT / recent WAV の保存・復元導線を実装
+  - `src/gui/i18n_strings.py` を GUI 文字列正本として整理し、日本語 / 英語の切替基盤を実装
+  - `src/gui/operation_panel.py` / `src/gui/central_panels.py` / `src/gui/status_panel.py` / `src/gui/waveform_view.py` / `src/gui/preview_area.py` に実行中言語切替反映を実装
+  - recent TEXT / WAV の別管理、起動時無効履歴除去、0 件時プレースホルダ表示を実装
+  - 波形表示の空状態文言 / 軸ラベル / 母音表示、および Preview 側母音表示の言語対応を実装
+  - 波形表示の日本語プレースホルダと横軸ラベルに対する Matplotlib 和文フォント適用を反映
+- 到達状態:
+  - 日本語 / EN の実行中切替が成立
+  - 言語設定と recent 履歴が次回起動時に復元される
+  - 重要 UI 設定とモーフ最大値が永続化される
+  - 設定破損時フォールバックと保存失敗時の安全停止が入っている
+  - 文字列定義の正本は `i18n_strings.py` に集約された
+- リリース同期:
+  - リポジトリ全体の反映版を `Ver 0.3.5.8` として確定。
+
+---
 
 ## 方針
 

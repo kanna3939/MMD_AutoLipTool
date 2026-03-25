@@ -295,3 +295,13 @@ class OperationPanel(QWidget):
     def set_button_states(self, states: Mapping[str, bool]) -> None:
         """Backward-compatible alias for state reflection."""
         self.set_button_enabled_states(states)
+
+    def apply_language(self, language: str) -> None:
+        button_texts = OperationPanelStrings.button_texts(language)
+        button_tooltips = OperationPanelStrings.button_tooltips(language)
+        for name, button in self.button_map().items():
+            button.setText(self._normalized_button_text(name, button_texts[name]))
+            button.setToolTip(button_tooltips[name])
+
+    def retranslate_ui(self, language: str) -> None:
+        self.apply_language(language)

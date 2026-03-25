@@ -9,7 +9,12 @@ from matplotlib.lines import Line2D
 from matplotlib.transforms import blended_transform_factory
 from PySide6.QtCore import Qt, Signal
 
-from gui.i18n_strings import ThemeStrings
+from gui.i18n_strings import (
+    ThemeStrings,
+    WaveformViewStrings,
+    localized_vowel_label,
+    normalize_language,
+)
 
 _JP_FONT_FAMILIES = ["Yu Gothic", "Meiryo", "MS Gothic", "sans-serif"]
 _FRAME_RATE = 30.0
@@ -78,10 +83,13 @@ class WaveformView(FigureCanvas):
         self._pan_move_cid: int | None = None
         self._pan_release_cid: int | None = None
         self._theme_name = ThemeStrings.DARK
-        self._placeholder_message = "Waveform preview (not loaded)"
+        self._language = "ja"
+        self._placeholder_message = WaveformViewStrings.for_language(self._language)[
+            "PLACEHOLDER_NOT_LOADED"
+        ]
         self.setMinimumHeight(140)
         self._connect_pan_interaction()
-        self.show_placeholder(self._placeholder_message)
+        self.show_placeholder(self._default_not_loaded_placeholder())
 
     def set_theme(self, theme_name: str) -> None:
         resolved_theme = self._normalize_theme_name(theme_name)
@@ -92,6 +100,25 @@ class WaveformView(FigureCanvas):
             self._render_waveform()
             return
         self.show_placeholder(self._placeholder_message)
+
+    def set_language(self, language: str) -> None:
+        previous_not_loaded = self._default_not_loaded_placeholder()
+        previous_no_data = self._no_waveform_data_placeholder()
+        self._language = normalize_language(language)
+        current_message = self._placeholder_message
+        if current_message in {previous_not_loaded, previous_no_data}:
+            self._placeholder_message = (
+                self._no_waveform_data_placeholder()
+                if current_message == previous_no_data
+                else self._default_not_loaded_placeholder()
+            )
+        if self._samples:
+            self._render_waveform()
+            return
+        self.show_placeholder(self._placeholder_message)
+
+    def retranslate_ui(self, language: str) -> None:
+        self.set_language(language)
 
     def show_placeholder(self, message: str) -> None:
         self._placeholder_message = str(message)
@@ -116,6 +143,7 @@ class WaveformView(FigureCanvas):
             va="center",
             fontsize=9,
             color=self._theme_colors()["placeholder_text"],
+            **self._localized_text_kwargs(),
         )
         self._apply_axes_theme()
         self._figure.tight_layout()
@@ -275,7 +303,7 @@ class WaveformView(FigureCanvas):
         self._duration_sec = duration_sec
 
         if not samples:
-            self.show_placeholder("No waveform data")
+            self.show_placeholder(self._no_waveform_data_placeholder())
             return
 
         self._render_waveform()
@@ -295,7 +323,8 @@ class WaveformView(FigureCanvas):
             )
             visible_start_sec, visible_end_sec = self._resolved_visible_range_sec()
             self._axes.set_xlim(visible_start_sec, visible_end_sec)
-            self._axes.set_xlabel("Frame (30fps)")
+            self._axes.set_xlabel(self._frame_axis_label())
+            self._apply_localized_axis_label_font()
             self._apply_frame_axis_ticks(visible_start_sec, visible_end_sec)
             self._draw_overlays()
         else:
@@ -304,7 +333,8 @@ class WaveformView(FigureCanvas):
                 linewidth=0.8,
                 color=self._theme_colors()["waveform"],
             )
-            self._axes.set_xlabel("Sample")
+            self._axes.set_xlabel(self._sample_axis_label())
+            self._apply_localized_axis_label_font()
 
         self._axes.set_ylim(-1.05, 1.05)
         self._axes.set_ylabel("")
@@ -395,7 +425,7 @@ class WaveformView(FigureCanvas):
         transform = blended_transform_factory(self._axes.transData, self._axes.transAxes)
         for event in self._morph_events:
             time_sec = event.time_sec
-            vowel = event.vowel
+            vowel = localized_vowel_label(event.vowel, self._language)
             start_sec, end_sec = self._event_bounds(event)
             if end_sec < visible_start_sec or start_sec > visible_end_sec:
                 continue
@@ -409,7 +439,7 @@ class WaveformView(FigureCanvas):
                 va="top",
                 fontsize=9,
                 color=self._theme_colors()["label_text"],
-                fontfamily=_JP_FONT_FAMILIES,
+                **self._localized_text_kwargs(),
             )
 
     def _refresh_after_overlay_option_changed(self) -> None:
@@ -578,6 +608,27 @@ class WaveformView(FigureCanvas):
         if resolved_theme not in ThemeStrings.SUPPORTED:
             return ThemeStrings.DARK
         return resolved_theme
+
+    def _default_not_loaded_placeholder(self) -> str:
+        return WaveformViewStrings.for_language(self._language)["PLACEHOLDER_NOT_LOADED"]
+
+    def _no_waveform_data_placeholder(self) -> str:
+        return WaveformViewStrings.for_language(self._language)["PLACEHOLDER_NO_DATA"]
+
+    def _frame_axis_label(self) -> str:
+        return WaveformViewStrings.for_language(self._language)["AXIS_FRAME"]
+
+    def _sample_axis_label(self) -> str:
+        return WaveformViewStrings.for_language(self._language)["AXIS_SAMPLE"]
+
+    def _localized_text_kwargs(self) -> dict[str, object]:
+        if self._language == "ja":
+            return {"fontfamily": _JP_FONT_FAMILIES}
+        return {}
+
+    def _apply_localized_axis_label_font(self) -> None:
+        if self._language == "ja":
+            self._axes.xaxis.label.set_fontfamily(_JP_FONT_FAMILIES)
 
     def _build_major_frame_ticks(self, start_sec: float, end_sec: float) -> list[int]:
         start_frame = max(0, self._seconds_to_frame_ceil(start_sec))
