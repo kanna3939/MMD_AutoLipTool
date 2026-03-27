@@ -1,4 +1,96 @@
 # Version Control Log
+
+## Entry 2026-03-27 / Session: release-v0359-ms11-2-fix-sync
+
+- Date: 2026-03-27
+- Session: release-v0359-ms11-2-fix-sync
+- Summary:
+  - MS11-2 / MS11-2_FIX01 / MS11-2_FIX02 の実装反映状態に合わせて、関連ドキュメントと版表記を `Ver 0.3.5.9` として同期した。
+  - writer 後段の保護・cleanup 補正、関連テスト更新、既知制約の整理をリリース文書へ反映した。
+- Modified Files:
+  - `README.md`: 版数表記を `Ver 0.3.5.9` に更新。
+  - `pyproject.toml`: プロジェクトバージョンを `0.3.5.9` に更新。
+  - `docs/Specification_Prompt_v3.md`: 対応リリースを `Ver 0.3.5.9` に更新。
+  - `docs/repo_milestone.md`: `Ver 0.3.5.9` 同期メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - 過去の `Ver 0.3.5.8` 記録は履歴として維持し、今回分は追加エントリとして追記した。
+  - MS11-2 本体と FIX01 / FIX02 のコード・テスト変更は、同一コミットに含める前提で整理した。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m unittest tests.test_vmd_writer_intervals tests.test_vmd_writer_peak_value tests.test_vmd_writer_zero_guard`
+  - `rg -n "0\.3\.5\.8|0\.3\.5\.9|Ver 0\.3\.5\.8|Ver 0\.3\.5\.9" README.md pyproject.toml docs`
+
+---
+
+## Entry 2026-03-27 / Session: ms11-2-fix-doc-sync
+
+- Date: 2026-03-27
+- Session: ms11-2-fix-doc-sync
+- Summary:
+  - MS11-2_FIX01 / MS11-2_FIX02 の実装結果に合わせて、マイルストーン・仕様書・計画書・変更履歴の文書同期を行った。
+  - writer 後段の保護範囲拡張、許容外非ゼロ除去、不要ゼロ prune、ゼロ縮退抑止、および既知課題切り分けを文書へ整理した。
+- Modified Files:
+  - `docs/repo_milestone.md`: MS11-2_FIX01 / FIX02 実装完了メモを追加。
+  - `docs/Specification_Prompt_v3.md`: MS11 の到達状態と残課題の記述を FIX02 完了時点へ更新。
+  - `docs/MS11-2_FIX01_Implementation_Plan.md`: 実装反映メモを追加。
+  - `docs/MS11-2_FIX02_Implementation_Plan.md`: 実装反映メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - 反映対象は文書同期のみとし、このセッションではコード仕様自体は変更していない。
+  - `docs/MS11-2_Known_Issues.md` は FIX02 完了時点の既知課題メモとして継続利用する。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m unittest tests.test_vmd_writer_intervals tests.test_vmd_writer_peak_value tests.test_vmd_writer_zero_guard`
+  - `rg -n "MS11-2|FIX01|FIX02|Known Issues|残課題" docs`
+
+---
+
+## Entry 2026-03-27 / Session: ms11-2-doc-sync
+
+- Date: 2026-03-27
+- Session: ms11-2-doc-sync
+- Summary:
+  - MS11-2 の実装結果に合わせて、仕様書・マイルストーン・実装計画書・変更履歴の文書同期を行った。
+  - `writer.py` の変形台形導入、短区間フォールバック維持、MS11-1 最終正規化との部分保護接続、関連テスト反映内容を文書へ整理した。
+- Modified Files:
+  - `docs/Specification_Prompt_v3.md`: MS11-2 反映済み状態、`writer.py` 責務、テスト方針、残課題を更新。
+  - `docs/repo_milestone.md`: MS11-2 実装完了メモを追加。
+  - `docs/MS11-2_Implementation_Plan.md`: 実装反映メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - 反映対象は文書同期のみとし、MS11-2 のコード仕様自体はこのセッションでは変更していない。
+  - `pipeline.py` / `text_processing.py` / GUI 系の文書スコープ拡張は行っていない。
+- Verification:
+  - `rg -n "MS11-2|変形台形|AsymmetricTrapezoidSpec|部分保護" docs/Specification_Prompt_v3.md docs/repo_milestone.md docs/MS11-2_Implementation_Plan.md docs/Version_Control.md`
+
+---
+
+## Entry 2026-03-26 / Session: ms11-1-doc-sync
+
+- Date: 2026-03-26
+- Session: ms11-1-doc-sync
+- Summary:
+  - MS11-1 の実装結果に合わせて、仕様書・マイルストーン・実装計画書・変更履歴の文書同期を行った。
+  - `writer.py` の最終正規化層、重複統合、母音全体開口判定、孤立短開口抑制、個別モーフ短パルス整理、関連テストの反映内容を文書へ整理した。
+- Modified Files:
+  - `docs/Specification_Prompt_v3.md`: MS11-1 反映済み状態、`writer.py` 責務、VMD 出力仕様、テスト方針、残課題を更新。
+  - `docs/repo_milestone.md`: MS11-1 実装完了メモを追加。
+  - `docs/MS11-1_Implementation_Plan.md`: 実装反映メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - 反映対象は文書同期のみとし、MS11-1 のコード仕様自体はこのセッションでは変更していない。
+  - `docs/repo_milestone.md` に既存の conflict marker が残っているが、今回はその周辺を解消せず、MS11-1 の追記に限定した。
+- Verification:
+  - `rg -n "MS11-1|最終モーフフレーム正規化層|孤立短開口|個別モーフ短パルス|30fps丸め衝突" docs/Specification_Prompt_v3.md docs/repo_milestone.md docs/MS11-1_Implementation_Plan.md docs/Version_Control.md`
+
+---
 ## Entry 2026-03-25 / Session: release-v0358-ms10-sync
 
 - Date: 2026-03-25
