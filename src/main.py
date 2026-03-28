@@ -1,5 +1,4 @@
 import sys
-from pathlib import Path
 
 from PySide6.QtCore import QLocale
 from PySide6.QtGui import QIcon, QPixmap
@@ -8,14 +7,7 @@ from PySide6.QtWidgets import QApplication, QSplashScreen
 from gui import MainWindow
 from gui.i18n_strings import normalize_language
 from gui.settings_store import SettingsStore
-
-
-def get_resource_path(relative_path: str) -> Path:
-    try:
-        base_path = Path(sys._MEIPASS)
-    except AttributeError:
-        base_path = Path(__file__).resolve().parent.parent
-    return base_path / relative_path
+from resource_utils import get_resource_path
 
 
 def _set_windows_app_user_model_id() -> None:

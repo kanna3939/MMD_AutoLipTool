@@ -19,6 +19,8 @@ _RMS_THRESHOLD_RATIO = 0.35
 _RMS_ABS_MIN_THRESHOLD = 0.01
 _RMS_MIN_REFINED_DURATION_SEC = 0.03
 _RMS_MAX_ADJACENT_OVERLAP_SEC = 0.02
+_PEAK_WINDOW_HALO_SEC = 0.03
+_RMS_UNAVAILABLE_FALLBACK_RATIO = 0.25
 _DEFAULT_MORPH_UPPER_LIMIT = 0.5
 
 
@@ -46,6 +48,17 @@ class VowelTimingPlan:
     anchors: list[SpeechTimingAnchor]
     source: str
     warning: str | None = None
+
+
+@dataclass(frozen=True)
+class PeakValueEvaluation:
+    interval_start_sec: float
+    interval_end_sec: float
+    peak_window_start_sec: float
+    peak_window_end_sec: float
+    local_peak: float | None
+    peak_value: float
+    reason: str | None = None
 
 
 def build_even_vowel_timeline(
@@ -396,6 +409,7 @@ def _refine_timeline_intervals_with_rms(
             speech_start_sec=speech_start_sec,
             speech_end_sec=speech_end_sec,
             upper_limit=clamped_upper_limit,
+            fallback_reason="rms_unavailable",
         )
 
     refined_timeline = _refine_intervals_by_rms_series(
@@ -520,16 +534,82 @@ def _apply_peak_values_to_timeline(
     speech_start_sec: float,
     speech_end_sec: float,
     upper_limit: float,
+    fallback_reason: str | None = None,
 ) -> list[VowelTimelinePoint]:
+    evaluations = _build_peak_value_evaluations(
+        timeline=timeline,
+        rms_series=rms_series,
+        speech_start_sec=speech_start_sec,
+        speech_end_sec=speech_end_sec,
+        upper_limit=upper_limit,
+        fallback_reason=fallback_reason,
+    )
+    return [
+        _with_peak_value(point=point, peak_value=evaluation.peak_value)
+        for point, evaluation in zip(timeline, evaluations)
+    ]
+
+
+def _build_peak_value_evaluations(
+    *,
+    timeline: Sequence[VowelTimelinePoint],
+    rms_series: RmsSeriesData | None,
+    speech_start_sec: float,
+    speech_end_sec: float,
+    upper_limit: float,
+    fallback_reason: str | None = None,
+) -> list[PeakValueEvaluation]:
     if not timeline:
         return []
 
     clamped_upper_limit = max(0.0, upper_limit)
     if clamped_upper_limit <= 0.0:
-        return [_with_peak_value(point=point, peak_value=0.0) for point in timeline]
+        return [
+            PeakValueEvaluation(
+                interval_start_sec=interval_start_sec,
+                interval_end_sec=interval_end_sec,
+                peak_window_start_sec=interval_start_sec,
+                peak_window_end_sec=interval_end_sec,
+                local_peak=None,
+                peak_value=0.0,
+            )
+            for interval_start_sec, interval_end_sec in (
+                _event_interval(point) for point in timeline
+            )
+        ]
+
+    if fallback_reason == "rms_unavailable":
+        fallback_peak_value = round(clamped_upper_limit * _RMS_UNAVAILABLE_FALLBACK_RATIO, 4)
+        return [
+            PeakValueEvaluation(
+                interval_start_sec=interval_start_sec,
+                interval_end_sec=interval_end_sec,
+                peak_window_start_sec=interval_start_sec,
+                peak_window_end_sec=interval_end_sec,
+                local_peak=None,
+                peak_value=fallback_peak_value,
+                reason="rms_unavailable",
+            )
+            for interval_start_sec, interval_end_sec in (
+                _event_interval(point) for point in timeline
+            )
+        ]
 
     if rms_series is None or not rms_series.times_sec or not rms_series.values:
-        return [_with_peak_value(point=point, peak_value=clamped_upper_limit) for point in timeline]
+        return [
+            PeakValueEvaluation(
+                interval_start_sec=interval_start_sec,
+                interval_end_sec=interval_end_sec,
+                peak_window_start_sec=interval_start_sec,
+                peak_window_end_sec=interval_end_sec,
+                local_peak=None,
+                peak_value=0.0,
+                reason="global_peak_zero",
+            )
+            for interval_start_sec, interval_end_sec in (
+                _event_interval(point) for point in timeline
+            )
+        ]
 
     global_peak = _rms_local_peak(
         times_sec=rms_series.times_sec,
@@ -538,22 +618,62 @@ def _apply_peak_values_to_timeline(
         end_sec=speech_end_sec,
     )
     if global_peak <= 0.0:
-        return [_with_peak_value(point=point, peak_value=clamped_upper_limit) for point in timeline]
+        return [
+            PeakValueEvaluation(
+                interval_start_sec=interval_start_sec,
+                interval_end_sec=interval_end_sec,
+                peak_window_start_sec=interval_start_sec,
+                peak_window_end_sec=interval_end_sec,
+                local_peak=0.0,
+                peak_value=0.0,
+                reason="global_peak_zero",
+            )
+            for interval_start_sec, interval_end_sec in (
+                _event_interval(point) for point in timeline
+            )
+        ]
 
-    with_peak_values: list[VowelTimelinePoint] = []
-    for point in timeline:
+    evaluations: list[PeakValueEvaluation] = []
+    for index, point in enumerate(timeline):
         interval_start_sec, interval_end_sec = _event_interval(point)
-        local_peak = _rms_local_peak(
+        peak_window_start_sec, peak_window_end_sec = _build_peak_window(
+            timeline=timeline,
+            index=index,
+            speech_start_sec=speech_start_sec,
+            speech_end_sec=speech_end_sec,
+        )
+        window_samples = _rms_samples_in_window(
             times_sec=rms_series.times_sec,
             values=rms_series.values,
-            start_sec=interval_start_sec,
-            end_sec=interval_end_sec,
+            start_sec=peak_window_start_sec,
+            end_sec=peak_window_end_sec,
         )
-        normalized_peak = 0.0 if local_peak <= 0.0 else (local_peak / global_peak)
-        peak_value = max(0.0, min(clamped_upper_limit, round(clamped_upper_limit * normalized_peak, 4)))
-        with_peak_values.append(_with_peak_value(point=point, peak_value=peak_value))
+        local_peak = max(window_samples) if window_samples else None
+        zero_reason = _classify_peak_zero_reason(
+            local_peak=local_peak,
+            global_peak=global_peak,
+        )
+        if zero_reason is None:
+            normalized_peak = local_peak / global_peak
+            peak_value = max(
+                0.0,
+                min(clamped_upper_limit, round(clamped_upper_limit * normalized_peak, 4)),
+            )
+        else:
+            peak_value = 0.0
+        evaluations.append(
+            PeakValueEvaluation(
+                interval_start_sec=interval_start_sec,
+                interval_end_sec=interval_end_sec,
+                peak_window_start_sec=peak_window_start_sec,
+                peak_window_end_sec=peak_window_end_sec,
+                local_peak=local_peak,
+                peak_value=peak_value,
+                reason=zero_reason,
+            )
+        )
 
-    return with_peak_values
+    return evaluations
 
 
 def _with_peak_value(*, point: VowelTimelinePoint, peak_value: float) -> VowelTimelinePoint:
@@ -678,6 +798,66 @@ def _event_interval(point: VowelTimelinePoint) -> tuple[float, float]:
         start_sec = float(start_sec)
         return (start_sec, max(point.time_sec, start_sec))
     return (float(start_sec), float(end_sec))
+
+
+def _build_peak_window(
+    *,
+    timeline: Sequence[VowelTimelinePoint],
+    index: int,
+    speech_start_sec: float,
+    speech_end_sec: float,
+) -> tuple[float, float]:
+    interval_start_sec, interval_end_sec = _event_interval(timeline[index])
+    window_start_sec = max(speech_start_sec, interval_start_sec - _PEAK_WINDOW_HALO_SEC)
+    window_end_sec = min(speech_end_sec, interval_end_sec + _PEAK_WINDOW_HALO_SEC)
+
+    if index > 0:
+        prev_start_sec, prev_end_sec = _event_interval(timeline[index - 1])
+        del prev_start_sec
+        left_clip_sec = (prev_end_sec + interval_start_sec) * 0.5
+        window_start_sec = max(window_start_sec, left_clip_sec)
+
+    if index + 1 < len(timeline):
+        next_start_sec, next_end_sec = _event_interval(timeline[index + 1])
+        del next_end_sec
+        right_clip_sec = (interval_end_sec + next_start_sec) * 0.5
+        window_end_sec = min(window_end_sec, right_clip_sec)
+
+    if window_end_sec < window_start_sec:
+        midpoint_sec = (window_start_sec + window_end_sec) * 0.5
+        window_start_sec = midpoint_sec
+        window_end_sec = midpoint_sec
+    return (window_start_sec, window_end_sec)
+
+
+def _rms_samples_in_window(
+    *,
+    times_sec: Sequence[float],
+    values: Sequence[float],
+    start_sec: float,
+    end_sec: float,
+) -> list[float]:
+    if end_sec < start_sec:
+        return []
+    return [
+        value
+        for time_sec, value in zip(times_sec, values)
+        if start_sec <= time_sec <= end_sec
+    ]
+
+
+def _classify_peak_zero_reason(
+    *,
+    local_peak: float | None,
+    global_peak: float,
+) -> str | None:
+    if local_peak is None:
+        return "no_peak_in_window"
+    if local_peak < _RMS_ABS_MIN_THRESHOLD:
+        return "below_abs_threshold"
+    if (local_peak / global_peak) < _RMS_THRESHOLD_RATIO:
+        return "below_rel_threshold"
+    return None
 
 
 def _resolve_adjacent_interval_conflicts(

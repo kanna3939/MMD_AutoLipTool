@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from pathlib import Path
 
 from PySide6.QtCore import QSize, QTimer, Qt, Signal
 from PySide6.QtGui import QIcon
@@ -16,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui.i18n_strings import OperationPanelStrings
+from resource_utils import get_resource_path
 
 _OPERATION_PANEL_ICON_SIZE = QSize(24, 24)
 _OPERATION_PANEL_GROUP_SPACING = 4
@@ -26,7 +26,6 @@ _OPERATION_BUTTON_MAX_WIDTH = 118
 _OPERATION_BUTTON_MIN_HEIGHT = 64
 _OPERATION_BUTTON_TALL_HEIGHT = 74
 _SINGLE_LINE_BUTTONS = {"text", "wav", "run"}
-_TOOLBAR_ICON_DIR = Path(__file__).resolve().parents[2] / "assets" / "icons" / "toolbar"
 
 
 class OperationPanel(QWidget):
@@ -179,7 +178,7 @@ class OperationPanel(QWidget):
         icon_file_name: str | None,
     ) -> QIcon:
         if icon_file_name:
-            icon_path = _TOOLBAR_ICON_DIR / icon_file_name
+            icon_path = get_resource_path(f"assets/icons/toolbar/{icon_file_name}")
             if icon_path.is_file():
                 icon = QIcon(str(icon_path))
                 if not icon.isNull():
