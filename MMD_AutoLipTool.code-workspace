@@ -7,6 +7,7 @@
 	"settings": {
 		"chatgpt.openOnStartup": true,
 		"cSpell.words": [
+			"guifix",
 			"matplotlib",
 			"pyopenjtalk"
 		],

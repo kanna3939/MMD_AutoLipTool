@@ -1,10 +1,9 @@
 {
-  "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
-  "python.useEnvironmentsExtension": false
-  "cSpell.words": [
-    "matplotlib",
-    "NFKC",
-    "pyopenjtalk",
-    "ver"
-  ]
+  "markdownlint.config": {
+    "MD022": {
+      "lines_above": 0,
+      "lines_below": 0
+    },
+    "MD032": false
+  }
 }

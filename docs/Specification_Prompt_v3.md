@@ -4,15 +4,15 @@
 
 - 文書名: `docs/Specification_Prompt_v3.md`
 - 作成日: 2026-03-20
-- 最終更新日: 2026-03-28
-- 対応リリース: `Ver 0.3.6.0`
+- 最終更新日: 2026-03-29
+- 対応リリース: `Ver 0.3.6.1`
 - 対象リポジトリ: `MMD_AutoLipTool`
 - 旧版: `docs/Specification_Prompt_v2.md`（本書で置き換え）
 - 文書方針: v2 の意図を引き継ぎつつ、現行実装・確定済み追加仕様・責務分割方針に合わせて更新する
 
-### 0.1 実装同期注記（2026-03-28 / MS11-3反映 + writer局所修正同期）
+### 0.1 実装同期注記（2026-03-29 / MS11-4反映）
 
-- 本書は v3 の目標仕様を含むが、2026-03-28 時点でコード反映済みなのは MS8A / MS8B / MS8C / MS8D-2 / MS9 / MS9-2 / MS10 / MS11-1 / MS11-2 / MS11-2_FIX01 / MS11-2_FIX02 / MS11-3 まで。
+- 本書は v3 の目標仕様を含むが、2026-03-29 時点でコード反映済みなのは MS8A / MS8B / MS8C / MS8D-2 / MS9 / MS9-2 / MS10 / MS11-1 / MS11-2 / MS11-2_FIX01 / MS11-2_FIX02 / MS11-3 / MS11-4 まで。
 - 反映済み（コード実体）:
   - 上部操作列 `OperationPanel`・最下部 `StatusPanel` を含む GUI 再構成
   - `PreviewArea` / `preview_transform.py` による 5 段固定 Preview 表示
@@ -44,11 +44,16 @@
   - MS11-3 成功 shape に対する envelope 全体保護
   - `peak_value == 0.0` 由来の zero-only trapezoid / zero-only shape を最終出力へ残さない writer 局所修正
   - 正規な short / legacy fallback shape を current normalization flow で不必要に消さない writer 局所保護
+  - `pipeline.py` における、RMS 補正後 interval を正本とした peak 評価
+  - halo `±0.03 sec` と隣接 interval 端点中点クリップを用いた peak window
+  - `load_rms_series()` 失敗時の `upper_limit * 0.25` fallback
+  - `global_peak <= 0.0` 時に全 event を `peak_value = 0.0` とする保守的分岐
+  - `rms_unavailable / global_peak_zero / no_peak_in_window / below_abs_threshold / below_rel_threshold` の理由分類追跡
 - 未反映（後続対象）:
   - より高度な平滑化と出力仕様全体の再設計
   - GUI / Preview の multi-point 表示対応
-  - `pipeline.py` 側イベント存在判定ポリシー改善
-  - `docs/MS11-2_Known_Issues.md` に整理した既知課題
+  - 実データ観測を踏まえた RMS 定数の必要最小限の再調整
+  - MS11-5 として扱う、event / interval / peak / RMS の観測支援拡張
 - MS8D-2 の改訂要件差分は `docs/MS8D-2_Requirements_and_Spec_Update.md` を参照する。
 
 ---
@@ -645,7 +650,7 @@
   * 現行台形ベースから変形台形へ拡張
   * 音量変化との同期
   * 同一母音連続時の上辺複数点対応
-* MS11 は MS11-2_FIX02 まで反映済みとし、残課題は多ポイント台形 / 上辺複数点対応 / より高度な平滑化 / `docs/MS11-2_Known_Issues.md` 記載事項とする
+* MS11 は MS11-4 まで反映済みとし、残課題は GUI / Preview の multi-point 表示対応、実データ観測を踏まえた RMS 定数の必要最小限の再調整、MS11-5 の観測支援拡張、より高度な平滑化とする
 * 再生詳細機能（スクラブ / 手動シーク / クリック移動）の仕様化
 * ステータス表示内容の最終文言調整
 * 英語表記短文化の最終調整

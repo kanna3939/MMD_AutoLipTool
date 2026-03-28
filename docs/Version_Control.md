@@ -1,5 +1,59 @@
 # Version Control Log
 
+## Entry 2026-03-29 / Session: release-v0361-repo-sync
+
+- Date: 2026-03-29
+- Session: release-v0361-repo-sync
+- Summary:
+  - MS11-4 の `pipeline.py` 品質改善と関連ドキュメント反映を含む現作業ツリーを `Ver 0.3.6.1` として同期した。
+  - `README.md` / `pyproject.toml` / `docs/Specification_Prompt_v3.md` / `docs/repo_milestone.md` の版数・同期記述を更新した。
+  - ワークスペース上に存在していた関連ドキュメントや周辺差分も、今回の同期対象としてまとめて反映した。
+- Modified Files:
+  - `README.md`: 版数表記を `Ver 0.3.6.1` に更新。
+  - `pyproject.toml`: プロジェクトバージョンを `0.3.6.1` に更新。
+  - `docs/Specification_Prompt_v3.md`: 対応リリースを `Ver 0.3.6.1` に更新し、MS11-4 反映状態を同期。
+  - `docs/repo_milestone.md`: `Ver 0.3.6.1` 同期メモを追記。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - この同期は release sync であり、実装詳細自体は `ms11-4-pipeline-quality-and-doc-sync` エントリを正本とする。
+  - `writer.py` 再設計、GUI / Preview 改修、MS11-5 全面実装は今回も含めていない。
+- Verification:
+  - `rg -n "Ver 0.3.6.1|0.3.6.1" README.md pyproject.toml docs/Specification_Prompt_v3.md docs/repo_milestone.md docs/Version_Control.md`
+  - `git status --short`
+
+---
+
+## Entry 2026-03-29 / Session: ms11-4-pipeline-quality-and-doc-sync
+
+- Date: 2026-03-29
+- Session: ms11-4-pipeline-quality-and-doc-sync
+- Summary:
+  - `pipeline.py` を主対象として MS11-4 を実装し、RMS 補正後 interval を正本にした peak 評価、halo 付き peak window、保守的 fallback、`peak_value = 0.0` 理由分類を導入した。
+  - `tests/test_pipeline_peak_values.py` を中心に pipeline 単体テストを拡張し、halo 内 peak 採用、`rms_unavailable`、`global_peak_zero`、各 0.0 理由の優先順を自動確認できる状態にした。
+  - `tests.test_pipeline_and_vmd` および writer 既存テストを通して、`writer.py` 再設計なしで既存到達状態を維持していることを確認した。
+  - 関連ドキュメントへ MS11-4 到達状態と、MS11-5 へ持ち越す残課題を反映した。
+- Modified Files:
+  - `src/core/pipeline.py`: 正本 interval と peak window の責務分離、halo `±0.03 sec`、保守的 RMS fallback、0.0 理由分類 helper を追加。
+  - `tests/test_pipeline_peak_values.py`: MS11-4 の単体観点を追加し、halo / fallback / 理由分類優先順を検証するよう更新。
+  - `docs/repo_milestone.md`: MS11-4 実装反映メモと残課題を追記。
+  - `docs/MS11_Remaining_Issues_and_Next_Milestones.md`: MS11-4 完了後の到達状態と残タスク整理を追記。
+  - `docs/Specification_Prompt_v3.md`: MS11-4 反映後の実装同期注記を更新。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - event は削除せず、interval を維持したまま `peak_value` と理由分類の整合を改善する方針を維持した。
+  - GUI / Preview 改修、`writer.py` 再設計、MS11-5 全面実装には広げていない。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m unittest tests.test_pipeline_peak_values`
+  - `.\.venv\Scripts\python.exe -m unittest tests.test_pipeline_and_vmd tests.test_vmd_writer_peak_value`
+  - `.\.venv\Scripts\python.exe -m unittest tests.test_vmd_writer_zero_guard tests.test_vmd_writer_intervals`
+  - `.\.venv\Scripts\python.exe -m unittest tests.test_pipeline_peak_values tests.test_pipeline_and_vmd tests.test_vmd_writer_peak_value tests.test_vmd_writer_zero_guard tests.test_vmd_writer_intervals`
+
+---
+
 ## Entry 2026-03-28 / Session: release-v0360-ms11-3-sync
 
 - Date: 2026-03-28

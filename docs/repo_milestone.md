@@ -1,4 +1,51 @@
 ﻿# MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
+## 2026-03-29 / Ver 0.3.6.1 同期メモ
+
+- 対象: MS11-4 実装反映、関連ドキュメント更新、周辺差分のリポジトリ同期
+- 同期内容:
+  - MS11-4 の `pipeline.py` 変更、pipeline 系テスト更新、MS11-4 到達整理を関連ドキュメントへ反映
+  - `README.md` / `pyproject.toml` / `docs/Specification_Prompt_v3.md` の版数表記を `Ver 0.3.6.1` へ更新
+  - ワークスペース内に存在していた関連ドキュメント・設定更新も同一同期に含める
+  - リポジトリ全体の反映版を `Ver 0.3.6.1` として確定
+- 確認状態:
+  - MS11-4 の構造修正とテスト更新が反映済み
+  - `writer.py` 再設計なしで pipeline-writer 回帰が通る状態を維持
+  - 既存 docs と版管理ログは MS11-4 反映後の状態へ同期済み
+- 残課題:
+  - 実データ上での `peak_value = 0.0` 事例の観測蓄積
+  - 必要最小限に限った RMS 定数の再調整判断
+  - internal helper / test 観測点を起点にした MS11-5 の整理
+
+---
+
+## 2026-03-29 / MS11-4 実装反映メモ
+
+- 対象: MS11-4 `pipeline.py` 側 event interval / peak 割当品質改善
+- 実装反映:
+  - `src/core/pipeline.py` で、正本 interval と peak 探索窓の責務を分離
+  - RMS 補正後 interval を `peak_value` 評価の正本とし、halo `±0.03 sec` を隣接 interval 端点中点でクリップする peak window を導入
+  - `load_rms_series()` 失敗時の一律 `upper_limit` fallback を廃止し、`upper_limit * 0.25` の保守的 fallback へ変更
+  - RMS は取得できたが `global_peak <= 0.0` の場合、全 event を `peak_value = 0.0` とする分岐を追加
+  - `peak_value = 0.0` 理由を `rms_unavailable / global_peak_zero / no_peak_in_window / below_abs_threshold / below_rel_threshold` で追跡できる internal helper を追加
+  - event は削除せず、interval を維持したまま `peak_value` と理由分類の整合を改善
+  - `tests/test_pipeline_peak_values.py` を拡張し、halo 探索・fallback・理由分類優先順を単体で確認できるよう更新
+- 確認状態:
+  - `tests.test_pipeline_peak_values` 10 件が通過
+  - `tests.test_pipeline_and_vmd` と `tests.test_vmd_writer_peak_value` 10 件が通過
+  - `tests.test_vmd_writer_zero_guard` と `tests.test_vmd_writer_intervals` 43 件が通過
+  - 上記合計 63 件の回帰確認が通過
+  - `writer.py` の再設計なしで、`peak_value = 0.0` event を既存 writer 側へ受け渡せる状態を維持
+- 残課題:
+  - 実データ上での `peak_value = 0.0` 事例の観測蓄積
+  - 必要最小限に限った RMS 定数の再調整判断
+  - internal helper / test 観測点を起点にした MS11-5 の整理
+- スコープ外として維持:
+  - `writer.py` 再設計
+  - GUI / Preview 改修
+  - MS11-5 の全面実装
+
+---
+
 ## 2026-03-28 / Ver 0.3.6.0 同期メモ
 
 - 対象: MS11-3 実装完了後の版同期
