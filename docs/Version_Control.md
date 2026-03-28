@@ -1,5 +1,58 @@
 # Version Control Log
 
+## Entry 2026-03-28 / Session: release-v0360-ms11-3-sync
+
+- Date: 2026-03-28
+- Session: release-v0360-ms11-3-sync
+- Summary:
+  - MS11-3 の実装、段階 fallback、envelope 保護、FIX01 / FIX02 整合、writer 局所の zero-only shape / short fallback 保護修正までを `Ver 0.3.6.0` として同期した。
+  - Known Issues の「無音に見える区間の開口残存」は今回も未解決の既知課題として維持し、解決済み扱いにはしなかった。
+- Modified Files:
+  - `README.md`: 版数表記を `Ver 0.3.6.0` に更新。
+  - `pyproject.toml`: プロジェクトバージョンを `0.3.6.0` に更新。
+  - `docs/repo_milestone.md`: `Ver 0.3.6.0` 同期メモを追記。
+  - `docs/Version_Control.md`: 本エントリを追記。
+  - `docs/Specification_Prompt_v3.md`: 対応リリースと MS11-3 後の writer 局所修正反映を最小差分で更新。
+  - `src/vmd_writer/writer.py`: zero-only shape 抑止と short fallback 保護の局所修正。
+  - `tests/test_vmd_writer_peak_value.py`: zero-peak 期待値を新仕様へ更新。
+  - `tests/test_vmd_writer_zero_guard.py`: zero-only shape / short fallback 保護の回帰防止テストを追加。
+  - `tests/test_vmd_writer_grouping.py`: MS11-3 grouping テストを追加。
+  - `tests/test_vmd_writer_multipoint_shape.py`: MS11-3 shape / fallback テストを追加。
+- Added Files:
+  - なし
+- Notes:
+  - `pipeline.py` は変更していない。
+  - GUI / Preview の multi-point 表示対応、Known Issues 解消、出力仕様全体の再設計は今回の同期対象外とした。
+- Verification:
+  - `$env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m unittest tests.test_vmd_writer_grouping tests.test_vmd_writer_intervals tests.test_vmd_writer_peak_value tests.test_vmd_writer_multipoint_shape tests.test_vmd_writer_zero_guard`
+  - `$env:PYTHONPATH='src;tests'; .\.venv\Scripts\python.exe -m unittest tests.test_pipeline_and_vmd tests.test_pipeline_peak_values`
+  - `git diff -- README.md pyproject.toml docs/repo_milestone.md docs/Version_Control.md docs/Specification_Prompt_v3.md`
+
+---
+
+## Entry 2026-03-28 / Session: ms11-3-doc-sync
+
+- Date: 2026-03-28
+- Session: ms11-3-doc-sync
+- Summary:
+  - MS11-3 の実装・検証結果に合わせて、multi-point shape / grouping / fallback / envelope 保護 / FIX01-FIX02 整合の反映内容を文書へ同期した。
+  - Known Issues の「無音に見える区間の開口残存」は今回も未解決の既知課題として維持し、解決済み扱いにはしなかった。
+- Modified Files:
+  - `docs/repo_milestone.md`: MS11-3 実装完了メモを追記。
+  - `docs/Version_Control.md`: 本エントリを追記。
+  - `docs/Specification_Prompt_v3.md`: MS11-3 反映済み範囲と残課題の記述を最小差分で更新。
+- Added Files:
+  - なし
+- Notes:
+  - コード変更・テスト変更は行わず、タスク1〜11 で確認済みの事実だけを反映した。
+  - `pipeline.py` の再設計、GUI / Preview の multi-point 表示対応、Known Issues 解消は今回の反映対象外とした。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m unittest tests.test_vmd_writer_grouping tests.test_vmd_writer_intervals tests.test_vmd_writer_peak_value tests.test_vmd_writer_multipoint_shape tests.test_vmd_writer_zero_guard`
+  - `$env:PYTHONPATH='src;tests'; .\.venv\Scripts\python.exe -m unittest tests.test_pipeline_and_vmd`
+  - `git diff -- docs/repo_milestone.md docs/Version_Control.md docs/Specification_Prompt_v3.md`
+
+---
+
 ## Entry 2026-03-27 / Session: release-v0359-ms11-2-fix-sync
 
 - Date: 2026-03-27

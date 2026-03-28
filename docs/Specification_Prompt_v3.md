@@ -4,15 +4,15 @@
 
 - 文書名: `docs/Specification_Prompt_v3.md`
 - 作成日: 2026-03-20
-- 最終更新日: 2026-03-27
-- 対応リリース: `Ver 0.3.5.9`
+- 最終更新日: 2026-03-28
+- 対応リリース: `Ver 0.3.6.0`
 - 対象リポジトリ: `MMD_AutoLipTool`
 - 旧版: `docs/Specification_Prompt_v2.md`（本書で置き換え）
 - 文書方針: v2 の意図を引き継ぎつつ、現行実装・確定済み追加仕様・責務分割方針に合わせて更新する
 
-### 0.1 実装同期注記（2026-03-27 / MS11-2_FIX02反映）
+### 0.1 実装同期注記（2026-03-28 / MS11-3反映 + writer局所修正同期）
 
-- 本書は v3 の目標仕様を含むが、2026-03-27 時点でコード反映済みなのは MS8A / MS8B / MS8C / MS8D-2 / MS9 / MS9-2 / MS10 / MS11-1 / MS11-2 / MS11-2_FIX01 / MS11-2_FIX02 まで。
+- 本書は v3 の目標仕様を含むが、2026-03-28 時点でコード反映済みなのは MS8A / MS8B / MS8C / MS8D-2 / MS9 / MS9-2 / MS10 / MS11-1 / MS11-2 / MS11-2_FIX01 / MS11-2_FIX02 / MS11-3 まで。
 - 反映済み（コード実体）:
   - 上部操作列 `OperationPanel`・最下部 `StatusPanel` を含む GUI 再構成
   - `PreviewArea` / `preview_transform.py` による 5 段固定 Preview 表示
@@ -37,9 +37,17 @@
   - 正規な MS11-2 由来形状に対する MS11-1 最終正規化側の部分保護
   - FIX01 による、許容外非ゼロ除去と不要ゼロ prune
   - FIX02 による、発話イベント範囲保護を用いたゼロ縮退抑止
+  - 同一母音近接イベント群に対する MS11-3 multi-point shape
+  - 秒ベース grouping と frame ベース成立判定
+  - 谷を非ゼロで維持する multi-point envelope 生成
+  - MS11-3 不成立時の MS11-2 / legacy fallback
+  - MS11-3 成功 shape に対する envelope 全体保護
+  - `peak_value == 0.0` 由来の zero-only trapezoid / zero-only shape を最終出力へ残さない writer 局所修正
+  - 正規な short / legacy fallback shape を current normalization flow で不必要に消さない writer 局所保護
 - 未反映（後続対象）:
-  - MS11 のうち、多ポイント台形 / 上辺複数点対応
   - より高度な平滑化と出力仕様全体の再設計
+  - GUI / Preview の multi-point 表示対応
+  - `pipeline.py` 側イベント存在判定ポリシー改善
   - `docs/MS11-2_Known_Issues.md` に整理した既知課題
 - MS8D-2 の改訂要件差分は `docs/MS8D-2_Requirements_and_Spec_Update.md` を参照する。
 
@@ -197,6 +205,8 @@
   * VMDモーフ書き出し
   * 区間ベースのキー生成
   * 4点の非対称・単一上辺台形生成
+  * 同一母音近接イベント群の multi-point shape 生成
+  * MS11-3 → MS11-2 → legacy fallback
   * 4 frame 未満での既存短区間フォールバック
   * 立ち上がり前ゼロ保証（同一フレーム衝突時 `frame-1` 退避）
   * 最終モーフフレーム正規化層
@@ -204,6 +214,7 @@
   * 母音全体開口状態の内部表現構築
   * 孤立短開口の抑制と、最小限の個別モーフ短パルス整理
   * 正規な MS11-2 由来形状に対する部分保護
+  * MS11-3 成功 shape に対する envelope 全体保護
 
 #### 実装済みの追加責務（2026-03-22 時点）
 
