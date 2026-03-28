@@ -5,14 +5,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from vmd_writer import VowelTimelinePoint
 from vmd_writer.writer import (
+    ENVELOPE_POINT_KINDS,
     MORPH_FRAME_OPEN_EPSILON,
+    EnvelopeControlPoint,
+    MultiPointEnvelopeSpec,
     _apply_final_morph_frame_normalization,
     _build_interval_morph_frames,
     _build_interval_morph_frames_with_metadata,
+    _build_interval_morph_frames_with_normalization_metadata,
     _build_morph_frame_open_state,
+    _control_point_frame_bounds,
     _detect_isolated_short_open_candidates,
     _detect_short_morph_pulse_candidates,
     _extract_mouth_open_intervals,
+    _is_minimally_valid_multi_point_envelope_spec,
     _merge_duplicate_morph_frames,
     _normalize_isolated_short_open_segments,
     _normalize_short_morph_pulses,
@@ -21,6 +27,69 @@ from vmd_writer.writer import (
 
 
 class VmdWriterZeroGuardTests(unittest.TestCase):
+    def test_envelope_control_point_normalizes_values_and_validates_kind(self) -> None:
+        point = EnvelopeControlPoint(frame_no="12", value="0.25", point_kind="top")
+
+        self.assertEqual(point.frame_no, 12)
+        self.assertEqual(point.value, 0.25)
+        self.assertEqual(point.point_kind, "top")
+        self.assertEqual(
+            ENVELOPE_POINT_KINDS,
+            ("start_zero", "top", "valley", "end_zero"),
+        )
+
+    def test_envelope_control_point_rejects_unknown_kind(self) -> None:
+        with self.assertRaises(ValueError):
+            EnvelopeControlPoint(frame_no=12, value=0.25, point_kind="peak")
+
+    def test_multi_point_envelope_spec_keeps_ms11_3_metadata_without_connecting_writer_flow(self) -> None:
+        spec = MultiPointEnvelopeSpec(
+            vowel="\u3042",
+            control_points=(
+                EnvelopeControlPoint(frame_no=24, value=0.0, point_kind="start_zero"),
+                EnvelopeControlPoint(frame_no=27, value=0.4, point_kind="top"),
+                EnvelopeControlPoint(frame_no=30, value=0.12, point_kind="valley"),
+                EnvelopeControlPoint(frame_no=33, value=0.3, point_kind="top"),
+                EnvelopeControlPoint(frame_no=36, value=0.0, point_kind="end_zero"),
+            ),
+            source_event_indices=(0, 1),
+            protection_mode="envelope_range",
+            event_ranges=((24, 30), (31, 36)),
+        )
+
+        self.assertEqual(spec.vowel, "\u3042")
+        self.assertEqual(spec.source_event_indices, (0, 1))
+        self.assertEqual(spec.event_ranges, ((24, 30), (31, 36)))
+        self.assertEqual(spec.start_frame, 24)
+        self.assertEqual(spec.end_frame, 36)
+        self.assertTrue(spec.is_ms11_3_generated)
+
+    def test_multi_point_envelope_spec_support_helpers_remain_lightweight(self) -> None:
+        valid_spec = MultiPointEnvelopeSpec(
+            vowel="\u3042",
+            control_points=(
+                EnvelopeControlPoint(frame_no=24, value=0.0, point_kind="start_zero"),
+                EnvelopeControlPoint(frame_no=27, value=0.4, point_kind="top"),
+                EnvelopeControlPoint(frame_no=30, value=0.12, point_kind="valley"),
+                EnvelopeControlPoint(frame_no=33, value=0.3, point_kind="top"),
+                EnvelopeControlPoint(frame_no=36, value=0.0, point_kind="end_zero"),
+            ),
+            source_event_indices=(0, 1),
+        )
+        invalid_spec = MultiPointEnvelopeSpec(
+            vowel="\u3042",
+            control_points=(
+                EnvelopeControlPoint(frame_no=27, value=0.4, point_kind="top"),
+                EnvelopeControlPoint(frame_no=24, value=0.0, point_kind="start_zero"),
+                EnvelopeControlPoint(frame_no=36, value=0.0, point_kind="end_zero"),
+            ),
+            source_event_indices=(0,),
+        )
+
+        self.assertEqual(_control_point_frame_bounds(valid_spec.control_points), (24, 36))
+        self.assertTrue(_is_minimally_valid_multi_point_envelope_spec(valid_spec))
+        self.assertFalse(_is_minimally_valid_multi_point_envelope_spec(invalid_spec))
+
     def test_rise_start_zero_moves_back_one_frame_on_same_frame_collision(self) -> None:
         points = [
             VowelTimelinePoint(
@@ -502,6 +571,354 @@ class VmdWriterZeroGuardTests(unittest.TestCase):
                 (40, "\u3048", 0.0),
             ],
         )
+
+    def test_ms11_3_metadata_uses_envelope_level_protected_and_allowed_ranges(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="\u3042",
+                peak_value=0.40,
+                start_sec=0.80,
+                end_sec=1.05,
+            ),
+            VowelTimelinePoint(
+                time_sec=1.30,
+                vowel="\u3042",
+                peak_value=0.30,
+                start_sec=1.15,
+                end_sec=1.50,
+            ),
+        ]
+
+        raw_frames, metadata = _build_interval_morph_frames_with_normalization_metadata(points)
+
+        self.assertEqual(
+            raw_frames,
+            [
+                (24, "\u3042", 0.0),
+                (30, "\u3042", 0.4),
+                (34, "\u3042", 0.105),
+                (39, "\u3042", 0.3),
+                (45, "\u3042", 0.0),
+            ],
+        )
+        self.assertEqual(metadata.protected_envelope_ranges, {"\u3042": [(24, 45)]})
+        self.assertEqual(metadata.allowed_non_zero_ranges, {"\u3042": [(24, 45)]})
+        self.assertEqual(metadata.required_zero_frames, {"\u3042": {24, 45}})
+        self.assertNotIn(34, metadata.required_zero_frames["\u3042"])
+
+    def test_final_normalization_keeps_valid_ms11_3_envelope_under_isolated_short_open_suppression(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="\u3042",
+                peak_value=0.40,
+                start_sec=0.80,
+                end_sec=1.05,
+            ),
+            VowelTimelinePoint(
+                time_sec=1.30,
+                vowel="\u3042",
+                peak_value=0.30,
+                start_sec=1.15,
+                end_sec=1.50,
+            ),
+        ]
+
+        raw_frames, metadata = _build_interval_morph_frames_with_normalization_metadata(points)
+        normalized = _apply_final_morph_frame_normalization(
+            raw_frames,
+            protected_event_ranges=metadata.protected_envelope_ranges,
+            allowed_non_zero_ranges=metadata.allowed_non_zero_ranges,
+            required_zero_frames=metadata.required_zero_frames,
+        )
+
+        self.assertEqual(normalized, raw_frames)
+
+    def test_short_morph_pulse_suppression_does_not_remove_ms11_3_valley_or_tops_inside_protected_envelope(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="\u3042",
+                peak_value=0.40,
+                start_sec=0.80,
+                end_sec=1.05,
+            ),
+            VowelTimelinePoint(
+                time_sec=1.30,
+                vowel="\u3042",
+                peak_value=0.30,
+                start_sec=1.15,
+                end_sec=1.50,
+            ),
+        ]
+
+        raw_frames, metadata = _build_interval_morph_frames_with_normalization_metadata(points)
+        supporting_frames = [
+            (29, "\u3044", 0.5),
+            (30, "\u3044", 0.5),
+            (31, "\u3044", 0.5),
+            (32, "\u3044", 0.5),
+            (33, "\u3044", 0.5),
+            (34, "\u3044", 0.5),
+            (35, "\u3044", 0.5),
+            (36, "\u3044", 0.5),
+            (37, "\u3044", 0.5),
+            (38, "\u3044", 0.5),
+            (39, "\u3044", 0.5),
+            (40, "\u3044", 0.5),
+        ]
+
+        normalized = _apply_final_morph_frame_normalization(
+            list(raw_frames) + supporting_frames,
+            protected_event_ranges=metadata.protected_envelope_ranges,
+            allowed_non_zero_ranges={
+                "\u3042": list(metadata.allowed_non_zero_ranges["\u3042"]),
+                "\u3044": [(29, 40)],
+            },
+            required_zero_frames=metadata.required_zero_frames,
+        )
+
+        self.assertIn((30, "\u3042", 0.4), normalized)
+        self.assertIn((34, "\u3042", 0.105), normalized)
+        self.assertIn((39, "\u3042", 0.3), normalized)
+
+    def test_final_normalization_keeps_ms11_3_envelope_while_removing_non_zero_outside_allowed_range(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="\u3042",
+                peak_value=0.40,
+                start_sec=0.80,
+                end_sec=1.05,
+            ),
+            VowelTimelinePoint(
+                time_sec=1.30,
+                vowel="\u3042",
+                peak_value=0.30,
+                start_sec=1.15,
+                end_sec=1.50,
+            ),
+        ]
+
+        raw_frames, metadata = _build_interval_morph_frames_with_normalization_metadata(points)
+        normalized = _apply_final_morph_frame_normalization(
+            list(raw_frames) + [(50, "\u3042", 0.2)],
+            protected_event_ranges=metadata.protected_envelope_ranges,
+            allowed_non_zero_ranges=metadata.allowed_non_zero_ranges,
+            required_zero_frames=metadata.required_zero_frames,
+        )
+
+        self.assertEqual(
+            normalized,
+            [
+                (24, "\u3042", 0.0),
+                (30, "\u3042", 0.4),
+                (34, "\u3042", 0.105),
+                (39, "\u3042", 0.3),
+                (45, "\u3042", 0.0),
+            ],
+        )
+
+    def test_final_normalization_prunes_only_redundant_zero_inside_ms11_3_envelope(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="\u3042",
+                peak_value=0.40,
+                start_sec=0.80,
+                end_sec=1.05,
+            ),
+            VowelTimelinePoint(
+                time_sec=1.30,
+                vowel="\u3042",
+                peak_value=0.30,
+                start_sec=1.15,
+                end_sec=1.50,
+            ),
+        ]
+
+        raw_frames, metadata = _build_interval_morph_frames_with_normalization_metadata(points)
+        normalized = _apply_final_morph_frame_normalization(
+            list(raw_frames) + [(32, "\u3042", 0.0)],
+            protected_event_ranges=metadata.protected_envelope_ranges,
+            allowed_non_zero_ranges=metadata.allowed_non_zero_ranges,
+            required_zero_frames=metadata.required_zero_frames,
+        )
+
+        self.assertEqual(
+            normalized,
+            [
+                (24, "\u3042", 0.0),
+                (30, "\u3042", 0.4),
+                (34, "\u3042", 0.105),
+                (39, "\u3042", 0.3),
+                (45, "\u3042", 0.0),
+            ],
+        )
+
+    def test_ms11_2_shape_protection_remains_intact_when_using_current_normalization_metadata_flow(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="\u3042",
+                duration_sec=0.4,
+                start_sec=0.8,
+                end_sec=1.2,
+            )
+        ]
+
+        raw_frames, metadata = _build_interval_morph_frames_with_normalization_metadata(points)
+        normalized = _apply_final_morph_frame_normalization(
+            raw_frames,
+            protected_ms11_2_specs=list(metadata.protected_ms11_2_specs),
+            protected_event_ranges=metadata.protected_envelope_ranges,
+            allowed_non_zero_ranges=metadata.allowed_non_zero_ranges,
+            required_zero_frames=metadata.required_zero_frames,
+        )
+
+        self.assertEqual(
+            normalized,
+            [
+                (24, "\u3042", 0.0),
+                (27, "\u3042", 0.5),
+                (33, "\u3042", 0.5),
+                (36, "\u3042", 0.0),
+            ],
+        )
+
+    def test_duplicate_merge_and_cleanup_do_not_break_ms11_3_shape(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="\u3042",
+                peak_value=0.40,
+                start_sec=0.80,
+                end_sec=1.05,
+            ),
+            VowelTimelinePoint(
+                time_sec=1.30,
+                vowel="\u3042",
+                peak_value=0.30,
+                start_sec=1.15,
+                end_sec=1.50,
+            ),
+        ]
+
+        raw_frames, metadata = _build_interval_morph_frames_with_normalization_metadata(points)
+        duplicated_frames = list(raw_frames) + [
+            (30, "\u3042", 0.2),
+            (34, "\u3042", 0.0),
+            (39, "\u3042", 0.25),
+            (32, "\u3042", 0.0),
+            (50, "\u3042", 0.2),
+        ]
+
+        normalized = _apply_final_morph_frame_normalization(
+            duplicated_frames,
+            protected_event_ranges=metadata.protected_envelope_ranges,
+            allowed_non_zero_ranges=metadata.allowed_non_zero_ranges,
+            required_zero_frames=metadata.required_zero_frames,
+        )
+
+        self.assertEqual(
+            normalized,
+            [
+                (24, "\u3042", 0.0),
+                (30, "\u3042", 0.4),
+                (34, "\u3042", 0.105),
+                (39, "\u3042", 0.3),
+                (45, "\u3042", 0.0),
+            ],
+        )
+
+    def test_ms11_3_shape_keeps_boundary_zeros_after_normalization(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="\u3042",
+                peak_value=0.40,
+                start_sec=0.80,
+                end_sec=1.05,
+            ),
+            VowelTimelinePoint(
+                time_sec=1.30,
+                vowel="\u3042",
+                peak_value=0.30,
+                start_sec=1.15,
+                end_sec=1.50,
+            ),
+        ]
+
+        raw_frames, metadata = _build_interval_morph_frames_with_normalization_metadata(points)
+        normalized = _apply_final_morph_frame_normalization(
+            raw_frames,
+            protected_event_ranges=metadata.protected_envelope_ranges,
+            allowed_non_zero_ranges=metadata.allowed_non_zero_ranges,
+            required_zero_frames=metadata.required_zero_frames,
+        )
+
+        self.assertEqual(normalized[0], (24, "\u3042", 0.0))
+        self.assertEqual(normalized[-1], (45, "\u3042", 0.0))
+        self.assertEqual(
+            metadata.required_zero_frames,
+            {"\u3042": {24, 45}},
+        )
+
+    def test_zero_peak_long_interval_does_not_leave_zero_only_trapezoid_in_output(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="\u3046",
+                peak_value=0.0,
+                start_sec=0.9333333,
+                end_sec=1.1333333,
+            )
+        ]
+
+        raw_frames, metadata = _build_interval_morph_frames_with_normalization_metadata(points)
+        normalized = _apply_final_morph_frame_normalization(
+            raw_frames,
+            protected_ms11_2_specs=list(metadata.protected_ms11_2_specs),
+            protected_event_ranges=metadata.protected_envelope_ranges,
+            allowed_non_zero_ranges=metadata.allowed_non_zero_ranges,
+            required_zero_frames=metadata.required_zero_frames,
+        )
+
+        self.assertEqual(raw_frames, [])
+        self.assertEqual(normalized, [])
+        self.assertEqual(metadata.required_zero_frames, {})
+
+    def test_current_metadata_flow_keeps_valid_short_fallback_shape(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="\u3042",
+                peak_value=0.05,
+                start_sec=0.98,
+                end_sec=1.02,
+            )
+        ]
+
+        raw_frames, metadata = _build_interval_morph_frames_with_normalization_metadata(points)
+        normalized = _apply_final_morph_frame_normalization(
+            raw_frames,
+            protected_ms11_2_specs=list(metadata.protected_ms11_2_specs),
+            protected_event_ranges=metadata.protected_envelope_ranges,
+            allowed_non_zero_ranges=metadata.allowed_non_zero_ranges,
+            required_zero_frames=metadata.required_zero_frames,
+        )
+
+        self.assertEqual(
+            raw_frames,
+            [
+                (29, "\u3042", 0.0),
+                (30, "\u3042", 0.05),
+                (31, "\u3042", 0.0),
+            ],
+        )
+        self.assertEqual(metadata.protected_envelope_ranges, {"\u3042": [(29, 31)]})
+        self.assertEqual(normalized, raw_frames)
 
 
 if __name__ == "__main__":
