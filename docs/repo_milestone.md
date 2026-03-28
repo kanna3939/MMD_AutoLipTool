@@ -1,4 +1,54 @@
 ﻿# MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
+## 2026-03-28 / Ver 0.3.6.0 同期メモ
+
+- 対象: MS11-3 実装完了後の版同期
+- 同期内容:
+  - `src/vmd_writer/writer.py` の MS11-3 本体、段階 fallback、envelope 保護、FIX01 / FIX02 整合、writer 局所の zero-only shape / short fallback 保護修正を関連ドキュメントへ反映
+  - writer 系テスト拡張と回帰確認結果、`pipeline + writer` の参照的確認結果を `docs/Specification_Prompt_v3.md` / `docs/Version_Control.md` に同期
+  - リポジトリ全体の反映版を `Ver 0.3.6.0` として確定
+- 確認状態:
+  - writer 系テスト 67 件が通過している
+  - `PYTHONPATH='src;tests'` 付きの `tests.test_pipeline_and_vmd` と `tests.test_pipeline_peak_values` を含む 9 件が通過している
+  - `peak_value == 0.0` 由来の意味のない全ゼロ台形は最終出力へ残さない
+  - 正規な short / legacy fallback shape は current normalization flow でも不必要に消えない
+  - MS11-3 / MS11-2 / legacy fallback の順序と、MS11-2 / FIX01 / FIX02 の到達状態を維持している
+- 既知課題として維持:
+  - `docs/MS11-2_Known_Issues.md` に整理済みの「無音に見える区間の開口残存」は今回も既知課題のままとし、解決済み扱いにしない
+- スコープ外として維持:
+  - GUI / Preview の multi-point 表示対応
+  - `pipeline.py` 側イベント存在判定ポリシー改善
+  - より高度な平滑化
+  - 出力仕様全体の再設計
+
+---
+
+## 2026-03-28 / MS11-3 実装完了メモ
+
+- 対象: MS11 出力品質拡張の第3段階
+- 実装反映:
+  - `src/vmd_writer/writer.py` を主対象として、同一母音近接イベント群を multi-point shape として扱う MS11-3 を実装
+  - 秒ベース grouping と frame ベース成立判定を導入し、multi-point shape 生成・`MorphFrame` 展開・採用条件判定を追加
+  - 谷値は非ゼロ維持の固定ルールで扱い、`peak_value` を上辺点高さへ反映
+  - MS11-3 不成立時は MS11-2 単一上辺台形、さらに不成立時は legacy fallback へ戻る段階フォールバックを接続
+  - 後段正規化に対して、MS11-3 成功 shape を envelope 全体単位で保護する導線を追加
+  - FIX01 / FIX02 の改善意図を崩さないよう、allowed range / required zero / suppression / zero prune の整合を writer 側で維持
+  - writer 系テストを拡張し、grouping / multi-point shape / fallback / protection / FIX01-FIX02 回帰を自動確認できる状態にした
+- 到達状態:
+  - 同一母音近接イベント群は、条件を満たす場合 multi-point shape として出力される
+  - 谷は原則 0.0 へ完全閉口せず、非ゼロで維持される
+  - MS11-3 成功時は envelope 全体を allowed non-zero range / protected range の単位として扱う
+  - MS11-3 / MS11-2 / legacy fallback の順序が writer 内で成立している
+  - writer 系テスト 65 件、および `PYTHONPATH='src;tests'` 付きの `tests.test_pipeline_and_vmd` 6 件が通過している
+- 既知課題として維持:
+  - `docs/MS11-2_Known_Issues.md` に整理済みの「無音に見える区間の開口残存」は今回も既知課題のままとし、解決済み扱いにしない
+- スコープ外として維持:
+  - GUI / Preview の multi-point 表示対応
+  - `pipeline.py` 側イベント存在判定ポリシー改善
+  - より高度な平滑化
+  - 出力仕様全体の再設計
+
+---
+
 ## 2026-03-27 / Ver 0.3.5.9 同期メモ
 
 - 対象: MS11-2 / MS11-2_FIX01 / MS11-2_FIX02 の反映版同期

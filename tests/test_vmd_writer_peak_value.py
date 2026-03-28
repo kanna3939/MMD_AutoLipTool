@@ -55,7 +55,7 @@ class VmdWriterPeakValueTests(unittest.TestCase):
             ],
         )
 
-    def test_peak_value_zero_keeps_timeline_stable(self) -> None:
+    def test_peak_value_zero_does_not_emit_zero_only_shape(self) -> None:
         points = [
             VowelTimelinePoint(
                 time_sec=1.0,
@@ -68,15 +68,7 @@ class VmdWriterPeakValueTests(unittest.TestCase):
         ]
 
         frames = _build_interval_morph_frames(points)
-        self.assertEqual(
-            frames,
-            [
-                (24, "\u3042", 0.0),
-                (27, "\u3042", 0.0),
-                (33, "\u3042", 0.0),
-                (36, "\u3042", 0.0),
-            ],
-        )
+        self.assertEqual(frames, [])
 
     def test_finalize_morph_value_rounds_only_when_needed(self) -> None:
         self.assertEqual(_finalize_morph_value(0.123456), 0.1235)
