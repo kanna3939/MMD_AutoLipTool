@@ -61,6 +61,26 @@ class PeakValueEvaluation:
     reason: str | None = None
 
 
+@dataclass(frozen=True)
+class PeakValueObservation:
+    event_index: int
+    vowel: str
+    time_sec: float
+    initial_interval_start_sec: float
+    initial_interval_end_sec: float
+    refined_interval_start_sec: float
+    refined_interval_end_sec: float
+    peak_window_start_sec: float
+    peak_window_end_sec: float
+    local_peak: float | None
+    global_peak: float | None
+    peak_value: float
+    reason: str | None
+    fallback_reason: str | None
+    window_sample_count: int
+    evaluation: PeakValueEvaluation
+
+
 def build_even_vowel_timeline(
     vowels: Sequence[str],
     speech_start_sec: float,
@@ -674,6 +694,88 @@ def _build_peak_value_evaluations(
         )
 
     return evaluations
+
+
+def _build_peak_value_observations(
+    *,
+    timeline: Sequence[VowelTimelinePoint],
+    rms_series: RmsSeriesData | None,
+    speech_start_sec: float,
+    speech_end_sec: float,
+    upper_limit: float,
+    fallback_reason: str | None = None,
+    initial_timeline: Sequence[VowelTimelinePoint] | None = None,
+) -> list[PeakValueObservation]:
+    if not timeline:
+        return []
+    if initial_timeline is not None and len(initial_timeline) != len(timeline):
+        raise ValueError("initial_timeline must have the same length as timeline.")
+
+    evaluations = _build_peak_value_evaluations(
+        timeline=timeline,
+        rms_series=rms_series,
+        speech_start_sec=speech_start_sec,
+        speech_end_sec=speech_end_sec,
+        upper_limit=upper_limit,
+        fallback_reason=fallback_reason,
+    )
+    global_peak = _observation_global_peak(
+        rms_series=rms_series,
+        speech_start_sec=speech_start_sec,
+        speech_end_sec=speech_end_sec,
+        fallback_reason=fallback_reason,
+    )
+
+    observations: list[PeakValueObservation] = []
+    for index, (point, evaluation) in enumerate(zip(timeline, evaluations)):
+        initial_point = point if initial_timeline is None else initial_timeline[index]
+        initial_interval_start_sec, initial_interval_end_sec = _event_interval(initial_point)
+        window_samples = _rms_samples_in_window(
+            times_sec=() if rms_series is None else rms_series.times_sec,
+            values=() if rms_series is None else rms_series.values,
+            start_sec=evaluation.peak_window_start_sec,
+            end_sec=evaluation.peak_window_end_sec,
+        )
+        observations.append(
+            PeakValueObservation(
+                event_index=index,
+                vowel=point.vowel,
+                time_sec=point.time_sec,
+                initial_interval_start_sec=initial_interval_start_sec,
+                initial_interval_end_sec=initial_interval_end_sec,
+                refined_interval_start_sec=evaluation.interval_start_sec,
+                refined_interval_end_sec=evaluation.interval_end_sec,
+                peak_window_start_sec=evaluation.peak_window_start_sec,
+                peak_window_end_sec=evaluation.peak_window_end_sec,
+                local_peak=evaluation.local_peak,
+                global_peak=global_peak,
+                peak_value=evaluation.peak_value,
+                reason=evaluation.reason,
+                fallback_reason=fallback_reason,
+                window_sample_count=len(window_samples),
+                evaluation=evaluation,
+            )
+        )
+    return observations
+
+
+def _observation_global_peak(
+    *,
+    rms_series: RmsSeriesData | None,
+    speech_start_sec: float,
+    speech_end_sec: float,
+    fallback_reason: str | None = None,
+) -> float | None:
+    if fallback_reason == "rms_unavailable":
+        return None
+    if rms_series is None or not rms_series.times_sec or not rms_series.values:
+        return 0.0
+    return _rms_local_peak(
+        times_sec=rms_series.times_sec,
+        values=rms_series.values,
+        start_sec=speech_start_sec,
+        end_sec=speech_end_sec,
+    )
 
 
 def _with_peak_value(*, point: VowelTimelinePoint, peak_value: float) -> VowelTimelinePoint:

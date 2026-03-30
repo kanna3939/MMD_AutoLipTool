@@ -8,6 +8,7 @@ from core.audio_processing import RmsSeriesData
 from core.pipeline import (
     _apply_peak_values_to_timeline,
     _build_peak_value_evaluations,
+    _build_peak_value_observations,
     _refine_timeline_intervals_with_rms,
 )
 from vmd_writer import VowelTimelinePoint
@@ -251,6 +252,113 @@ class PipelinePeakValueTests(unittest.TestCase):
         )
 
         self.assertEqual(evaluations[0].reason, "global_peak_zero")
+
+    def test_observation_includes_initial_and_refined_intervals(self) -> None:
+        initial_timeline = [
+            VowelTimelinePoint(time_sec=0.25, vowel="\u3042", duration_sec=0.2, start_sec=0.15, end_sec=0.35),
+        ]
+        refined_timeline = [
+            VowelTimelinePoint(time_sec=0.25, vowel="\u3042", duration_sec=0.1, start_sec=0.20, end_sec=0.30),
+        ]
+        rms_series = RmsSeriesData(
+            sample_rate_hz=100,
+            channel_count=1,
+            duration_sec=1.0,
+            window_size_samples=5,
+            hop_size_samples=5,
+            times_sec=[0.25, 0.80],
+            values=[0.4, 1.0],
+        )
+
+        observations = _build_peak_value_observations(
+            timeline=refined_timeline,
+            initial_timeline=initial_timeline,
+            rms_series=rms_series,
+            speech_start_sec=0.0,
+            speech_end_sec=1.0,
+            upper_limit=0.5,
+        )
+
+        self.assertEqual(len(observations), 1)
+        observation = observations[0]
+        self.assertEqual(observation.event_index, 0)
+        self.assertEqual(observation.vowel, "\u3042")
+        self.assertAlmostEqual(observation.initial_interval_start_sec, 0.15, places=6)
+        self.assertAlmostEqual(observation.initial_interval_end_sec, 0.35, places=6)
+        self.assertAlmostEqual(observation.refined_interval_start_sec, 0.20, places=6)
+        self.assertAlmostEqual(observation.refined_interval_end_sec, 0.30, places=6)
+        self.assertAlmostEqual(observation.global_peak, 1.0, places=6)
+        self.assertEqual(observation.window_sample_count, 1)
+        self.assertEqual(observation.evaluation.peak_value, observation.peak_value)
+
+    def test_observation_reports_halo_window_and_sample_count(self) -> None:
+        timeline = [
+            VowelTimelinePoint(time_sec=0.25, vowel="\u3042", duration_sec=0.1, start_sec=0.20, end_sec=0.30),
+            VowelTimelinePoint(time_sec=0.45, vowel="\u3044", duration_sec=0.1, start_sec=0.40, end_sec=0.50),
+        ]
+        rms_series = RmsSeriesData(
+            sample_rate_hz=100,
+            channel_count=1,
+            duration_sec=1.0,
+            window_size_samples=5,
+            hop_size_samples=5,
+            times_sec=[0.32, 0.45, 0.80],
+            values=[0.8, 0.3, 1.0],
+        )
+
+        observations = _build_peak_value_observations(
+            timeline=timeline,
+            rms_series=rms_series,
+            speech_start_sec=0.0,
+            speech_end_sec=1.0,
+            upper_limit=0.5,
+        )
+
+        self.assertEqual(len(observations), 2)
+        self.assertAlmostEqual(observations[0].peak_window_end_sec, 0.33, places=6)
+        self.assertEqual(observations[0].window_sample_count, 1)
+        self.assertEqual(observations[0].local_peak, 0.8)
+        self.assertIsNone(observations[0].reason)
+
+    def test_observation_reports_rms_unavailable_fallback_without_global_peak(self) -> None:
+        timeline = [
+            VowelTimelinePoint(time_sec=0.25, vowel="\u3042", duration_sec=0.1, start_sec=0.20, end_sec=0.30),
+        ]
+
+        observations = _build_peak_value_observations(
+            timeline=timeline,
+            rms_series=None,
+            speech_start_sec=0.0,
+            speech_end_sec=1.0,
+            upper_limit=0.5,
+            fallback_reason="rms_unavailable",
+        )
+
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(observations[0].reason, "rms_unavailable")
+        self.assertEqual(observations[0].fallback_reason, "rms_unavailable")
+        self.assertIsNone(observations[0].global_peak)
+        self.assertEqual(observations[0].window_sample_count, 0)
+        self.assertEqual(observations[0].peak_value, 0.125)
+
+    def test_observation_requires_matching_initial_timeline_length(self) -> None:
+        timeline = [
+            VowelTimelinePoint(time_sec=0.25, vowel="\u3042", duration_sec=0.1, start_sec=0.20, end_sec=0.30),
+        ]
+        initial_timeline = [
+            VowelTimelinePoint(time_sec=0.25, vowel="\u3042", duration_sec=0.2, start_sec=0.15, end_sec=0.35),
+            VowelTimelinePoint(time_sec=0.45, vowel="\u3044", duration_sec=0.2, start_sec=0.35, end_sec=0.55),
+        ]
+
+        with self.assertRaises(ValueError):
+            _build_peak_value_observations(
+                timeline=timeline,
+                initial_timeline=initial_timeline,
+                rms_series=None,
+                speech_start_sec=0.0,
+                speech_end_sec=1.0,
+                upper_limit=0.5,
+            )
 
 
 if __name__ == "__main__":

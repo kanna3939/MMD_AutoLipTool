@@ -2,19 +2,19 @@
 
 - Project: MMD_AutoLipTool
 - Scope: MS11-4 実装反映後の残課題整理と、次期マイルストーン更新
-- Date: 2026-03-29
-- Status: MS11-4 実装反映後の残件整理
+- Date: 2026-03-30
+- Status: MS11-5 第一段階反映後の残件整理
 
 ---
 
 ## 1. 目的
 
 本ドキュメントは、MS11-3 完了後に整理した問題群を起点として、  
-2026-03-29 時点の **MS11-4 実装反映後の到達状態** と **MS11-5 以降へ残る課題** を整理することを目的とする。
+2026-03-30 時点の **MS11-5 第一段階反映後の到達状態** と **MS11-5 以降へ残る課題** を整理することを目的とする。
 
 MS11-1 / MS11-2 / FIX01 / FIX02 / MS11-3 により、`writer.py` 側の形状生成・正規化・保護・fallback の整合性は大きく改善された。  
 さらに 2026-03-29 時点で MS11-4 を反映し、`pipeline.py` 側でも **RMS 補正後 interval を正本にした peak 評価**、**halo 付き peak window**、**保守的 fallback**、**`peak_value = 0.0` 理由分類** まで導入済みである。  
-そのため、現時点の主残課題は、MS11-4 未着手項目ではなく **実データ観測・必要最小限の定数再調整判断・MS11-5 の最小観測支援整理** に寄っている。
+そのため、現時点の主残課題は、MS11-4 未着手項目ではなく **実データ観測・必要最小限の定数再調整判断・MS11-5 の残り整理** に寄っている。
 
 ## 1-1. MS11-4 反映後の要点
 
@@ -46,9 +46,9 @@ MS11-1 / MS11-2 / FIX01 / FIX02 / MS11-3 により、`writer.py` 側の形状生
 
 ## 3. 現時点で残っている問題
 
-## 3-1. 問題A: 波形が高く見えるのに、当該母音イベントの `peak_value` が 0.0 になるケース
-現行 `pipeline.py` は、各 event の `start_sec..end_sec` 内で local peak を取り、その event の `peak_value` を決定する。  
-そのため、ユーザー視点では近くに十分高い波形が見えていても、それが当該 event interval の外であれば、その event は `peak_value = 0.0` になりうる。
+## 3-1. 問題A: halo 導入後もなお、当該母音イベントの `peak_value` が 0.0 になるケース
+現行 `pipeline.py` は、RMS 補正後 interval を正本としつつ、halo `±0.03 sec` と隣接中点クリップを適用した peak window 内で local peak を取り、その event の `peak_value` を決定する。  
+そのため、MS11-4 以前よりは改善しているが、ユーザー視点では近くに十分高い波形が見えていても、その peak が当該 peak window の外であれば、その event は `peak_value = 0.0` になりうる。
 
 この問題は `writer.py` 局所修正では解決せず、**event interval 割当と peak 抽出の品質問題** として扱う必要がある。
 
@@ -123,11 +123,11 @@ MS11-4 以降の品質改善や不具合切り分けを容易にするため、
 - 必要なら最小限の関連テスト
 
 ## 5-3. 主な論点
-- `timing_plan.timeline` の保存またはダンプ
 - 各 event の `start_sec / end_sec / time_sec / peak_value` の確認手段
-- RMS series と event interval の対応確認手段
-- 「どの peak がどの event に帰属したか」の可視化またはログ化
-- 問題再現時の最小 debug 出力方式
+- 元 interval と RMS 補正後 interval の対応確認手段
+- peak window / local peak / global peak / `reason` の確認手段
+- 「どの peak がどの event に帰属したか」の説明単位整理
+- 問題再現時の最小観測手段
 
 ## 5-4. 期待する改善内容
 - 問題A / 問題B の個別事例を、推測ではなく具体的に切り分けられる
@@ -135,10 +135,23 @@ MS11-4 以降の品質改善や不具合切り分けを容易にするため、
 - 今後の pipeline 品質改善を、感覚ではなく観測可能な情報で進められる
 - ユーザー確認と開発側調査の往復コストを下げられる
 
+## 5-4-1. 2026-03-30 時点の反映済み事項
+
+- `pipeline.py` に、既存 `PeakValueEvaluation` を維持したまま上位観測レコード `PeakValueObservation` を追加済み
+- event 単位で、元 interval / RMS 補正後 interval / peak window / `local_peak` / `global_peak` / `peak_value` / `reason` / fallback 情報 / window sample 数を返す internal observation helper を追加済み
+- `tests/test_pipeline_peak_values.py` に、観測値整合を確認する単体テストを追加済み
+- `tests.test_pipeline_peak_values` 14 件、`tests.test_pipeline_and_vmd` 6 件、`tests.test_vmd_writer_peak_value` 4 件の回帰確認を通過済み
+
 ## 5-5. 非対象
 - 本番 GUI への大規模常設表示
 - VMD 出力仕様そのものの変更
 - `writer.py` の shape ロジック変更
+
+## 5-6. なお残る主課題
+
+- 実データ上の `peak_value = 0.0` 事例を理由別に整理すること
+- RMS 定数再調整要否の判断整理
+- 必要に応じた複合ケース観測テストの追加整理
 
 ---
 

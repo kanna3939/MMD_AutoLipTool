@@ -1,5 +1,59 @@
 # Version Control Log
 
+## Entry 2026-03-30 / Session: release-v0362-ms11-5-sync
+
+- Date: 2026-03-30
+- Session: release-v0362-ms11-5-sync
+- Summary:
+  - MS11-5 第一段階の observation helper / observation record / pipeline 系テスト拡張を含む現作業ツリーを `Ver 0.3.6.2` として同期した。
+  - `README.md` / `pyproject.toml` / `docs/Specification_Prompt_v3.md` / `docs/MS11-5_Implementation_Plan.md` / `docs/repo_milestone.md` の版数・同期記述を更新した。
+  - リポジトリ全体の反映版を `Ver 0.3.6.2` として確定した。
+- Modified Files:
+  - `README.md`: 版数表記を `Ver 0.3.6.2` に更新。
+  - `pyproject.toml`: プロジェクトバージョンを `0.3.6.2` に更新。
+  - `docs/Specification_Prompt_v3.md`: 対応リリースを `Ver 0.3.6.2` に更新し、MS11-5 一部反映状態を同期。
+  - `docs/MS11-5_Implementation_Plan.md`: 前提到達版を `Ver 0.3.6.2` に更新。
+  - `docs/repo_milestone.md`: `Ver 0.3.6.2` 同期メモを追記。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - 実装詳細自体は `ms11-5-observation-helper-and-tests` エントリを正本とする。
+  - 実データ観測結果の整理と RMS 定数再調整要否の判断整理は、今回の release sync には含めていない。
+- Verification:
+  - `rg -n "Ver 0.3.6.2|0.3.6.2" README.md pyproject.toml docs/Specification_Prompt_v3.md docs/MS11-5_Implementation_Plan.md docs/repo_milestone.md docs/Version_Control.md`
+  - `git status --short`
+
+---
+
+## Entry 2026-03-30 / Session: ms11-5-observation-helper-and-tests
+
+- Date: 2026-03-30
+- Session: ms11-5-observation-helper-and-tests
+- Summary:
+  - `pipeline.py` を主対象として、MS11-5 の第一段階である observation helper / observation record / pipeline 系テスト拡張を実装した。
+  - 既存 `PeakValueEvaluation` は維持したまま、event 単位で元 interval / RMS 補正後 interval / peak window / `local_peak` / `global_peak` / `peak_value` / `reason` / fallback 情報 / window sample 数をまとめて扱える `PeakValueObservation` を追加した。
+  - `tests/test_pipeline_peak_values.py` を拡張し、観測値整合の観点を追加したうえで、pipeline-writer 既存導線の回帰も確認した。
+- Modified Files:
+  - `src/core/pipeline.py`: `PeakValueObservation` と `_build_peak_value_observations()` を追加し、既存 peak 評価結果を再利用する観測 helper を実装。
+  - `tests/test_pipeline_peak_values.py`: 元 interval / 補正後 interval、halo 窓、fallback 観測、initial timeline 長不一致のテストを追加。
+  - `docs/Specification_Prompt_v3.md`: MS11-5 一部反映状態を同期。
+  - `docs/repo_milestone.md`: MS11-5 観測支援 実装反映メモを追記。
+  - `docs/MS11-5_Implementation_Plan.md`: 観測契約方針と第一段階の到達状態を同期。
+  - `docs/MS11_Remaining_Issues_and_Next_Milestones.md`: MS11-5 の現時点到達と残課題を更新。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - `PeakValueEvaluation` は破壊的に置き換えず、上位観測レコードを追加する方針を採った。
+  - 実データ観測整理と RMS 定数再調整要否の判断整理は今回未着手のままとし、後続作業として維持した。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m unittest tests.test_pipeline_peak_values`
+  - `$env:PYTHONPATH='src;tests'; .\.venv\Scripts\python.exe -m unittest tests.test_pipeline_and_vmd`
+  - `.\.venv\Scripts\python.exe -m unittest tests.test_vmd_writer_peak_value`
+
+---
+
 ## Entry 2026-03-29 / Session: release-v0361-repo-sync
 
 - Date: 2026-03-29
