@@ -4,15 +4,15 @@
 
 - 文書名: `docs/Specification_Prompt_v3.md`
 - 作成日: 2026-03-20
-- 最終更新日: 2026-03-30
-- 対応リリース: `Ver 0.3.6.2`
+- 最終更新日: 2026-03-31
+- 対応リリース: `Ver 0.3.6.3`
 - 対象リポジトリ: `MMD_AutoLipTool`
 - 旧版: `docs/Specification_Prompt_v2.md`（本書で置き換え）
 - 文書方針: v2 の意図を引き継ぎつつ、現行実装・確定済み追加仕様・責務分割方針に合わせて更新する
 
-### 0.1 実装同期注記（2026-03-30 / MS11-5一部反映）
+### 0.1 実装同期注記（2026-03-31 / MS11-6反映）
 
-- 本書は v3 の目標仕様を含むが、2026-03-30 時点でコード反映済みなのは MS8A / MS8B / MS8C / MS8D-2 / MS9 / MS9-2 / MS10 / MS11-1 / MS11-2 / MS11-2_FIX01 / MS11-2_FIX02 / MS11-3 / MS11-4 / MS11-5 の一部（観測 helper / 観測レコード / テスト拡張）まで。
+- 本書は v3 の目標仕様を含むが、2026-03-31 時点でコード反映済みなのは MS8A / MS8B / MS8C / MS8D-2 / MS9 / MS9-2 / MS10 / MS11-1 / MS11-2 / MS11-2_FIX01 / MS11-2_FIX02 / MS11-3 / MS11-4 / MS11-5 / MS11-6 までとする。
 - 反映済み（コード実体）:
   - 上部操作列 `OperationPanel`・最下部 `StatusPanel` を含む GUI 再構成
   - `PreviewArea` / `preview_transform.py` による 5 段固定 Preview 表示
@@ -52,11 +52,15 @@
   - `PeakValueEvaluation` を維持したまま、event 単位の上位観測レコード `PeakValueObservation` を追加
   - 元 interval / RMS 補正後 interval / peak window / local peak / global peak / fallback / window sample 数をまとめて追跡できる internal observation helper の追加
   - pipeline 系テストにおける、観測値整合の確認拡張
+  - `VowelTimingPlan` に optional な `observations` を追加し、main-flow-connected に observation を参照可能化
+  - initial timeline と refined timeline を main flow 内で対として追跡し、`timeline` は canonical writer input のまま維持
+  - `PipelineResult` へ optional な observation 受け渡しを追加
+  - provided timing plan をそのまま再利用する経路では observation を保持し、duration 補完を行う provided timing plan 経路では observation を `None` に落とす方針をテストで明文化
 - 未反映（後続対象）:
   - より高度な平滑化と出力仕様全体の再設計
   - GUI / Preview の multi-point 表示対応
   - 実データ観測を踏まえた RMS 定数の必要最小限の再調整
-  - MS11-5 として扱う、実データ観測結果の整理と RMS 定数再調整要否の判断整理
+  - MS11-7 として扱う、実データ観測結果の整理と RMS 定数再調整要否の判断整理
 - MS8D-2 の改訂要件差分は `docs/MS8D-2_Requirements_and_Spec_Update.md` を参照する。
 
 ---

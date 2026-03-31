@@ -2,19 +2,19 @@
 
 - Project: MMD_AutoLipTool
 - Scope: MS11-4 実装反映後の残課題整理と、次期マイルストーン更新
-- Date: 2026-03-30
-- Status: MS11-5 第一段階反映後の残件整理
+- Date: 2026-03-31
+- Status: MS11-6 反映後の残件整理
 
 ---
 
 ## 1. 目的
 
 本ドキュメントは、MS11-3 完了後に整理した問題群を起点として、  
-2026-03-30 時点の **MS11-5 第一段階反映後の到達状態** と **MS11-5 以降へ残る課題** を整理することを目的とする。
+2026-03-31 時点の **MS11-6 反映後の到達状態** と **MS11-7 以降へ残る課題** を整理することを目的とする。
 
 MS11-1 / MS11-2 / FIX01 / FIX02 / MS11-3 により、`writer.py` 側の形状生成・正規化・保護・fallback の整合性は大きく改善された。  
 さらに 2026-03-29 時点で MS11-4 を反映し、`pipeline.py` 側でも **RMS 補正後 interval を正本にした peak 評価**、**halo 付き peak window**、**保守的 fallback**、**`peak_value = 0.0` 理由分類** まで導入済みである。  
-そのため、現時点の主残課題は、MS11-4 未着手項目ではなく **実データ観測・必要最小限の定数再調整判断・MS11-5 の残り整理** に寄っている。
+そのため、現時点の主残課題は、MS11-4 や MS11-6 の未着手項目ではなく **実データ観測・必要最小限の定数再調整判断・MS11-7 の観測整理** に寄っている。
 
 ## 1-1. MS11-4 反映後の要点
 
@@ -155,20 +155,45 @@ MS11-4 以降の品質改善や不具合切り分けを容易にするため、
 
 ---
 
+# MS11-6: Pipeline Observation Connection Cleanup
+
+## 6-1. 状態
+MS11-6 は **2026-03-31 時点で実装反映済み** とする。
+
+## 6-2. 実装済み要点
+- `VowelTimingPlan` に optional な `observations` を追加し、main-flow-connected に observation を参照可能化
+- refine 前 initial timeline と refine 後 timeline を main flow 内で対として追跡し、`PeakValueObservation` を構築する内部接続を追加
+- `PipelineResult` には optional な observation の受け渡しのみを追加し、writer handoff は引き続き `timeline` を canonical input として維持
+- provided timing plan をそのまま使う経路では observation を維持し、duration 補完を行った provided timing plan 経路では `observations=None` に落とす方針をテストで明文化
+
+## 6-3. 確認済み効果
+- `PeakValueObservation` は direct helper test 限定ではなく、main flow からも参照可能になった
+- initial interval と refined interval を observation から意味のある対として追跡できる
+- `timeline` を writer の canonical input とする既存導線は維持されている
+- provided timing plan 経路における observation の扱いが、テスト上で読み取れる状態になった
+
+## 6-4. 非対象として維持した内容
+- `writer.py` 再設計
+- GUI / Preview への observation 常設表示
+- RMS 定数再調整
+- output shape の再設計
+
+---
+
 ## 6. 優先順位
 
 現時点の優先順位は次の通りとする。
 
-1. **MS11-5**
-   - 理由: MS11-4 で導入した理由分類と internal helper を土台に、実データ観測と切り分け効率を上げる次段階だから
+1. **MS11-7**
+   - 理由: MS11-6 で observation が main flow に接続されたため、次は実データ observation review と RMS 定数再調整判断を進める段階だから
 
-2. **MS11-4 残調整**
-   - 理由: 構造修正後も必要であれば、RMS 定数の必要最小限の再調整を実データに基づいて判断するため
+2. **必要に応じた追加観測テスト整理**
+   - 理由: 実データ observation review の補助として、複合ケース観測テストを最小限追加する余地があるため
 
 3. **writer / GUI 側の追加改修**
-   - 理由: 現時点では主戦場ではなく、MS11-4 / MS11-5 の確認結果を見てから必要性を判断すべきため
+   - 理由: 現時点では主戦場ではなく、MS11-7 の確認結果を見てから必要性を判断すべきため
 
-ただし、MS11-5 は GUI 常設表示ではなく、internal helper / test 観測点を起点に最小限で進める前提を維持する。
+ただし、以後も GUI 常設表示ではなく、internal helper / main-flow-connected observation / test 観測点を起点に最小限で進める前提を維持する。
 
 ---
 
@@ -181,8 +206,8 @@ MS11-4 以降の品質改善や不具合切り分けを容易にするため、
 - `no_peak_in_window` / `below_abs_threshold` / `below_rel_threshold` の分布把握
 - RMS 定数を据え置いたままで十分か、最小限の再調整が必要かの判断
 
-これらは、MS11-4 が未完了という意味ではなく、  
-**MS11-4 実装後の実データ確認と MS11-5 の観測強化で扱う残課題** として整理する。
+これらは、MS11-4 や MS11-6 が未完了という意味ではなく、  
+**MS11-6 実装後の実データ確認と MS11-7 の観測整理で扱う残課題** として整理する。
 
 ---
 
@@ -193,8 +218,8 @@ MS11-4 以降の品質改善や不具合切り分けを容易にするため、
 
 そのうえで、次に主に進める対象は以下とする。
 
-- **MS11-5: Pipeline Debug / Inspection Support**
-- **MS11-4 の残調整判断（必要時のみ）**
+- **MS11-7: real-data observation review and RMS retuning decision**
+- **必要時のみの追加観測テスト整理**
 
 以後は、`writer.py` 再設計へ戻るのではなく、  
 前段品質の実データ観測と最小限の微調整を中心に進める。

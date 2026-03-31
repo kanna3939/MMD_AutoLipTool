@@ -39,6 +39,7 @@ class PipelineResult:
     timing_anchors: list[SpeechTimingAnchor]
     timing_source: str
     timing_warning: str | None = None
+    observations: list[PeakValueObservation] | None = None
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class VowelTimingPlan:
     anchors: list[SpeechTimingAnchor]
     source: str
     warning: str | None = None
+    observations: list[PeakValueObservation] | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +81,12 @@ class PeakValueObservation:
     fallback_reason: str | None
     window_sample_count: int
     evaluation: PeakValueEvaluation
+
+
+@dataclass(frozen=True)
+class _ObservedTimelineBuildResult:
+    timeline: list[VowelTimelinePoint]
+    observations: list[PeakValueObservation] | None = None
 
 
 def build_even_vowel_timeline(
@@ -225,14 +233,14 @@ def build_vowel_timing_plan(
     except WhisperTimingError as error:
         warning = str(error)
 
-    timeline = build_anchor_based_vowel_timeline(
+    initial_timeline = build_anchor_based_vowel_timeline(
         vowels=vowels,
         timing_anchors=anchors,
         speech_start_sec=wav_analysis.speech_start_sec,
         speech_end_sec=wav_analysis.speech_end_sec,
     )
-    timeline = _refine_timeline_intervals_with_rms(
-        timeline=timeline,
+    observed_timeline = _refine_timeline_intervals_with_observations(
+        timeline=initial_timeline,
         wav_path=wav_path,
         speech_start_sec=wav_analysis.speech_start_sec,
         speech_end_sec=wav_analysis.speech_end_sec,
@@ -241,10 +249,11 @@ def build_vowel_timing_plan(
 
     return VowelTimingPlan(
         vowels=vowels,
-        timeline=timeline,
+        timeline=observed_timeline.timeline,
         anchors=anchors,
         source=timing_source,
         warning=warning,
+        observations=observed_timeline.observations,
     )
 
 
@@ -304,6 +313,7 @@ def generate_vmd_from_text_wav(
             anchors=resolved_timing_plan.anchors,
             source=resolved_timing_plan.source,
             warning=resolved_timing_plan.warning,
+            observations=None,
         )
 
     try:
@@ -325,6 +335,7 @@ def generate_vmd_from_text_wav(
         timing_anchors=resolved_timing_plan.anchors,
         timing_source=resolved_timing_plan.source,
         timing_warning=resolved_timing_plan.warning,
+        observations=resolved_timing_plan.observations,
     )
 
 
@@ -415,35 +426,78 @@ def _refine_timeline_intervals_with_rms(
     speech_end_sec: float,
     upper_limit: float,
 ) -> list[VowelTimelinePoint]:
+    return _refine_timeline_intervals_with_observations(
+        timeline=timeline,
+        wav_path=wav_path,
+        speech_start_sec=speech_start_sec,
+        speech_end_sec=speech_end_sec,
+        upper_limit=upper_limit,
+    ).timeline
+
+
+def _refine_timeline_intervals_with_observations(
+    *,
+    timeline: Sequence[VowelTimelinePoint],
+    wav_path: str | Path,
+    speech_start_sec: float,
+    speech_end_sec: float,
+    upper_limit: float,
+) -> _ObservedTimelineBuildResult:
     if not timeline:
-        return []
+        return _ObservedTimelineBuildResult(timeline=[], observations=[])
 
     clamped_upper_limit = max(0.0, upper_limit)
+    initial_timeline = list(timeline)
 
     try:
         rms_series = load_rms_series(str(wav_path), stereo_mode="average")
     except (ValueError, OSError, EOFError):
-        return _apply_peak_values_to_timeline(
-            timeline=timeline,
+        timeline_with_peak_values = _apply_peak_values_to_timeline(
+            timeline=initial_timeline,
             rms_series=None,
             speech_start_sec=speech_start_sec,
             speech_end_sec=speech_end_sec,
             upper_limit=clamped_upper_limit,
             fallback_reason="rms_unavailable",
         )
+        observations = _build_peak_value_observations(
+            timeline=timeline_with_peak_values,
+            initial_timeline=initial_timeline,
+            rms_series=None,
+            speech_start_sec=speech_start_sec,
+            speech_end_sec=speech_end_sec,
+            upper_limit=clamped_upper_limit,
+            fallback_reason="rms_unavailable",
+        )
+        return _ObservedTimelineBuildResult(
+            timeline=timeline_with_peak_values,
+            observations=observations,
+        )
 
     refined_timeline = _refine_intervals_by_rms_series(
-        timeline=timeline,
+        timeline=initial_timeline,
         rms_series=rms_series,
         speech_start_sec=speech_start_sec,
         speech_end_sec=speech_end_sec,
     )
-    return _apply_peak_values_to_timeline(
+    timeline_with_peak_values = _apply_peak_values_to_timeline(
         timeline=refined_timeline,
         rms_series=rms_series,
         speech_start_sec=speech_start_sec,
         speech_end_sec=speech_end_sec,
         upper_limit=clamped_upper_limit,
+    )
+    observations = _build_peak_value_observations(
+        timeline=timeline_with_peak_values,
+        initial_timeline=initial_timeline,
+        rms_series=rms_series,
+        speech_start_sec=speech_start_sec,
+        speech_end_sec=speech_end_sec,
+        upper_limit=clamped_upper_limit,
+    )
+    return _ObservedTimelineBuildResult(
+        timeline=timeline_with_peak_values,
+        observations=observations,
     )
 
 

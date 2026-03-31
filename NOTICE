@@ -1,0 +1,29 @@
+﻿MMD AutoLip Tool
+Copyright (c) 2026 <kanna3939@VirtualJC>
+
+This project is distributed under the MIT License.
+See the LICENSE file for details.
+
+Plain-language notice:
+
+- This software is provided free of charge.
+- This software may be distributed as donationware.
+- Donations are optional and do not grant additional rights.
+- This software is provided "AS IS", without warranty of any kind.
+- The author is not responsible for any direct, indirect, incidental, special,
+  exemplary, or consequential damages arising from the use of this software.
+- Users are responsible for verifying generated output before using it in
+  production or creative work.
+
+Third-party software:
+
+This project uses third-party libraries and frameworks.
+See THIRD_PARTY_LICENSES.md for an overview of included dependencies and
+their respective license information.
+
+Additional note for binary distribution:
+
+When distributing binary builds, include this NOTICE file, the LICENSE file,
+and the applicable third-party license notices together with the distribution.
+If future releases bundle additional external components such as FFmpeg,
+their license notices must be added separately at that time.

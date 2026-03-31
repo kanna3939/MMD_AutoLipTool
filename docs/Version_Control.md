@@ -1,5 +1,57 @@
 # Version Control Log
 
+## Entry 2026-03-31 / Session: release-v0363-ms11-6-sync
+
+- Date: 2026-03-31
+- Session: release-v0363-ms11-6-sync
+- Summary:
+  - MS11-6 の main-flow-connected observation 接続、および provided timing plan 経路の observation 方針整理を含む現作業ツリーを `Ver 0.3.6.3` として同期した。
+  - `README.md` / `pyproject.toml` / `docs/Specification_Prompt_v3.md` / `docs/repo_milestone.md` / 関連 MS11 文書の版数・到達記述を更新した。
+  - リポジトリ全体の反映版を `Ver 0.3.6.3` として確定した。
+- Modified Files:
+  - `README.md`: 版数表記を `Ver 0.3.6.3` に更新し、MS11-6 の到達状態を追記。
+  - `pyproject.toml`: プロジェクトバージョンを `0.3.6.3` に更新。
+  - `docs/Specification_Prompt_v3.md`: 対応リリースを `Ver 0.3.6.3` に更新し、MS11-6 反映状態を同期。
+  - `docs/repo_milestone.md`: `Ver 0.3.6.3` 同期メモと MS11-6 実装反映メモを追記。
+  - `docs/MS11_Remaining_Issues_and_Next_Milestones.md`: MS11-6 反映後の残課題と次段階を整理。
+  - `docs/MS11-6_Implementation_Plan.md`: 実装反映注記を追記。
+  - `docs/MS11_MS12_Roadmap_and_Scope_Split.md`: Baseline Version と MS11-6 完了状態を同期。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - 実装詳細自体は `ms11-6-main-flow-observation-connection-cleanup` エントリを正本とする。
+  - MS11-7 の実データ observation review と RMS 定数再調整判断は今回の release sync には含めていない。
+- Verification:
+  - `rg -n "Ver 0.3.6.3|0.3.6.3|MS11-6|MS11-7" README.md pyproject.toml docs/Specification_Prompt_v3.md docs/repo_milestone.md docs/MS11_Remaining_Issues_and_Next_Milestones.md docs/MS11-6_Implementation_Plan.md docs/MS11_MS12_Roadmap_and_Scope_Split.md docs/Version_Control.md`
+  - `git status --short`
+
+---
+
+## Entry 2026-03-31 / Session: ms11-6-main-flow-observation-connection-cleanup
+
+- Date: 2026-03-31
+- Session: ms11-6-main-flow-observation-connection-cleanup
+- Summary:
+  - `pipeline.py` を主対象として、MS11-6 の main-flow-connected observation 接続と initial/refined timeline 追跡整理を実装した。
+  - `VowelTimingPlan` を optional/internal observation の最初の正本保持先とし、`timeline` を canonical writer input のまま維持した。
+  - provided timing plan 経路の observation 仕様を整理し、再利用経路と duration 補完経路の挙動をテストで明文化した。
+- Modified Files:
+  - `src/core/pipeline.py`: `VowelTimingPlan` / `PipelineResult` へ optional observation を追加し、main flow observation 接続と provided timing plan observation 方針を反映。
+  - `tests/test_pipeline_and_vmd.py`: main-flow-connected observation 取得確認と、provided timing plan 2 経路の observation 挙動確認を追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - `PeakValueEvaluation` は維持し、`PeakValueObservation` は higher-level observation として扱う方針を維持した。
+  - `writer.py` 再設計、GUI / Preview 改修、RMS 定数再調整には広げていない。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m unittest tests.test_pipeline_peak_values`
+  - `$env:PYTHONPATH='src;tests'; .\.venv\Scripts\python.exe -m unittest tests.test_pipeline_and_vmd`
+  - `.\.venv\Scripts\python.exe -m unittest tests.test_vmd_writer_peak_value`
+
+---
+
 ## Entry 2026-03-30 / Session: release-v0362-ms11-5-sync
 
 - Date: 2026-03-30

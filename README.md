@@ -2,7 +2,7 @@
 
 ## Version
 
-Ver 0.3.6.2
+Ver 0.3.6.3
 
 ## 概要
 
@@ -20,6 +20,7 @@ UTF-8 のテキスト 1 ファイルと PCM WAV 1 ファイルを入力し、母
 - 最終母音イベントの区間表現（`time_sec / duration_sec / start_sec / end_sec`）
 - RMS 系列による `start_sec / end_sec` の簡易補正
 - RMS 系列を使ったイベント別 `peak_value` 算出（`0.0`〜`upper_limit` にクランプ）
+- `VowelTimingPlan` を正本とした optional な observation 保持と、main flow からの observation 参照
 - 区間ベース（台形寄り）での VMD モーフキー生成
 - 台形モーフの立ち上がり前ゼロ保証（同一フレーム衝突時はゼロを 1 フレーム前へ退避）
 - GUI 波形表示と VMD 出力で同一イベント列を共有
@@ -150,6 +151,13 @@ UTF-8 のテキスト 1 ファイルと PCM WAV 1 ファイルを入力し、母
 - TEXTの異常文字、規定長超過行のエラー検証およびZWJ等を含む絵文字のホワイトリスト例外化を追加
 - TEXT読込時の文字コードフォールバック（UTF-8 → Shift_JIS → UTF-16）を追加
 - VMD保存時のファイル同名上書き確認ダイアログ制御を追加
+
+## 直近更新（2026-03-31 / MS11-6）
+
+- `pipeline.py` で、refine 前 initial timeline と refine 後 timeline を main flow 内で対として追跡する構造へ整理
+- `PeakValueObservation` を direct helper test 限定ではなく、`VowelTimingPlan.observations` から main-flow-connected に参照可能化
+- `PipelineResult` は optional な observation の受け渡しのみを担い、`timeline` を canonical writer input として維持
+- provided timing plan 経路では、timeline をそのまま再利用する場合のみ observation を維持し、duration 補完を行った場合は `observations=None` とする方針をテストで明文化
 
 ## MS8A 完了時点メモ（2026-03-20）
 
@@ -325,3 +333,37 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1 -Clean -SmokeLaunch
     - 多言語化（MS10）
     - 設定永続化（MS10）
     - ※セキュリティ・安全性仕様（SEC01/SEC02）は Ver 0.3.5.6 にて実装済み
+
+## ライセンス
+
+本プロジェクトのソースコードは **MIT License** の下で公開します。  
+詳細はリポジトリ直下の `LICENSE` を参照してください。
+
+## 免責事項
+
+本ソフトウェアは **現状有姿（AS IS）** で提供されます。  
+作者は、本ソフトウェアについて、動作保証、特定目的適合性、非侵害性その他いかなる保証も行いません。  
+本ソフトウェアの使用または使用不能により生じたいかなる損害についても、作者は一切の責任を負いません。
+
+本ソフトウェアは MikuMikuDance 向けの補助ツールであり、利用結果の正確性・完全性・特定用途への適合性は保証されません。  
+重要な制作データに利用する場合は、利用者自身の責任で確認・バックアップを行ってください。
+
+## 配布方針
+
+本ツールは **無料配布** を前提としています。  
+また、任意の支援を受け付ける **donationware** として運用する予定です。  
+寄付の有無によって利用権が変化することはありません。
+
+## 再配布・商用利用
+
+MIT License に基づき、再配布および商用利用を含めて利用可能です。  
+ただし、著作権表示およびライセンス表示は保持してください。
+
+## サードパーティライセンス
+
+本プロジェクトは複数のサードパーティライブラリを利用しています。  
+依存ライブラリとライセンス情報の概要は `THIRD_PARTY_LICENSES.md` を参照してください。
+
+## Notice
+
+配布上の補足事項、免責の平易な説明、サードパーティライセンス案内は `NOTICE` を参照してください。

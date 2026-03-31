@@ -1,4 +1,41 @@
 ﻿# MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
+## 2026-03-31 / Ver 0.3.6.3 同期メモ
+
+- 対象: MS11-6 実装反映後の版同期
+- 同期内容:
+  - `pipeline.py` の main-flow-connected observation 接続、provided timing plan 経路の observation 方針、および関連テスト更新の反映状態を関連ドキュメントへ同期
+  - `README.md` / `pyproject.toml` / `docs/Specification_Prompt_v3.md` の版数表記を `Ver 0.3.6.3` へ更新
+  - リポジトリ全体の反映版を `Ver 0.3.6.3` として確定
+- 確認状態:
+  - `VowelTimingPlan` を正本とした optional observation 保持が main flow に接続済み
+  - `timeline` を canonical writer input とする既存導線は維持済み
+  - provided timing plan 経路は「そのまま利用時は observation 維持」「duration 補完時は `observations=None`」の方針をテストで明文化済み
+- 次段階:
+  - MS11-7: 実データ observation review と RMS 定数再調整判断
+
+---
+
+## 2026-03-31 / MS11-6 実装反映メモ
+
+- 対象: MS11-6 `pipeline.py` 側 observation connection cleanup
+- 実装反映:
+  - `src/core/pipeline.py` で `VowelTimingPlan` に optional な `observations` を追加し、main flow から observation を参照可能化
+  - refine 前 initial timeline と refine 後 timeline を main flow 内で対として追跡し、`PeakValueObservation` を構築する内部接続を追加
+  - `PipelineResult` には optional な observation の受け渡しのみを追加し、writer handoff は引き続き `timeline` を canonical input として維持
+  - provided timing plan をそのまま使う経路では observation を維持し、duration 補完を行った provided timing plan 経路では `observations=None` に落とす方針を整理
+  - `tests/test_pipeline_and_vmd.py` に、main-flow-connected observation 取得確認と、provided timing plan 2 経路の observation 挙動確認を追加
+- 確認状態:
+  - `tests.test_pipeline_peak_values` 14 件が通過
+  - `tests.test_pipeline_and_vmd` 8 件が `PYTHONPATH='src;tests'` 付きで通過
+  - `tests.test_vmd_writer_peak_value` 4 件が通過
+  - 上記の範囲で MS11-6 の主目的と残確認事項が収束している
+- スコープ外として維持:
+  - `writer.py` 再設計
+  - GUI / Preview 改修
+  - RMS 定数再調整
+
+---
+
 ## 2026-03-30 / Ver 0.3.6.2 同期メモ
 
 - 対象: MS11-5 観測支援反映後の版同期
