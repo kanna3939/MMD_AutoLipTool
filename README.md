@@ -2,7 +2,7 @@
 
 ## Version
 
-Ver 0.3.6.3
+Ver 0.3.6.4
 
 ## 概要
 
@@ -21,6 +21,7 @@ UTF-8 のテキスト 1 ファイルと PCM WAV 1 ファイルを入力し、母
 - RMS 系列による `start_sec / end_sec` の簡易補正
 - RMS 系列を使ったイベント別 `peak_value` 算出（`0.0`〜`upper_limit` にクランプ）
 - `VowelTimingPlan` を正本とした optional な observation 保持と、main flow からの observation 参照
+- MS11-7 用の実データ observation review 文書テンプレートと、最小 observation 境界テストを追加
 - 区間ベース（台形寄り）での VMD モーフキー生成
 - 台形モーフの立ち上がり前ゼロ保証（同一フレーム衝突時はゼロを 1 フレーム前へ退避）
 - GUI 波形表示と VMD 出力で同一イベント列を共有
@@ -77,6 +78,13 @@ UTF-8 のテキスト 1 ファイルと PCM WAV 1 ファイルを入力し、母
 - MS7 フェーズ7〜8として、修正範囲を `src/gui/main_window.py` の局所修正に固定し、完了判定観点を最終整理
 
 ## 直近更新（2026-03-21）
+
+## 直近更新（2026-04-01）
+
+- MS11-7 の実装計画書を、実データ observation 整理 + RMS 定数再調整要否判断にスコープ固定した形で整理
+- 実データ review の正本として `docs/MS11-7_Real_Data_Observation_Review.md` を追加
+- `global_peak_zero` observation の `global_peak / reason / fallback_reason / window_sample_count` 整合を確認する最小テストを追加
+- この段階では RMS 定数変更そのもの、`pipeline.py` helper 追加、writer / GUI 改修には進んでいない
 
 - MS5 フェーズ2〜8として、`src/gui/main_window.py` に読込ダイアログ用の直前ディレクトリ保持（TEXT/WAV分離）を導入
 - `_select_text_file` / `_select_wav_file` で、初期ディレクトリ解決結果を使ってダイアログを起動する導線へ接続
