@@ -10,9 +10,9 @@
 - 旧版: `docs/Specification_Prompt_v2.md`（本書で置き換え）
 - 文書方針: v2 の意図を引き継ぎつつ、現行実装・確定済み追加仕様・責務分割方針に合わせて更新する
 
-### 0.1 実装同期注記（2026-04-01 / MS11-7 文書整備・最小テスト反映）
+### 0.1 実装同期注記（2026-04-01 / MS11-8 実装反映）
 
-- 本書は v3 の目標仕様を含むが、2026-04-01 時点でコード反映済みなのは MS8A / MS8B / MS8C / MS8D-2 / MS9 / MS9-2 / MS10 / MS11-1 / MS11-2 / MS11-2_FIX01 / MS11-2_FIX02 / MS11-3 / MS11-4 / MS11-5 / MS11-6、および MS11-7 の文書整備・最小テスト反映までとする。
+- 本書は v3 の目標仕様を含むが、2026-04-01 時点でコード反映済みなのは MS8A / MS8B / MS8C / MS8D-2 / MS9 / MS9-2 / MS10 / MS11-1 / MS11-2 / MS11-2_FIX01 / MS11-2_FIX02 / MS11-3 / MS11-4 / MS11-5 / MS11-6、MS11-7 の文書整備・最小テスト反映、および MS11-8 の writer 主体実装までとする。
 - 反映済み（コード実体）:
   - 上部操作列 `OperationPanel`・最下部 `StatusPanel` を含む GUI 再構成
   - `PreviewArea` / `preview_transform.py` による 5 段固定 Preview 表示
@@ -59,9 +59,17 @@
   - `docs/MS11-7_Implementation_Plan.md` に、MS11-7 の固定スコープ、review 手順、再調整要否判断基準を反映
   - `docs/MS11-7_Real_Data_Observation_Review.md` を追加し、実データ観測結果の正本テンプレートを整備
   - `tests/test_pipeline_peak_values.py` に、`global_peak_zero` observation の記録欄整合を確認する最小テストを追加
+  - `writer.py` に `closing_softness_frames: int = 0` を追加し、morph max value / `peak_value` とは独立した closing softness を導入
+  - MS11-2 closing に対する `peak_end_frame` 固定 / `end_frame` 延長
+  - `legacy_triangle` / `legacy_symmetric_trapezoid` に対する final closing 延長
+  - MS11-3 multi-point shape に対する final `end_zero` のみの延長
+  - 後続 shape 開始直前での clamp と、延長後 shape に追従した normalization metadata の再整合
+  - `pipeline.py` から writer への最小 `closing_softness_frames` handoff
+  - writer 系テスト、および `tests/test_pipeline_and_vmd.py` における MS11-8 回帰確認の追加
 - 未反映（後続対象）:
   - より高度な平滑化と出力仕様全体の再設計
   - GUI / Preview の multi-point 表示対応
+  - GUI からの closing softness 入力導線
   - 実データ観測を踏まえた RMS 定数の必要最小限の再調整
   - MS11-7 として扱う、実データ観測結果の実投入と RMS 定数再調整要否の最終判断確定
 - MS8D-2 の改訂要件差分は `docs/MS8D-2_Requirements_and_Spec_Update.md` を参照する。
@@ -214,6 +222,7 @@
   * Whisperアンカー配分と均等配分フォールバック
   * RMSで区間補正・peak値算出
   * VMD出力呼び出し
+  * writer へ渡す最小 `closing_softness_frames` handoff
 
 * `src/vmd_writer/writer.py`
 
@@ -221,6 +230,7 @@
   * 区間ベースのキー生成
   * 4点の非対称・単一上辺台形生成
   * 同一母音近接イベント群の multi-point shape 生成
+  * `closing_softness_frames` による final closing 延長
   * MS11-3 → MS11-2 → legacy fallback
   * 4 frame 未満での既存短区間フォールバック
   * 立ち上がり前ゼロ保証（同一フレーム衝突時 `frame-1` 退避）

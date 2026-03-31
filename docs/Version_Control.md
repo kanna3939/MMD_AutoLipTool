@@ -1,5 +1,37 @@
 # Version Control Log
 
+## Entry 2026-04-01 / Session: ms11-8-writer-closing-softness
+
+- Date: 2026-04-01
+- Session: ms11-8-writer-closing-softness
+- Summary:
+  - `writer.py` を主対象として、MS11-8 の mouth-closing softness control を実装した。
+  - `closing_softness_frames: int = 0` を additive frame-count concept として導入し、MS11-2 / legacy fallback / MS11-3 final closing へ限定適用した。
+  - 後続 shape 開始直前での clamp、延長後 metadata の整合、および最小 pipeline handoff と回帰テスト更新を反映した。
+- Modified Files:
+  - `src/vmd_writer/writer.py`: `closing_softness_frames` の受け取り、shape family 別の final closing 延長、clamp、metadata 整合を追加。
+  - `src/core/pipeline.py`: `generate_vmd_from_text_wav()` から writer への最小 `closing_softness_frames` handoff を追加。
+  - `tests/test_vmd_writer_peak_value.py`: zero-only shape 抑止が softness ありでも維持される確認を追加。
+  - `tests/test_vmd_writer_intervals.py`: `softness=0` 完全互換、MS11-2 / legacy closing 延長、clamp 確認を追加。
+  - `tests/test_vmd_writer_multipoint_shape.py`: MS11-3 final closing 延長と clamp 確認を追加。
+  - `tests/test_vmd_writer_zero_guard.py`: 延長後 metadata の整合確認を追加。
+  - `tests/test_pipeline_and_vmd.py`: pipeline → writer の `closing_softness_frames` handoff 確認を追加。
+- Added Files:
+  - なし
+- Notes:
+  - GUI / Preview / RMS / observation redesign には広げていない。
+  - `softness=0` は既存出力互換を維持し、`closing_softness_frames < 0` は不許可とした。
+- Verification:
+  - `$env:PYTHONPATH='src;tests'; .\.venv\Scripts\python.exe -m unittest tests.test_vmd_writer_peak_value`
+  - `$env:PYTHONPATH='src;tests'; .\.venv\Scripts\python.exe -m unittest tests.test_vmd_writer_intervals`
+  - `$env:PYTHONPATH='src;tests'; .\.venv\Scripts\python.exe -m unittest tests.test_vmd_writer_multipoint_shape`
+  - `$env:PYTHONPATH='src;tests'; .\.venv\Scripts\python.exe -m unittest tests.test_vmd_writer_zero_guard`
+  - `$env:PYTHONPATH='src;tests'; .\.venv\Scripts\python.exe -m unittest tests.test_vmd_writer_grouping`
+  - `$env:PYTHONPATH='src;tests'; .\.venv\Scripts\python.exe -m unittest tests.test_pipeline_and_vmd`
+  - `$env:PYTHONPATH='src;tests'; .\.venv\Scripts\python.exe -m unittest tests.test_vmd_writer_peak_value tests.test_vmd_writer_intervals tests.test_vmd_writer_multipoint_shape tests.test_vmd_writer_zero_guard tests.test_vmd_writer_grouping tests.test_pipeline_and_vmd`
+
+---
+
 ## Entry 2026-04-01 / Session: release-v0364-ms11-7-doc-sync
 
 - Date: 2026-04-01

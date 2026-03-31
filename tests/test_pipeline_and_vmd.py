@@ -268,6 +268,57 @@ class PipelineAndVmdTests(unittest.TestCase):
             self.assertEqual(result.observations, provided_observations)
             self.assertTrue(result.output_path.exists())
 
+    def test_generate_vmd_passes_closing_softness_frames_to_writer(self) -> None:
+        with workspace_tempdir("pipeline_softness_handoff") as tmp:
+            text_path = tmp / "input.txt"
+            wav_path = tmp / "voice.wav"
+            out_path = tmp / "out.vmd"
+
+            text_path.write_text("あ", encoding="utf-8")
+            write_test_wav(
+                wav_path,
+                sample_rate=44100,
+                lead_sec=0.1,
+                speech_sec=0.3,
+                trail_sec=0.1,
+            )
+
+            provided_timeline = [
+                VowelTimelinePoint(
+                    time_sec=0.2,
+                    vowel="あ",
+                    duration_sec=0.1,
+                    start_sec=0.15,
+                    end_sec=0.25,
+                )
+            ]
+            provided_plan = VowelTimingPlan(
+                vowels=["あ"],
+                timeline=provided_timeline,
+                anchors=[SpeechTimingAnchor(start_sec=0.15, end_sec=0.25, text="test")],
+                source="provided",
+                warning=None,
+                observations=[],
+            )
+
+            with (
+                patch("core.pipeline.build_vowel_timing_plan", side_effect=AssertionError("not expected")),
+                patch("core.pipeline.write_morph_vmd", return_value=out_path) as mocked_write_morph_vmd,
+            ):
+                generate_vmd_from_text_wav(
+                    text_path=text_path,
+                    wav_path=wav_path,
+                    output_path=out_path,
+                    timing_plan=provided_plan,
+                    closing_softness_frames=3,
+                )
+
+            mocked_write_morph_vmd.assert_called_once()
+            self.assertEqual(
+                mocked_write_morph_vmd.call_args.kwargs["closing_softness_frames"],
+                3,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

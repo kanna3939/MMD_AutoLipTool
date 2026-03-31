@@ -8,6 +8,28 @@ from vmd_writer.writer import _build_interval_morph_frames
 
 
 class VmdWriterIntervalTests(unittest.TestCase):
+    def test_softness_zero_preserves_existing_ms11_2_shape(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="あ",
+                duration_sec=0.4,
+                start_sec=0.8,
+                end_sec=1.2,
+            )
+        ]
+
+        frames = _build_interval_morph_frames(points, closing_softness_frames=0)
+        self.assertEqual(
+            frames,
+            [
+                (24, "あ", 0.0),
+                (27, "あ", 0.5),
+                (33, "あ", 0.5),
+                (36, "あ", 0.0),
+            ],
+        )
+
     def test_trapezoid_frames_use_ms11_2_four_point_shape_for_long_interval(self) -> None:
         points = [
             VowelTimelinePoint(
@@ -133,6 +155,107 @@ class VmdWriterIntervalTests(unittest.TestCase):
                 (28, "あ", 0.0),
                 (30, "あ", 0.5),
                 (32, "あ", 0.0),
+            ],
+        )
+
+    def test_ms11_2_closing_softness_extends_only_end_frame(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="あ",
+                duration_sec=0.4,
+                start_sec=0.8,
+                end_sec=1.2,
+            )
+        ]
+
+        frames = _build_interval_morph_frames(points, closing_softness_frames=3)
+
+        self.assertEqual(
+            frames,
+            [
+                (24, "あ", 0.0),
+                (27, "あ", 0.5),
+                (33, "あ", 0.5),
+                (39, "あ", 0.0),
+            ],
+        )
+
+    def test_legacy_triangle_closing_softness_extends_only_end_frame(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="あ",
+                duration_sec=0.099,
+                start_sec=0.95,
+                end_sec=1.049,
+            )
+        ]
+
+        frames = _build_interval_morph_frames(points, closing_softness_frames=3)
+
+        self.assertEqual(
+            frames,
+            [
+                (28, "あ", 0.0),
+                (30, "あ", 0.5),
+                (34, "あ", 0.0),
+            ],
+        )
+
+    def test_legacy_symmetric_trapezoid_closing_softness_extends_only_end_frame(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=31 / 30,
+                vowel="あ",
+                duration_sec=(34 - 30) / 30,
+                start_sec=30 / 30,
+                end_sec=34 / 30,
+            )
+        ]
+
+        frames = _build_interval_morph_frames(points, closing_softness_frames=3)
+
+        self.assertEqual(
+            frames,
+            [
+                (30, "あ", 0.0),
+                (31, "あ", 0.5),
+                (32, "あ", 0.5),
+                (37, "あ", 0.0),
+            ],
+        )
+
+    def test_closing_softness_clamps_before_following_shape_start(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="あ",
+                duration_sec=0.4,
+                start_sec=0.8,
+                end_sec=1.2,
+            ),
+            VowelTimelinePoint(
+                time_sec=1.25,
+                vowel="あ",
+                duration_sec=0.099,
+                start_sec=1.22,
+                end_sec=1.319,
+            ),
+        ]
+
+        frames = _build_interval_morph_frames(points, closing_softness_frames=3)
+
+        self.assertEqual(
+            frames,
+            [
+                (24, "あ", 0.0),
+                (27, "あ", 0.5),
+                (33, "あ", 0.5),
+                (36, "あ", 0.0),
+                (37, "あ", 0.0),
+                (38, "あ", 0.5),
+                (43, "あ", 0.0),
             ],
         )
 

@@ -1,4 +1,29 @@
 ﻿# MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
+## 2026-04-01 / MS11-8 実装反映メモ
+
+- 対象: MS11-8 `writer.py` 側 mouth-closing softness control
+- 実装反映:
+  - `src/vmd_writer/writer.py` に `closing_softness_frames: int = 0` を追加
+  - `closing_softness_frames` を additive frame-count concept として扱い、`softness=0` は現行出力互換を維持
+  - MS11-2 closing は `peak_end_frame` 固定 / `end_frame` 延長で実装
+  - `legacy_triangle` / `legacy_symmetric_trapezoid` は final closing のみ延長
+  - MS11-3 は final `end_zero` のみ延長し、中間 valley 側下降辺には触れない
+  - 後続 shape 開始直前で clamp し、後段 normalization へ衝突解消を委ねない方針を反映
+  - `protected_envelope_ranges` / `allowed_non_zero_ranges` / `required_zero_frames` を延長後 shape に合わせて整合
+  - `src/core/pipeline.py` には writer への最小 handoff のみを追加
+  - writer 系テストと `tests/test_pipeline_and_vmd.py` に最小回帰確認を追加
+- 確認状態:
+  - `softness=0` の既存挙動互換を維持
+  - zero-only shape 抑止、short / legacy fallback 保護、MS11-2 / MS11-3 保護導線を維持
+  - 対象 86 件の関連テストが通過
+- スコープ外として維持:
+  - GUI 入力導線
+  - Preview 表示整合
+  - RMS 再調整
+  - MS11-9 / MS11-10 / MS12
+
+---
+
 ## 2026-04-01 / Ver 0.3.6.4 同期メモ
 
 - 対象: MS11-7 文書整備・最小テスト反映後の版同期

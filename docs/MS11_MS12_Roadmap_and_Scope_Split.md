@@ -198,6 +198,20 @@ This is a **shape-generation** task, not a pure GUI task.
 - Existing output logic remains coherent
 - writer regression coverage is updated
 
+### Status Note (2026-04-01)
+- Treated as implemented in the current workspace.
+- `src/vmd_writer/writer.py` now accepts `closing_softness_frames: int = 0` and applies it only to final closing segments.
+- covered targets are:
+  - MS11-2 closing
+  - legacy fallback closing
+  - MS11-3 final `end_zero`
+- preserved constraints are:
+  - `softness=0` keeps current output behavior
+  - rise/top positions remain unchanged
+  - clamp is enforced before the following shape start
+  - normalization metadata stays coherent
+- `src/core/pipeline.py` only adds the minimum writer handoff and does not redesign timing / observation behavior.
+
 ---
 
 ## MS11-9
