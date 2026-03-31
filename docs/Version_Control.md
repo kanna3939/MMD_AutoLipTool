@@ -1,5 +1,53 @@
 # Version Control Log
 
+## Entry 2026-04-01 / Session: release-v0364-ms11-7-doc-sync
+
+- Date: 2026-04-01
+- Session: release-v0364-ms11-7-doc-sync
+- Summary:
+  - MS11-7 の文書整備と最小テスト追加を、`Ver 0.3.6.4` として関連ドキュメントへ同期した。
+  - リポジトリ全体の反映版を `Ver 0.3.6.4` として確定し、MS11-7 の到達状態を「review 実施前の準備完了」段階として明記した。
+- Modified Files:
+  - `README.md`: 版数表記を `Ver 0.3.6.4` に更新し、MS11-7 文書整備の直近更新を追記。
+  - `pyproject.toml`: プロジェクトバージョンを `0.3.6.4` に更新。
+  - `docs/Specification_Prompt_v3.md`: 対応リリースを `Ver 0.3.6.4` に更新し、MS11-7 文書整備・最小テスト反映状態を同期。
+  - `docs/MS11_MS12_Roadmap_and_Scope_Split.md`: Baseline Version と MS11-7 status note を `Ver 0.3.6.4` 基準へ更新。
+  - `docs/MS11-7_Implementation_Plan.md`: 前提到達版と実装反映注記を更新。
+  - `docs/repo_milestone.md`: `Ver 0.3.6.4` 同期メモを追記。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - 実装詳細自体は `ms11-7-docs-and-review-template` エントリを正本とする。
+  - 実データ review の実施結果と RMS 定数再調整の最終判断は、この release sync には含めていない。
+- Verification:
+  - `rg -n "Ver 0.3.6.4|0.3.6.4|MS11-7" README.md pyproject.toml docs/Specification_Prompt_v3.md docs/MS11_MS12_Roadmap_and_Scope_Split.md docs/MS11-7_Implementation_Plan.md docs/repo_milestone.md docs/Version_Control.md`
+  - `git status --short`
+
+---
+
+## Entry 2026-04-01 / Session: ms11-7-docs-and-review-template
+
+- Date: 2026-04-01
+- Session: ms11-7-docs-and-review-template
+- Summary:
+  - MS11-7 のスコープを「実データ observation 整理 + RMS 定数再調整要否判断」へ限定したまま、文書正本と review テンプレートを整備した。
+  - `peak_value = 0.0` review の主記録を Markdown に置く方針を固定し、人工データで固定する意味がある最小 observation 境界テストのみ追加した。
+- Modified Files:
+  - `docs/MS11-7_Implementation_Plan.md`: MS11-7 の成果物、テスト方針、関連文書の最小同期方針を補強。
+  - `tests/test_pipeline_peak_values.py`: `global_peak_zero` observation で `global_peak` / `reason` / `fallback_reason` / `window_sample_count` が整合することを確認する最小テストを追加。
+  - `docs/repo_milestone.md`: MS11-7 文書整備開始メモを追記。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - `docs/MS11-7_Real_Data_Observation_Review.md`: 実データ observation review の正本テンプレートを追加。
+- Notes:
+  - `pipeline.py` の helper 追加、RMS 定数変更、writer / GUI 改修は行っていない。
+  - 指定されていた `docs/MS11_MS12_Roadmap_and_Scope_Split.md` は現ワークツリーでは削除扱いだったため、参照時は `docs/_old/` 側の内容も補助的に確認した。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m unittest tests.test_pipeline_peak_values`
+
+---
+
 ## Entry 2026-03-31 / Session: release-v0363-ms11-6-sync
 
 - Date: 2026-03-31

@@ -4,15 +4,15 @@
 
 - 文書名: `docs/Specification_Prompt_v3.md`
 - 作成日: 2026-03-20
-- 最終更新日: 2026-03-31
-- 対応リリース: `Ver 0.3.6.3`
+- 最終更新日: 2026-04-01
+- 対応リリース: `Ver 0.3.6.4`
 - 対象リポジトリ: `MMD_AutoLipTool`
 - 旧版: `docs/Specification_Prompt_v2.md`（本書で置き換え）
 - 文書方針: v2 の意図を引き継ぎつつ、現行実装・確定済み追加仕様・責務分割方針に合わせて更新する
 
-### 0.1 実装同期注記（2026-03-31 / MS11-6反映）
+### 0.1 実装同期注記（2026-04-01 / MS11-7 文書整備・最小テスト反映）
 
-- 本書は v3 の目標仕様を含むが、2026-03-31 時点でコード反映済みなのは MS8A / MS8B / MS8C / MS8D-2 / MS9 / MS9-2 / MS10 / MS11-1 / MS11-2 / MS11-2_FIX01 / MS11-2_FIX02 / MS11-3 / MS11-4 / MS11-5 / MS11-6 までとする。
+- 本書は v3 の目標仕様を含むが、2026-04-01 時点でコード反映済みなのは MS8A / MS8B / MS8C / MS8D-2 / MS9 / MS9-2 / MS10 / MS11-1 / MS11-2 / MS11-2_FIX01 / MS11-2_FIX02 / MS11-3 / MS11-4 / MS11-5 / MS11-6、および MS11-7 の文書整備・最小テスト反映までとする。
 - 反映済み（コード実体）:
   - 上部操作列 `OperationPanel`・最下部 `StatusPanel` を含む GUI 再構成
   - `PreviewArea` / `preview_transform.py` による 5 段固定 Preview 表示
@@ -56,11 +56,14 @@
   - initial timeline と refined timeline を main flow 内で対として追跡し、`timeline` は canonical writer input のまま維持
   - `PipelineResult` へ optional な observation 受け渡しを追加
   - provided timing plan をそのまま再利用する経路では observation を保持し、duration 補完を行う provided timing plan 経路では observation を `None` に落とす方針をテストで明文化
+  - `docs/MS11-7_Implementation_Plan.md` に、MS11-7 の固定スコープ、review 手順、再調整要否判断基準を反映
+  - `docs/MS11-7_Real_Data_Observation_Review.md` を追加し、実データ観測結果の正本テンプレートを整備
+  - `tests/test_pipeline_peak_values.py` に、`global_peak_zero` observation の記録欄整合を確認する最小テストを追加
 - 未反映（後続対象）:
   - より高度な平滑化と出力仕様全体の再設計
   - GUI / Preview の multi-point 表示対応
   - 実データ観測を踏まえた RMS 定数の必要最小限の再調整
-  - MS11-7 として扱う、実データ観測結果の整理と RMS 定数再調整要否の判断整理
+  - MS11-7 として扱う、実データ観測結果の実投入と RMS 定数再調整要否の最終判断確定
 - MS8D-2 の改訂要件差分は `docs/MS8D-2_Requirements_and_Spec_Update.md` を参照する。
 
 ---

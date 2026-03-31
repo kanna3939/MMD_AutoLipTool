@@ -1,4 +1,39 @@
 ﻿# MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
+## 2026-04-01 / Ver 0.3.6.4 同期メモ
+
+- 対象: MS11-7 文書整備・最小テスト反映後の版同期
+- 同期内容:
+  - `README.md` / `pyproject.toml` / `docs/Specification_Prompt_v3.md` / `docs/MS11_MS12_Roadmap_and_Scope_Split.md` / `docs/MS11-7_Implementation_Plan.md` / `docs/repo_milestone.md` / `docs/Version_Control.md` を `Ver 0.3.6.4` 基準へ同期
+  - MS11-7 の到達状態を「実データ review 本体の前段としての文書整備 + 最小テスト追加」までとして整理
+  - リポジトリ全体の反映版を `Ver 0.3.6.4` として確定
+- 確認状態:
+  - `docs/MS11-7_Real_Data_Observation_Review.md` が実データ review の正本テンプレートとして追加済み
+  - `tests/test_pipeline_peak_values.py` の最小追加で observation 記録欄整合を固定済み
+  - RMS 定数変更、`pipeline.py` helper 追加、writer / GUI 改修は未実施
+- 次段階:
+  - 実データの投入
+  - reason 別整理
+  - RMS 定数再調整要否の最終判断
+
+---
+
+## 2026-04-01 / MS11-7 文書整備・review 雛形追加メモ
+
+- 対象: MS11-7 実装開始時の文書整備と review 正本雛形追加
+- 反映内容:
+  - `docs/MS11-7_Implementation_Plan.md` を、MS11-7 の固定方針に沿って整理
+  - `docs/MS11-7_Real_Data_Observation_Review.md` を新規追加し、実データ観測結果の正本テンプレートを整備
+  - `tests/test_pipeline_peak_values.py` に、`global_peak_zero` observation の記録欄整合を確認する最小テストを追加
+- 確認状態:
+  - `peak_value = 0.0` を一律不具合扱いしない方針を維持
+  - 今回は RMS 定数変更そのものを行っていない
+  - `pipeline.py` への review 専用 helper 追加や writer / GUI 改修には広げていない
+- 次段階:
+  - 実データを投入して reason 別に記録
+  - 同種の不自然 zero case の複数確認有無に基づき、再調整要否を判断
+
+---
+
 ## 2026-03-31 / Ver 0.3.6.3 同期メモ
 
 - 対象: MS11-6 実装反映後の版同期

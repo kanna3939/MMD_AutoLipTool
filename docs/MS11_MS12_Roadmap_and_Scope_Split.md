@@ -4,9 +4,9 @@
 
 - Document Name: `docs/MS11_MS12_Roadmap_and_Scope_Split.md`
 - Created: 2026-03-30
-- Last Updated: 2026-03-30
+- Last Updated: 2026-04-01
 - Target Repository: `MMD_AutoLipTool`
-- Baseline Version: `Ver 0.3.6.3`
+- Baseline Version: `Ver 0.3.6.4`
 - Purpose:
   - Record the agreed milestone split after MS11-5.
   - Clarify which remaining items belong to MS11 and which belong to MS12.
@@ -30,13 +30,14 @@ The following are already completed and should be treated as fixed baseline:
 - writer.py local fixes after MS11-3 completed
 - MS11-4 completed
 - MS11-5 first-stage implementation completed
-- `Ver 0.3.6.3` committed
+- `Ver 0.3.6.4` committed
 
 Current understanding of the project state:
 
 - Major writer-side issues are mostly converged.
 - Main remaining work on the MS11 side is:
-  - pipeline-side observation / connection cleanup
+  - MS11-7 real-data observation review execution
+  - RMS retuning necessity judgment finalization
   - remaining output-quality expansion that still belongs to MS11
 - GUI responsiveness / splash behavior should be handled separately from MS11.
 - Packaging / distribution dependency handling should also be treated separately from MS11.
@@ -99,7 +100,7 @@ Important rule:
 
 ---
 
-## 4. MS11 Roadmap After Ver 0.3.6.3
+## 4. MS11 Roadmap After Ver 0.3.6.4
 
 ## MS11-6
 ### Name
@@ -162,6 +163,12 @@ Use actual observation results to determine whether RMS constants need minimal r
 - Real-data zero-peak cases are explainable
 - Retuning necessity is judged with evidence
 - Large-scale tuning is still avoided
+
+### Status Note (2026-04-01)
+- Documentation scaffolding for MS11-7 is in place.
+- `docs/MS11-7_Implementation_Plan.md` and `docs/MS11-7_Real_Data_Observation_Review.md` are added as the current written baseline.
+- A minimum observation-boundary test for `global_peak_zero` is added.
+- Actual real-data review execution and final retuning judgment are still pending.
 
 ---
 
@@ -410,7 +417,7 @@ The packaging goal is:
 
 ## 7. Recommended Execution Order
 
-The recommended order after `Ver 0.3.6.3` is:
+The recommended order after `Ver 0.3.6.4` is:
 
 1. MS11-7
 2. MS11-8

@@ -341,6 +341,36 @@ class PipelinePeakValueTests(unittest.TestCase):
         self.assertEqual(observations[0].window_sample_count, 0)
         self.assertEqual(observations[0].peak_value, 0.125)
 
+    def test_observation_reports_global_peak_zero_with_zero_global_peak_context(self) -> None:
+        timeline = [
+            VowelTimelinePoint(time_sec=0.25, vowel="\u3042", duration_sec=0.1, start_sec=0.20, end_sec=0.30),
+        ]
+        rms_series = RmsSeriesData(
+            sample_rate_hz=100,
+            channel_count=1,
+            duration_sec=1.0,
+            window_size_samples=5,
+            hop_size_samples=5,
+            times_sec=[0.25, 0.80],
+            values=[0.0, 0.0],
+        )
+
+        observations = _build_peak_value_observations(
+            timeline=timeline,
+            rms_series=rms_series,
+            speech_start_sec=0.0,
+            speech_end_sec=1.0,
+            upper_limit=0.5,
+        )
+
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(observations[0].reason, "global_peak_zero")
+        self.assertIsNone(observations[0].fallback_reason)
+        self.assertEqual(observations[0].global_peak, 0.0)
+        self.assertEqual(observations[0].local_peak, 0.0)
+        self.assertEqual(observations[0].window_sample_count, 1)
+        self.assertEqual(observations[0].peak_value, 0.0)
+
     def test_observation_requires_matching_initial_timeline_length(self) -> None:
         timeline = [
             VowelTimelinePoint(time_sec=0.25, vowel="\u3042", duration_sec=0.1, start_sec=0.20, end_sec=0.30),
