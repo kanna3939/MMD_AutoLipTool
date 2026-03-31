@@ -316,6 +316,57 @@ class VmdWriterMultiPointShapeTests(unittest.TestCase):
         )
         self.assertEqual(protected_specs, [])
 
+    def test_ms11_3_closing_softness_extends_only_final_end_zero(self) -> None:
+        points = [
+            VowelTimelinePoint(time_sec=1.00, vowel="\u3042", peak_value=0.40, start_sec=0.80, end_sec=1.20),
+            VowelTimelinePoint(time_sec=1.30, vowel="\u3042", peak_value=0.30, start_sec=1.10, end_sec=1.50),
+        ]
+
+        frames, protected_specs = _build_interval_morph_frames_with_metadata(
+            points,
+            closing_softness_frames=3,
+        )
+
+        self.assertEqual(
+            frames,
+            [
+                (24, "\u3042", 0.0),
+                (30, "\u3042", 0.4),
+                (34, "\u3042", 0.105),
+                (39, "\u3042", 0.3),
+                (48, "\u3042", 0.0),
+            ],
+        )
+        self.assertEqual(protected_specs, [])
+
+    def test_ms11_3_closing_softness_clamps_only_final_end_zero_before_following_shape(self) -> None:
+        points = [
+            VowelTimelinePoint(time_sec=1.00, vowel="\u3042", peak_value=0.40, start_sec=0.80, end_sec=1.20),
+            VowelTimelinePoint(time_sec=1.30, vowel="\u3042", peak_value=0.30, start_sec=1.10, end_sec=1.50),
+            VowelTimelinePoint(time_sec=1.55, vowel="\u3044", peak_value=0.50, start_sec=1.52, end_sec=1.62),
+        ]
+
+        frames, protected_specs = _build_interval_morph_frames_with_metadata(
+            points,
+            closing_softness_frames=10,
+        )
+
+        self.assertEqual(
+            frames,
+            [
+                (24, "\u3042", 0.0),
+                (30, "\u3042", 0.4),
+                (34, "\u3042", 0.105),
+                (39, "\u3042", 0.3),
+                (45, "\u3042", 0.0),
+                (45, "\u3044", 0.0),
+                (46, "\u3044", 0.5),
+                (47, "\u3044", 0.5),
+                (59, "\u3044", 0.0),
+            ],
+        )
+        self.assertEqual(protected_specs, [])
+
 
 if __name__ == "__main__":
     unittest.main()

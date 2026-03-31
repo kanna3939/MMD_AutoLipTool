@@ -266,6 +266,7 @@ def generate_vmd_from_text_wav(
     model_name: str = "AutoLipTool",
     timing_plan: VowelTimingPlan | None = None,
     upper_limit: float = _DEFAULT_MORPH_UPPER_LIMIT,
+    closing_softness_frames: int = 0,
 ) -> PipelineResult:
     text_file = Path(text_path)
     wav_file = Path(wav_path)
@@ -321,6 +322,7 @@ def generate_vmd_from_text_wav(
             output_path=out_file,
             timeline=resolved_timing_plan.timeline,
             model_name=model_name,
+            closing_softness_frames=closing_softness_frames,
         )
     except OSError as error:
         raise PipelineError(f"Failed to save VMD file: {error}") from error

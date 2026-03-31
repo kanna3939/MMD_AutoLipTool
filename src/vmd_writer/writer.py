@@ -858,9 +858,16 @@ def write_morph_vmd(
     model_name: str = "AutoLipTool",
     *,
     apply_final_normalization: bool = True,
+    closing_softness_frames: int = 0,
 ) -> Path:
+    normalized_closing_softness_frames = _normalize_closing_softness_frames(
+        closing_softness_frames
+    )
     points = _normalize_timeline(timeline)
-    morph_frames, normalization_metadata = _build_interval_morph_frames_with_normalization_metadata(points)
+    morph_frames, normalization_metadata = _build_interval_morph_frames_with_normalization_metadata(
+        points,
+        closing_softness_frames=normalized_closing_softness_frames,
+    )
     if apply_final_normalization:
         morph_frames = _apply_final_morph_frame_normalization(
             morph_frames,
@@ -988,7 +995,12 @@ def _normalize_timeline(
 
 def _build_peak_morph_frames(
     points: list[VowelTimelinePoint],
+    *,
+    closing_softness_frames: int = 0,
+    next_shape_start_frame: int | None = None,
 ) -> list[MorphFrame]:
+    del closing_softness_frames
+    del next_shape_start_frame
     expanded: list[MorphFrame] = []
     for point in points:
         peak_value = _point_peak_value(point)
@@ -1006,28 +1018,51 @@ def _build_peak_morph_frames(
 
 def _build_interval_morph_frames(
     points: list[VowelTimelinePoint],
+    *,
+    closing_softness_frames: int = 0,
 ) -> list[MorphFrame]:
-    expanded, _ = _build_interval_morph_frames_with_metadata(points)
+    expanded, _ = _build_interval_morph_frames_with_metadata(
+        points,
+        closing_softness_frames=closing_softness_frames,
+    )
     return expanded
 
 
 def _build_interval_morph_frames_with_metadata(
     points: list[VowelTimelinePoint],
+    *,
+    closing_softness_frames: int = 0,
 ) -> tuple[list[MorphFrame], list[AsymmetricTrapezoidSpec]]:
-    expanded, normalization_metadata = _build_interval_morph_frames_with_normalization_metadata(points)
+    expanded, normalization_metadata = _build_interval_morph_frames_with_normalization_metadata(
+        points,
+        closing_softness_frames=closing_softness_frames,
+    )
     return expanded, list(normalization_metadata.protected_ms11_2_specs)
 
 
 def _build_interval_morph_frames_with_normalization_metadata(
     points: list[VowelTimelinePoint],
+    *,
+    closing_softness_frames: int = 0,
 ) -> tuple[list[MorphFrame], FinalNormalizationMetadata]:
+    normalized_closing_softness_frames = _normalize_closing_softness_frames(
+        closing_softness_frames
+    )
     expanded_with_flags: list[_MorphFrameWithFlags] = []
     protected_ms11_2_specs: list[AsymmetricTrapezoidSpec] = []
     protected_envelope_ranges: dict[str, list[tuple[int, int]]] = {}
     allowed_non_zero_ranges: dict[str, list[tuple[int, int]]] = {}
     grouped_events = _group_nearby_same_vowel_events(points)
-    for grouped_event in grouped_events:
-        ms11_3_result = _build_ms11_3_group_morph_frames_with_spec(grouped_event)
+    for grouped_event_index, grouped_event in enumerate(grouped_events):
+        next_shape_start_frame = _next_group_start_frame(
+            grouped_events,
+            grouped_event_index,
+        )
+        ms11_3_result = _build_ms11_3_group_morph_frames_with_spec(
+            grouped_event,
+            closing_softness_frames=normalized_closing_softness_frames,
+            next_shape_start_frame=next_shape_start_frame,
+        )
         if ms11_3_result is not None:
             ms11_3_frames_with_flags, ms11_3_spec = ms11_3_result
             expanded_with_flags.extend(ms11_3_frames_with_flags)
@@ -1050,8 +1085,11 @@ def _build_interval_morph_frames_with_normalization_metadata(
             fallback_frames_with_flags,
             fallback_protected_specs,
             fallback_protected_ranges,
+            fallback_allowed_ranges,
         ) = _build_existing_group_morph_frames_with_metadata(
-            grouped_event
+            grouped_event,
+            closing_softness_frames=normalized_closing_softness_frames,
+            next_group_start_frame=next_shape_start_frame,
         )
         expanded_with_flags.extend(fallback_frames_with_flags)
         protected_ms11_2_specs.extend(fallback_protected_specs)
@@ -1062,10 +1100,13 @@ def _build_interval_morph_frames_with_normalization_metadata(
                 start_frame,
                 end_frame,
             )
-        _append_group_allowed_non_zero_ranges(
-            allowed_non_zero_ranges,
-            grouped_event,
-        )
+        for vowel, start_frame, end_frame in fallback_allowed_ranges:
+            _append_frame_range(
+                allowed_non_zero_ranges,
+                vowel,
+                start_frame,
+                end_frame,
+            )
 
     _append_protected_ms11_2_envelope_ranges(
         protected_envelope_ranges,
@@ -1087,8 +1128,15 @@ def _build_interval_morph_frames_with_normalization_metadata(
 
 def _build_ms11_3_group_morph_frames_with_flags(
     grouped_events: GroupedNearbyVowelEvents,
+    *,
+    closing_softness_frames: int = 0,
+    next_shape_start_frame: int | None = None,
 ) -> list[_MorphFrameWithFlags] | None:
-    result = _build_ms11_3_group_morph_frames_with_spec(grouped_events)
+    result = _build_ms11_3_group_morph_frames_with_spec(
+        grouped_events,
+        closing_softness_frames=closing_softness_frames,
+        next_shape_start_frame=next_shape_start_frame,
+    )
     if result is None:
         return None
     return result[0]
@@ -1096,6 +1144,9 @@ def _build_ms11_3_group_morph_frames_with_flags(
 
 def _build_ms11_3_group_morph_frames_with_spec(
     grouped_events: GroupedNearbyVowelEvents,
+    *,
+    closing_softness_frames: int = 0,
+    next_shape_start_frame: int | None = None,
 ) -> tuple[list[_MorphFrameWithFlags], MultiPointEnvelopeSpec] | None:
     if not _is_ms11_3_attemptable_group(grouped_events):
         return None
@@ -1104,18 +1155,24 @@ def _build_ms11_3_group_morph_frames_with_spec(
     if not build_result.is_valid or build_result.spec is None:
         return None
 
-    expansion_result = _expand_multi_point_envelope_spec_to_morph_frames(build_result.spec)
+    softened_spec = _apply_closing_softness_to_multi_point_envelope_spec(
+        build_result.spec,
+        closing_softness_frames=closing_softness_frames,
+        next_shape_start_frame=next_shape_start_frame,
+    )
+
+    expansion_result = _expand_multi_point_envelope_spec_to_morph_frames(softened_spec)
     if not expansion_result.is_valid:
         return None
 
     adoption_failure = _validate_ms11_3_shape_adoption(
-        build_result.spec,
+        softened_spec,
         expansion_result.frames,
     )
     if adoption_failure is not None:
         return None
 
-    return _convert_multi_point_frames_to_flagged_frames(expansion_result.frames), build_result.spec
+    return _convert_multi_point_frames_to_flagged_frames(expansion_result.frames), softened_spec
 
 
 def _is_ms11_3_attemptable_group(
@@ -1246,16 +1303,27 @@ def _build_required_zero_frames_from_expanded_with_flags(
 
 def _build_existing_group_morph_frames_with_metadata(
     grouped_events: GroupedNearbyVowelEvents,
+    *,
+    closing_softness_frames: int = 0,
+    next_group_start_frame: int | None = None,
 ) -> tuple[
     list[_MorphFrameWithFlags],
     list[AsymmetricTrapezoidSpec],
+    list[tuple[str, int, int]],
     list[tuple[str, int, int]],
 ]:
     expanded_with_flags: list[_MorphFrameWithFlags] = []
     protected_ms11_2_specs: list[AsymmetricTrapezoidSpec] = []
     protected_fallback_ranges: list[tuple[str, int, int]] = []
+    allowed_ranges: list[tuple[str, int, int]] = []
 
-    for source_event_index, point in zip(grouped_events.source_event_indices, grouped_events.points):
+    point_count = len(grouped_events.points)
+    for point_index, (source_event_index, point) in enumerate(
+        zip(grouped_events.source_event_indices, grouped_events.points)
+    ):
+        next_shape_start_frame = next_group_start_frame
+        if point_index + 1 < point_count:
+            next_shape_start_frame = _event_start_frame(grouped_events.points[point_index + 1])
         (
             point_frames_with_flags,
             protected_spec,
@@ -1263,20 +1331,28 @@ def _build_existing_group_morph_frames_with_metadata(
         ) = _build_existing_point_morph_frames_with_metadata(
             point,
             source_event_index=source_event_index,
+            closing_softness_frames=closing_softness_frames,
+            next_shape_start_frame=next_shape_start_frame,
         )
         expanded_with_flags.extend(point_frames_with_flags)
         if protected_spec is not None:
             protected_ms11_2_specs.append(protected_spec)
+            allowed_ranges.append(
+                (protected_spec.vowel, protected_spec.start_frame, protected_spec.end_frame)
+            )
         if protected_range is not None:
             protected_fallback_ranges.append((point.vowel, protected_range[0], protected_range[1]))
+            allowed_ranges.append((point.vowel, protected_range[0], protected_range[1]))
 
-    return expanded_with_flags, protected_ms11_2_specs, protected_fallback_ranges
+    return expanded_with_flags, protected_ms11_2_specs, protected_fallback_ranges, allowed_ranges
 
 
 def _build_existing_point_morph_frames_with_metadata(
     point: VowelTimelinePoint,
     *,
     source_event_index: int | None = None,
+    closing_softness_frames: int = 0,
+    next_shape_start_frame: int | None = None,
 ) -> tuple[
     list[_MorphFrameWithFlags],
     AsymmetricTrapezoidSpec | None,
@@ -1292,7 +1368,11 @@ def _build_existing_point_morph_frames_with_metadata(
     if spec is None:
         fallback_frames_with_flags = [
             (frame_no, vowel, value, False)
-            for frame_no, vowel, value in _build_peak_morph_frames([point])
+            for frame_no, vowel, value in _build_peak_morph_frames(
+                [point],
+                closing_softness_frames=closing_softness_frames,
+                next_shape_start_frame=next_shape_start_frame,
+            )
         ]
         return (
             fallback_frames_with_flags,
@@ -1300,6 +1380,11 @@ def _build_existing_point_morph_frames_with_metadata(
             _fallback_frame_range_from_expanded_with_flags(fallback_frames_with_flags),
         )
 
+    spec = _apply_closing_softness_to_trapezoid_spec(
+        spec,
+        closing_softness_frames=closing_softness_frames,
+        next_shape_start_frame=next_shape_start_frame,
+    )
     protected_spec = spec if _is_protectable_ms11_2_spec(spec) else None
     expanded_frames_with_flags = _expand_trapezoid_spec_to_morph_frames(spec)
     protected_range = None
@@ -1491,6 +1576,121 @@ def _expand_trapezoid_spec_to_morph_frames(
         (spec.start_frame, spec.vowel, 0.0, True),
         (spec.end_frame, spec.vowel, 0.0, False),
     ]
+
+
+def _normalize_closing_softness_frames(closing_softness_frames: int) -> int:
+    normalized_closing_softness_frames = int(closing_softness_frames)
+    if normalized_closing_softness_frames < 0:
+        raise ValueError("closing_softness_frames must be >= 0")
+    return normalized_closing_softness_frames
+
+
+def _event_start_frame(point: VowelTimelinePoint) -> int:
+    start_sec, _ = _event_bounds(point)
+    return _sec_to_frame(start_sec)
+
+
+def _next_group_start_frame(
+    grouped_events: list[GroupedNearbyVowelEvents],
+    current_group_index: int,
+) -> int | None:
+    next_group_index = current_group_index + 1
+    if next_group_index >= len(grouped_events):
+        return None
+    return _event_start_frame(grouped_events[next_group_index].points[0])
+
+
+def _resolve_softened_end_frame(
+    *,
+    fall_start_frame: int,
+    end_frame: int,
+    closing_softness_frames: int,
+    next_shape_start_frame: int | None = None,
+) -> int:
+    if closing_softness_frames <= 0:
+        return end_frame
+
+    softened_end_frame = end_frame + closing_softness_frames
+    if next_shape_start_frame is not None:
+        softened_end_frame = min(softened_end_frame, next_shape_start_frame - 1)
+    return max(end_frame, max(fall_start_frame + 1, softened_end_frame))
+
+
+def _apply_closing_softness_to_trapezoid_spec(
+    spec: AsymmetricTrapezoidSpec,
+    *,
+    closing_softness_frames: int,
+    next_shape_start_frame: int | None = None,
+) -> AsymmetricTrapezoidSpec:
+    normalized_closing_softness_frames = _normalize_closing_softness_frames(
+        closing_softness_frames
+    )
+    if normalized_closing_softness_frames == 0:
+        return spec
+
+    softened_end_frame = _resolve_softened_end_frame(
+        fall_start_frame=spec.peak_end_frame,
+        end_frame=spec.end_frame,
+        closing_softness_frames=normalized_closing_softness_frames,
+        next_shape_start_frame=next_shape_start_frame,
+    )
+    if softened_end_frame == spec.end_frame:
+        return spec
+
+    return AsymmetricTrapezoidSpec(
+        vowel=spec.vowel,
+        start_frame=spec.start_frame,
+        peak_start_frame=spec.peak_start_frame,
+        peak_end_frame=spec.peak_end_frame,
+        end_frame=softened_end_frame,
+        peak_value=spec.peak_value,
+        source_event_index=spec.source_event_index,
+        is_ms11_2_generated=spec.is_ms11_2_generated,
+        shape_kind=spec.shape_kind,
+        protection_mode=spec.protection_mode,
+    )
+
+
+def _apply_closing_softness_to_multi_point_envelope_spec(
+    spec: MultiPointEnvelopeSpec,
+    *,
+    closing_softness_frames: int,
+    next_shape_start_frame: int | None = None,
+) -> MultiPointEnvelopeSpec:
+    normalized_closing_softness_frames = _normalize_closing_softness_frames(
+        closing_softness_frames
+    )
+    if normalized_closing_softness_frames == 0:
+        return spec
+    if len(spec.control_points) < 2:
+        return spec
+
+    final_non_zero_point = spec.control_points[-2]
+    final_end_zero_point = spec.control_points[-1]
+    softened_end_frame = _resolve_softened_end_frame(
+        fall_start_frame=final_non_zero_point.frame_no,
+        end_frame=final_end_zero_point.frame_no,
+        closing_softness_frames=normalized_closing_softness_frames,
+        next_shape_start_frame=next_shape_start_frame,
+    )
+    if softened_end_frame == final_end_zero_point.frame_no:
+        return spec
+
+    softened_control_points = list(spec.control_points)
+    softened_control_points[-1] = EnvelopeControlPoint(
+        frame_no=softened_end_frame,
+        value=final_end_zero_point.value,
+        point_kind=final_end_zero_point.point_kind,
+    )
+    return MultiPointEnvelopeSpec(
+        vowel=spec.vowel,
+        control_points=tuple(softened_control_points),
+        source_event_indices=spec.source_event_indices,
+        shape_kind=spec.shape_kind,
+        protection_mode=spec.protection_mode,
+        is_ms11_3_generated=spec.is_ms11_3_generated,
+        event_ranges=spec.event_ranges,
+    )
 
 
 def _is_expandable_four_point_trapezoid_spec(

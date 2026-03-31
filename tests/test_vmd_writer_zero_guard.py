@@ -607,6 +607,72 @@ class VmdWriterZeroGuardTests(unittest.TestCase):
         self.assertEqual(metadata.required_zero_frames, {"\u3042": {24, 45}})
         self.assertNotIn(34, metadata.required_zero_frames["\u3042"])
 
+    def test_ms11_3_metadata_tracks_softened_final_end_zero(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="\u3042",
+                peak_value=0.40,
+                start_sec=0.80,
+                end_sec=1.05,
+            ),
+            VowelTimelinePoint(
+                time_sec=1.30,
+                vowel="\u3042",
+                peak_value=0.30,
+                start_sec=1.15,
+                end_sec=1.50,
+            ),
+        ]
+
+        raw_frames, metadata = _build_interval_morph_frames_with_normalization_metadata(
+            points,
+            closing_softness_frames=3,
+        )
+
+        self.assertEqual(
+            raw_frames,
+            [
+                (24, "\u3042", 0.0),
+                (30, "\u3042", 0.4),
+                (34, "\u3042", 0.105),
+                (39, "\u3042", 0.3),
+                (48, "\u3042", 0.0),
+            ],
+        )
+        self.assertEqual(metadata.protected_envelope_ranges, {"\u3042": [(24, 48)]})
+        self.assertEqual(metadata.allowed_non_zero_ranges, {"\u3042": [(24, 48)]})
+        self.assertEqual(metadata.required_zero_frames, {"\u3042": {24, 48}})
+
+    def test_ms11_2_metadata_tracks_softened_end_frame(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="\u3042",
+                duration_sec=0.4,
+                start_sec=0.8,
+                end_sec=1.2,
+            )
+        ]
+
+        raw_frames, metadata = _build_interval_morph_frames_with_normalization_metadata(
+            points,
+            closing_softness_frames=3,
+        )
+
+        self.assertEqual(
+            raw_frames,
+            [
+                (24, "\u3042", 0.0),
+                (27, "\u3042", 0.5),
+                (33, "\u3042", 0.5),
+                (39, "\u3042", 0.0),
+            ],
+        )
+        self.assertEqual(metadata.protected_envelope_ranges, {"\u3042": [(24, 39)]})
+        self.assertEqual(metadata.allowed_non_zero_ranges, {"\u3042": [(24, 39)]})
+        self.assertEqual(metadata.required_zero_frames, {"\u3042": {24, 39}})
+
     def test_final_normalization_keeps_valid_ms11_3_envelope_under_isolated_short_open_suppression(self) -> None:
         points = [
             VowelTimelinePoint(
