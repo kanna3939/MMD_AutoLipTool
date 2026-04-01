@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import struct
-from typing import Iterable
+from typing import Iterable, Protocol, Sequence
 
 VMD_FPS = 30
 MAX_MORPH_VALUE = 0.5
@@ -11,14 +11,32 @@ SUPPORTED_MORPHS = ("\u3042", "\u3044", "\u3046", "\u3048", "\u304a")
 PEAK_SIDE_FRAME_OFFSET = 2
 MAX_MORPH_FRAMES = 22000
 MORPH_FRAME_OPEN_EPSILON = 1e-9
+CONTINUITY_FLOOR_MORPH_VALUE = 0.1
+SAME_VOWEL_BURST_FLOOR_MORPH_VALUE = 0.1
 ISOLATED_OPEN_MAX_LENGTH_FRAMES = 3
 ISOLATED_OPEN_MAX_PEAK_VALUE = MAX_MORPH_VALUE
 MORPH_PULSE_MAX_LENGTH_FRAMES = 1
-ENVELOPE_POINT_KINDS = ("start_zero", "top", "valley", "end_zero")
+ENVELOPE_POINT_KINDS = ("start_zero", "top", "valley", "hold", "slope_mid", "end_zero")
 
 _VMD_HEADER = b"Vocaloid Motion Data 0002"
 MorphFrame = tuple[int, str, float]
 _MorphFrameWithFlags = tuple[int, str, float, bool]
+
+
+class ObservationLike(Protocol):
+    event_index: int
+    is_bridgeable_micro_gap_candidate: bool
+    is_bridgeable_same_vowel_micro_gap_candidate: bool
+    is_same_vowel_burst_candidate: bool
+    is_bridgeable_cross_vowel_transition_candidate: bool
+    is_cross_vowel_zero_run_continuity_floor_candidate: bool
+    local_peak: float | None
+    previous_non_zero_event_index: int | None
+    next_non_zero_event_index: int | None
+    span_start_index: int | None
+    span_end_index: int | None
+    rms_window_times_sec: Sequence[float]
+    rms_window_values: Sequence[float]
 
 
 @dataclass(frozen=True)
@@ -91,6 +109,9 @@ class AsymmetricTrapezoidSpec:
     peak_end_frame: int
     end_frame: int
     peak_value: float
+    peak_end_value: float | None = None
+    closing_mid_frame: int | None = None
+    closing_mid_value: float | None = None
     # Keep the metadata minimal for MS11-2 Phase 2 while leaving a stable
     # place for later normalization-protection wiring in MS11-1-connected work.
     source_event_index: int | None = None
@@ -380,23 +401,36 @@ def _is_minimally_valid_multi_point_envelope_spec(
 def _group_nearby_same_vowel_events(
     points: list[VowelTimelinePoint],
 ) -> list[GroupedNearbyVowelEvents]:
+    return _group_nearby_same_vowel_events_with_source_indices(
+        points,
+        tuple(range(len(points))),
+    )
+
+
+def _group_nearby_same_vowel_events_with_source_indices(
+    points: Sequence[VowelTimelinePoint],
+    source_event_indices: Sequence[int],
+) -> list[GroupedNearbyVowelEvents]:
     if not points:
         return []
+    if len(points) != len(source_event_indices):
+        raise ValueError("points and source_event_indices must have the same length")
 
     grouped_events: list[GroupedNearbyVowelEvents] = []
     current_group_points: list[VowelTimelinePoint] = [points[0]]
-    current_group_indices: list[int] = [0]
+    current_group_indices: list[int] = [int(source_event_indices[0])]
 
-    for next_index, next_point in enumerate(points[1:], start=1):
+    for relative_index, next_point in enumerate(points[1:], start=1):
+        next_source_event_index = int(source_event_indices[relative_index])
         candidate_failure = _evaluate_grouping_candidate_failure(
             current_group_points=current_group_points,
             current_group_indices=current_group_indices,
-            next_index=next_index,
+            next_index=next_source_event_index,
             next_point=next_point,
         )
         if candidate_failure is None:
             current_group_points.append(next_point)
-            current_group_indices.append(next_index)
+            current_group_indices.append(next_source_event_index)
             continue
 
         grouped_events.append(
@@ -406,7 +440,7 @@ def _group_nearby_same_vowel_events(
             )
         )
         current_group_points = [next_point]
-        current_group_indices = [next_index]
+        current_group_indices = [next_source_event_index]
 
     grouped_events.append(
         _build_grouped_nearby_vowel_events(
@@ -415,6 +449,21 @@ def _group_nearby_same_vowel_events(
         )
     )
     return grouped_events
+
+
+def _point_can_generate_non_zero_shape(point: VowelTimelinePoint) -> bool:
+    return _point_peak_value(point) > MORPH_FRAME_OPEN_EPSILON
+
+
+def _first_non_zero_shape_start_frame_in_group(
+    grouped_event: GroupedNearbyVowelEvents,
+    *,
+    start_point_index: int = 0,
+) -> int | None:
+    for point in grouped_event.points[start_point_index:]:
+        if _point_can_generate_non_zero_shape(point):
+            return _event_start_frame(point)
+    return None
 
 
 def _build_grouped_nearby_vowel_events(
@@ -858,14 +907,21 @@ def write_morph_vmd(
     model_name: str = "AutoLipTool",
     *,
     apply_final_normalization: bool = True,
+    observations: Sequence[ObservationLike] | None = None,
+    closing_hold_frames: int = 0,
     closing_softness_frames: int = 0,
 ) -> Path:
+    normalized_closing_hold_frames = _normalize_closing_hold_frames(
+        closing_hold_frames
+    )
     normalized_closing_softness_frames = _normalize_closing_softness_frames(
         closing_softness_frames
     )
     points = _normalize_timeline(timeline)
     morph_frames, normalization_metadata = _build_interval_morph_frames_with_normalization_metadata(
         points,
+        observations=observations,
+        closing_hold_frames=normalized_closing_hold_frames,
         closing_softness_frames=normalized_closing_softness_frames,
     )
     if apply_final_normalization:
@@ -996,21 +1052,37 @@ def _normalize_timeline(
 def _build_peak_morph_frames(
     points: list[VowelTimelinePoint],
     *,
+    closing_hold_frames: int = 0,
     closing_softness_frames: int = 0,
     next_shape_start_frame: int | None = None,
 ) -> list[MorphFrame]:
-    del closing_softness_frames
-    del next_shape_start_frame
     expanded: list[MorphFrame] = []
     for point in points:
         peak_value = _point_peak_value(point)
         center_frame = _sec_to_frame(point.time_sec)
         before_frame = max(0, center_frame - PEAK_SIDE_FRAME_OFFSET)
         after_frame = center_frame + PEAK_SIDE_FRAME_OFFSET
+        if closing_hold_frames == 0 and closing_softness_frames == 0:
+            expanded.append((before_frame, point.vowel, 0.0))
+            expanded.append((center_frame, point.vowel, peak_value))
+            expanded.append((after_frame, point.vowel, 0.0))
+            continue
+
+        hold_end_frame, closing_mid_frame, end_frame = _resolve_closing_tail_frames(
+            closing_start_frame=center_frame,
+            original_end_frame=after_frame,
+            closing_hold_frames=closing_hold_frames,
+            closing_softness_frames=closing_softness_frames,
+            next_shape_start_frame=next_shape_start_frame,
+        )
 
         expanded.append((before_frame, point.vowel, 0.0))
         expanded.append((center_frame, point.vowel, peak_value))
-        expanded.append((after_frame, point.vowel, 0.0))
+        if hold_end_frame > center_frame:
+            expanded.append((hold_end_frame, point.vowel, peak_value))
+        if closing_mid_frame is not None:
+            expanded.append((closing_mid_frame, point.vowel, peak_value * 0.7))
+        expanded.append((end_frame, point.vowel, 0.0))
 
     expanded.sort(key=lambda x: x[0])
     return expanded
@@ -1019,10 +1091,14 @@ def _build_peak_morph_frames(
 def _build_interval_morph_frames(
     points: list[VowelTimelinePoint],
     *,
+    observations: Sequence[ObservationLike] | None = None,
+    closing_hold_frames: int = 0,
     closing_softness_frames: int = 0,
 ) -> list[MorphFrame]:
     expanded, _ = _build_interval_morph_frames_with_metadata(
         points,
+        observations=observations,
+        closing_hold_frames=closing_hold_frames,
         closing_softness_frames=closing_softness_frames,
     )
     return expanded
@@ -1031,10 +1107,14 @@ def _build_interval_morph_frames(
 def _build_interval_morph_frames_with_metadata(
     points: list[VowelTimelinePoint],
     *,
+    observations: Sequence[ObservationLike] | None = None,
+    closing_hold_frames: int = 0,
     closing_softness_frames: int = 0,
 ) -> tuple[list[MorphFrame], list[AsymmetricTrapezoidSpec]]:
     expanded, normalization_metadata = _build_interval_morph_frames_with_normalization_metadata(
         points,
+        observations=observations,
+        closing_hold_frames=closing_hold_frames,
         closing_softness_frames=closing_softness_frames,
     )
     return expanded, list(normalization_metadata.protected_ms11_2_specs)
@@ -1043,8 +1123,13 @@ def _build_interval_morph_frames_with_metadata(
 def _build_interval_morph_frames_with_normalization_metadata(
     points: list[VowelTimelinePoint],
     *,
+    observations: Sequence[ObservationLike] | None = None,
+    closing_hold_frames: int = 0,
     closing_softness_frames: int = 0,
 ) -> tuple[list[MorphFrame], FinalNormalizationMetadata]:
+    normalized_closing_hold_frames = _normalize_closing_hold_frames(
+        closing_hold_frames
+    )
     normalized_closing_softness_frames = _normalize_closing_softness_frames(
         closing_softness_frames
     )
@@ -1052,7 +1137,14 @@ def _build_interval_morph_frames_with_normalization_metadata(
     protected_ms11_2_specs: list[AsymmetricTrapezoidSpec] = []
     protected_envelope_ranges: dict[str, list[tuple[int, int]]] = {}
     allowed_non_zero_ranges: dict[str, list[tuple[int, int]]] = {}
-    grouped_events = _group_nearby_same_vowel_events(points)
+    grouped_points, grouped_source_indices = _build_points_for_grouping_with_observations(
+        points,
+        observations=observations,
+    )
+    grouped_events = _group_nearby_same_vowel_events_with_source_indices(
+        grouped_points,
+        grouped_source_indices,
+    )
     for grouped_event_index, grouped_event in enumerate(grouped_events):
         next_shape_start_frame = _next_group_start_frame(
             grouped_events,
@@ -1060,6 +1152,7 @@ def _build_interval_morph_frames_with_normalization_metadata(
         )
         ms11_3_result = _build_ms11_3_group_morph_frames_with_spec(
             grouped_event,
+            closing_hold_frames=normalized_closing_hold_frames,
             closing_softness_frames=normalized_closing_softness_frames,
             next_shape_start_frame=next_shape_start_frame,
         )
@@ -1088,6 +1181,8 @@ def _build_interval_morph_frames_with_normalization_metadata(
             fallback_allowed_ranges,
         ) = _build_existing_group_morph_frames_with_metadata(
             grouped_event,
+            observations=observations,
+            closing_hold_frames=normalized_closing_hold_frames,
             closing_softness_frames=normalized_closing_softness_frames,
             next_group_start_frame=next_shape_start_frame,
         )
@@ -1129,14 +1224,260 @@ def _build_interval_morph_frames_with_normalization_metadata(
 def _build_ms11_3_group_morph_frames_with_flags(
     grouped_events: GroupedNearbyVowelEvents,
     *,
+    closing_hold_frames: int = 0,
     closing_softness_frames: int = 0,
     next_shape_start_frame: int | None = None,
 ) -> list[_MorphFrameWithFlags] | None:
     result = _build_ms11_3_group_morph_frames_with_spec(
         grouped_events,
+        closing_hold_frames=closing_hold_frames,
         closing_softness_frames=closing_softness_frames,
         next_shape_start_frame=next_shape_start_frame,
     )
+
+
+def _build_points_for_grouping_with_observations(
+    points: Sequence[VowelTimelinePoint],
+    *,
+    observations: Sequence[ObservationLike] | None = None,
+) -> tuple[list[VowelTimelinePoint], tuple[int, ...]]:
+    if not points:
+        return [], ()
+    adjusted_points = _apply_cross_vowel_transition_candidates_to_points(
+        points,
+        observations=observations,
+    )
+    if not observations:
+        return adjusted_points, tuple(range(len(adjusted_points)))
+    return _build_same_vowel_span_adjusted_points(
+        adjusted_points,
+        observations=observations,
+    )
+
+
+def _apply_cross_vowel_transition_candidates_to_points(
+    points: Sequence[VowelTimelinePoint],
+    *,
+    observations: Sequence[ObservationLike] | None = None,
+) -> list[VowelTimelinePoint]:
+    adjusted_points = list(points)
+    if not observations or len(points) != len(observations):
+        return adjusted_points
+
+    processed_span_starts: set[int] = set()
+    for index, observation in enumerate(observations):
+        if not getattr(observation, "is_bridgeable_cross_vowel_transition_candidate", False):
+            continue
+        span_start_index = getattr(observation, "span_start_index", None)
+        span_end_index = getattr(observation, "span_end_index", None)
+        if span_start_index is None:
+            span_start_index = index
+        if span_end_index is None:
+            span_end_index = index
+        if span_start_index in processed_span_starts:
+            continue
+        processed_span_starts.add(span_start_index)
+
+        previous_index = getattr(observation, "previous_non_zero_event_index", None)
+        next_index = getattr(observation, "next_non_zero_event_index", None)
+        if previous_index is None or next_index is None:
+            continue
+        if adjusted_points[previous_index].vowel == adjusted_points[next_index].vowel:
+            continue
+
+        candidate_start_point = adjusted_points[span_start_index]
+        candidate_end_point = adjusted_points[span_end_index]
+        previous_point = adjusted_points[previous_index]
+        next_point = adjusted_points[next_index]
+
+        candidate_start_sec, _ = _event_bounds(candidate_start_point)
+        _, candidate_end_sec = _event_bounds(candidate_end_point)
+        previous_start_sec, previous_end_sec = _event_bounds(previous_point)
+        next_start_sec, next_end_sec = _event_bounds(next_point)
+        if candidate_start_sec < previous_end_sec:
+            continue
+        if next_start_sec < candidate_end_sec:
+            continue
+
+        adjusted_points[previous_index] = _copy_point_with_interval(
+            previous_point,
+            start_sec=previous_start_sec,
+            end_sec=max(previous_end_sec, candidate_end_sec),
+        )
+        adjusted_points[next_index] = _copy_point_with_interval(
+            next_point,
+            start_sec=min(next_start_sec, candidate_start_sec),
+            end_sec=next_end_sec,
+        )
+
+    return adjusted_points
+
+
+def _build_same_vowel_span_adjusted_points(
+    points: Sequence[VowelTimelinePoint],
+    *,
+    observations: Sequence[ObservationLike],
+) -> tuple[list[VowelTimelinePoint], tuple[int, ...]]:
+    same_vowel_spans = _collect_same_vowel_burst_spans(points, observations)
+    if not same_vowel_spans:
+        return list(points), tuple(range(len(points)))
+
+    skip_indices = {
+        span_index
+        for span in same_vowel_spans
+        for span_index in range(span["span_start_index"], span["span_end_index"] + 1)
+    }
+    spans_by_next_index = {
+        span["next_non_zero_event_index"]: span
+        for span in same_vowel_spans
+    }
+
+    grouped_points: list[VowelTimelinePoint] = []
+    grouped_source_indices: list[int] = []
+    next_synthetic_source_index = -1
+    for index, point in enumerate(points):
+        span = spans_by_next_index.get(index)
+        if span is not None:
+            synthetic_points = _build_same_vowel_span_synthetic_points(
+                points=points,
+                span=span,
+            )
+            for synthetic_point in synthetic_points:
+                grouped_points.append(synthetic_point)
+                grouped_source_indices.append(next_synthetic_source_index)
+                next_synthetic_source_index -= 1
+
+        if index in skip_indices:
+            continue
+        grouped_points.append(point)
+        grouped_source_indices.append(index)
+
+    return grouped_points, tuple(grouped_source_indices)
+
+
+def _collect_same_vowel_burst_spans(
+    points: Sequence[VowelTimelinePoint],
+    observations: Sequence[ObservationLike],
+) -> list[dict[str, int]]:
+    spans: list[dict[str, int]] = []
+    seen_span_starts: set[int] = set()
+    if len(points) != len(observations):
+        return spans
+
+    for index, observation in enumerate(observations):
+        if not (
+            getattr(observation, "is_bridgeable_same_vowel_micro_gap_candidate", False)
+            or getattr(observation, "is_bridgeable_micro_gap_candidate", False)
+            or getattr(observation, "is_same_vowel_burst_candidate", False)
+        ):
+            continue
+        span_start_index = getattr(observation, "span_start_index", index)
+        span_end_index = getattr(observation, "span_end_index", index)
+        if span_start_index is None:
+            span_start_index = index
+        if span_end_index is None:
+            span_end_index = index
+        if span_start_index in seen_span_starts:
+            continue
+        seen_span_starts.add(span_start_index)
+
+        previous_index = getattr(observation, "previous_non_zero_event_index", None)
+        next_index = getattr(observation, "next_non_zero_event_index", None)
+        if previous_index is None or next_index is None:
+            continue
+        if points[previous_index].vowel != points[next_index].vowel:
+            continue
+        spans.append(
+            {
+                "span_start_index": span_start_index,
+                "span_end_index": span_end_index,
+                "previous_non_zero_event_index": previous_index,
+                "next_non_zero_event_index": next_index,
+            }
+        )
+    return spans
+
+
+def _build_same_vowel_span_synthetic_points(
+    *,
+    points: Sequence[VowelTimelinePoint],
+    span: dict[str, int],
+) -> list[VowelTimelinePoint]:
+    span_event_count = (span["span_end_index"] - span["span_start_index"]) + 1
+    if span_event_count <= 1:
+        return []
+
+    previous_point = points[span["previous_non_zero_event_index"]]
+    next_point = points[span["next_non_zero_event_index"]]
+    span_start_point = points[span["span_start_index"]]
+    span_end_point = points[span["span_end_index"]]
+
+    span_start_sec, _ = _event_bounds(span_start_point)
+    _, span_end_sec = _event_bounds(span_end_point)
+    bridge_time_sec = (span_start_sec + span_end_sec) * 0.5
+    bridge_start_sec = bridge_time_sec - (2.0 / VMD_FPS)
+    bridge_end_sec = bridge_time_sec + (2.0 / VMD_FPS)
+    bridge_peak_value = min(_point_peak_value(previous_point), _point_peak_value(next_point)) * 0.8
+
+    return [
+        VowelTimelinePoint(
+            time_sec=bridge_time_sec,
+            vowel=previous_point.vowel,
+            value=bridge_peak_value,
+            peak_value=bridge_peak_value,
+            duration_sec=max(bridge_end_sec - bridge_start_sec, 0.0),
+            start_sec=bridge_start_sec,
+            end_sec=bridge_end_sec,
+        )
+    ]
+
+
+def _copy_point_with_interval(
+    point: VowelTimelinePoint,
+    *,
+    start_sec: float,
+    end_sec: float,
+) -> VowelTimelinePoint:
+    normalized_start_sec = float(start_sec)
+    normalized_end_sec = float(end_sec)
+    if normalized_end_sec < normalized_start_sec:
+        normalized_end_sec = normalized_start_sec
+
+    return VowelTimelinePoint(
+        time_sec=point.time_sec,
+        vowel=point.vowel,
+        value=_point_peak_value(point),
+        peak_value=_point_peak_value(point),
+        duration_sec=max(normalized_end_sec - normalized_start_sec, 0.0),
+        start_sec=normalized_start_sec,
+        end_sec=normalized_end_sec,
+    )
+
+
+def _collect_same_vowel_micro_gap_bridge_candidate_indices(
+    points: Sequence[VowelTimelinePoint],
+    observations: Sequence[ObservationLike],
+) -> set[int]:
+    candidate_indices: set[int] = set()
+    if len(points) != len(observations):
+        return candidate_indices
+
+    for index, (point, observation) in enumerate(zip(points, observations)):
+        if not (
+            getattr(observation, "is_bridgeable_same_vowel_micro_gap_candidate", False)
+            or getattr(observation, "is_bridgeable_micro_gap_candidate", False)
+        ):
+            continue
+        previous_index = getattr(observation, "previous_non_zero_event_index", None)
+        next_index = getattr(observation, "next_non_zero_event_index", None)
+        if previous_index is None or next_index is None:
+            continue
+        if previous_index >= len(points) or next_index >= len(points):
+            continue
+        if points[previous_index].vowel != points[next_index].vowel:
+            continue
+        candidate_indices.add(index)
+    return candidate_indices
     if result is None:
         return None
     return result[0]
@@ -1145,6 +1486,7 @@ def _build_ms11_3_group_morph_frames_with_flags(
 def _build_ms11_3_group_morph_frames_with_spec(
     grouped_events: GroupedNearbyVowelEvents,
     *,
+    closing_hold_frames: int = 0,
     closing_softness_frames: int = 0,
     next_shape_start_frame: int | None = None,
 ) -> tuple[list[_MorphFrameWithFlags], MultiPointEnvelopeSpec] | None:
@@ -1155,8 +1497,13 @@ def _build_ms11_3_group_morph_frames_with_spec(
     if not build_result.is_valid or build_result.spec is None:
         return None
 
-    softened_spec = _apply_closing_softness_to_multi_point_envelope_spec(
+    held_spec = _apply_closing_hold_to_multi_point_envelope_spec(
         build_result.spec,
+        closing_hold_frames=closing_hold_frames,
+        next_shape_start_frame=next_shape_start_frame,
+    )
+    softened_spec = _apply_closing_softness_to_multi_point_envelope_spec(
+        held_spec,
         closing_softness_frames=closing_softness_frames,
         next_shape_start_frame=next_shape_start_frame,
     )
@@ -1304,6 +1651,8 @@ def _build_required_zero_frames_from_expanded_with_flags(
 def _build_existing_group_morph_frames_with_metadata(
     grouped_events: GroupedNearbyVowelEvents,
     *,
+    observations: Sequence[ObservationLike] | None = None,
+    closing_hold_frames: int = 0,
     closing_softness_frames: int = 0,
     next_group_start_frame: int | None = None,
 ) -> tuple[
@@ -1323,7 +1672,12 @@ def _build_existing_group_morph_frames_with_metadata(
     ):
         next_shape_start_frame = next_group_start_frame
         if point_index + 1 < point_count:
-            next_shape_start_frame = _event_start_frame(grouped_events.points[point_index + 1])
+            intra_group_next_shape_start_frame = _first_non_zero_shape_start_frame_in_group(
+                grouped_events,
+                start_point_index=point_index + 1,
+            )
+            if intra_group_next_shape_start_frame is not None:
+                next_shape_start_frame = intra_group_next_shape_start_frame
         (
             point_frames_with_flags,
             protected_spec,
@@ -1331,6 +1685,8 @@ def _build_existing_group_morph_frames_with_metadata(
         ) = _build_existing_point_morph_frames_with_metadata(
             point,
             source_event_index=source_event_index,
+            observations=observations,
+            closing_hold_frames=closing_hold_frames,
             closing_softness_frames=closing_softness_frames,
             next_shape_start_frame=next_shape_start_frame,
         )
@@ -1351,6 +1707,8 @@ def _build_existing_point_morph_frames_with_metadata(
     point: VowelTimelinePoint,
     *,
     source_event_index: int | None = None,
+    observations: Sequence[ObservationLike] | None = None,
+    closing_hold_frames: int = 0,
     closing_softness_frames: int = 0,
     next_shape_start_frame: int | None = None,
 ) -> tuple[
@@ -1358,18 +1716,25 @@ def _build_existing_point_morph_frames_with_metadata(
     AsymmetricTrapezoidSpec | None,
     tuple[int, int] | None,
 ]:
-    if _point_peak_value(point) <= MORPH_FRAME_OPEN_EPSILON:
-        return [], None, None
-
-    spec = _build_interval_trapezoid_spec(
+    spec = _build_adjusted_trapezoid_spec(
         point,
         source_event_index=source_event_index,
+        observations=observations,
     )
     if spec is None:
+        effective_peak_value = _resolve_effective_peak_value(
+            point,
+            source_event_index=source_event_index,
+            observations=observations,
+        )
+        if effective_peak_value <= MORPH_FRAME_OPEN_EPSILON:
+            return [], None, None
+        fallback_point = _with_resolved_peak_value(point, effective_peak_value)
         fallback_frames_with_flags = [
             (frame_no, vowel, value, False)
             for frame_no, vowel, value in _build_peak_morph_frames(
-                [point],
+                [fallback_point],
+                closing_hold_frames=closing_hold_frames,
                 closing_softness_frames=closing_softness_frames,
                 next_shape_start_frame=next_shape_start_frame,
             )
@@ -1380,6 +1745,11 @@ def _build_existing_point_morph_frames_with_metadata(
             _fallback_frame_range_from_expanded_with_flags(fallback_frames_with_flags),
         )
 
+    spec = _apply_closing_hold_to_trapezoid_spec(
+        spec,
+        closing_hold_frames=closing_hold_frames,
+        next_shape_start_frame=next_shape_start_frame,
+    )
     spec = _apply_closing_softness_to_trapezoid_spec(
         spec,
         closing_softness_frames=closing_softness_frames,
@@ -1397,8 +1767,9 @@ def _build_interval_trapezoid_spec(
     point: VowelTimelinePoint,
     *,
     source_event_index: int | None = None,
+    peak_value_override: float | None = None,
 ) -> AsymmetricTrapezoidSpec | None:
-    peak_value = _point_peak_value(point)
+    peak_value = _point_peak_value(point) if peak_value_override is None else float(peak_value_override)
     if peak_value <= MORPH_FRAME_OPEN_EPSILON:
         return None
 
@@ -1459,6 +1830,7 @@ def _build_interval_trapezoid_spec(
         peak_end_frame=peak_end_frame,
         end_frame=end_frame,
         peak_value=peak_value,
+        peak_end_value=peak_value,
         source_event_index=source_event_index,
         shape_kind="ms11_2_asymmetric_trapezoid",
     )
@@ -1519,6 +1891,7 @@ def _build_legacy_interval_trapezoid_spec(
             peak_end_frame=peak_frame,
             end_frame=end_frame,
             peak_value=peak_value,
+            peak_end_value=peak_value,
             source_event_index=source_event_index,
             shape_kind="legacy_triangle",
         )
@@ -1530,6 +1903,7 @@ def _build_legacy_interval_trapezoid_spec(
         peak_end_frame=fall_start_frame,
         end_frame=end_frame,
         peak_value=peak_value,
+        peak_end_value=peak_value,
         source_event_index=source_event_index,
         shape_kind="legacy_symmetric_trapezoid",
     )
@@ -1538,28 +1912,46 @@ def _build_legacy_interval_trapezoid_spec(
 def _expand_trapezoid_spec_to_morph_frames(
     spec: AsymmetricTrapezoidSpec,
 ) -> list[_MorphFrameWithFlags]:
+    peak_end_value = _resolved_peak_end_value(spec)
     if spec.shape_kind == "legacy_triangle":
-        return [
+        frames: list[_MorphFrameWithFlags] = [
             (spec.start_frame, spec.vowel, 0.0, True),
             (spec.peak_start_frame, spec.vowel, spec.peak_value, False),
-            (spec.end_frame, spec.vowel, 0.0, False),
         ]
+        if spec.peak_end_frame > spec.peak_start_frame:
+            frames.append((spec.peak_end_frame, spec.vowel, peak_end_value, False))
+        if spec.closing_mid_frame is not None and spec.closing_mid_value is not None:
+            frames.append(
+                (spec.closing_mid_frame, spec.vowel, spec.closing_mid_value, False)
+            )
+        frames.append((spec.end_frame, spec.vowel, 0.0, False))
+        return frames
 
     if spec.shape_kind == "legacy_symmetric_trapezoid":
-        return [
+        frames: list[_MorphFrameWithFlags] = [
             (spec.start_frame, spec.vowel, 0.0, True),
             (spec.peak_start_frame, spec.vowel, spec.peak_value, False),
-            (spec.peak_end_frame, spec.vowel, spec.peak_value, False),
-            (spec.end_frame, spec.vowel, 0.0, False),
+            (spec.peak_end_frame, spec.vowel, peak_end_value, False),
         ]
+        if spec.closing_mid_frame is not None and spec.closing_mid_value is not None:
+            frames.append(
+                (spec.closing_mid_frame, spec.vowel, spec.closing_mid_value, False)
+            )
+        frames.append((spec.end_frame, spec.vowel, 0.0, False))
+        return frames
 
     if _is_expandable_four_point_trapezoid_spec(spec):
-        return [
+        frames: list[_MorphFrameWithFlags] = [
             (spec.start_frame, spec.vowel, 0.0, True),
             (spec.peak_start_frame, spec.vowel, spec.peak_value, False),
-            (spec.peak_end_frame, spec.vowel, spec.peak_value, False),
-            (spec.end_frame, spec.vowel, 0.0, False),
+            (spec.peak_end_frame, spec.vowel, peak_end_value, False),
         ]
+        if spec.closing_mid_frame is not None and spec.closing_mid_value is not None:
+            frames.append(
+                (spec.closing_mid_frame, spec.vowel, spec.closing_mid_value, False)
+            )
+        frames.append((spec.end_frame, spec.vowel, 0.0, False))
+        return frames
 
     safe_peak_frame = min(
         max(spec.start_frame + 1, min(spec.peak_start_frame, spec.peak_end_frame)),
@@ -1585,6 +1977,13 @@ def _normalize_closing_softness_frames(closing_softness_frames: int) -> int:
     return normalized_closing_softness_frames
 
 
+def _normalize_closing_hold_frames(closing_hold_frames: int) -> int:
+    normalized_closing_hold_frames = int(closing_hold_frames)
+    if normalized_closing_hold_frames < 0:
+        raise ValueError("closing_hold_frames must be >= 0")
+    return normalized_closing_hold_frames
+
+
 def _event_start_frame(point: VowelTimelinePoint) -> int:
     start_sec, _ = _event_bounds(point)
     return _sec_to_frame(start_sec)
@@ -1594,10 +1993,11 @@ def _next_group_start_frame(
     grouped_events: list[GroupedNearbyVowelEvents],
     current_group_index: int,
 ) -> int | None:
-    next_group_index = current_group_index + 1
-    if next_group_index >= len(grouped_events):
-        return None
-    return _event_start_frame(grouped_events[next_group_index].points[0])
+    for next_group in grouped_events[current_group_index + 1 :]:
+        next_start_frame = _first_non_zero_shape_start_frame_in_group(next_group)
+        if next_start_frame is not None:
+            return next_start_frame
+    return None
 
 
 def _resolve_softened_end_frame(
@@ -1616,6 +2016,111 @@ def _resolve_softened_end_frame(
     return max(end_frame, max(fall_start_frame + 1, softened_end_frame))
 
 
+def _resolve_closing_tail_frames(
+    *,
+    closing_start_frame: int,
+    original_end_frame: int,
+    closing_hold_frames: int,
+    closing_softness_frames: int,
+    next_shape_start_frame: int | None = None,
+) -> tuple[int, int | None, int]:
+    normalized_closing_hold_frames = _normalize_closing_hold_frames(
+        closing_hold_frames
+    )
+    normalized_closing_softness_frames = _normalize_closing_softness_frames(
+        closing_softness_frames
+    )
+    if (
+        normalized_closing_hold_frames == 0
+        and normalized_closing_softness_frames == 0
+    ):
+        return closing_start_frame, None, original_end_frame
+
+    max_end_frame = None
+    if next_shape_start_frame is not None:
+        max_end_frame = next_shape_start_frame - 1
+
+    required_tail_frames = 2 if normalized_closing_softness_frames > 0 else 1
+    hold_end_frame = closing_start_frame + normalized_closing_hold_frames
+    if max_end_frame is not None:
+        hold_end_frame = min(hold_end_frame, max_end_frame - required_tail_frames)
+        hold_end_frame = max(closing_start_frame, hold_end_frame)
+
+    if normalized_closing_softness_frames <= 0:
+        end_frame = hold_end_frame + 1
+        if max_end_frame is not None:
+            end_frame = min(end_frame, max_end_frame)
+        end_frame = max(end_frame, closing_start_frame + 1)
+        return hold_end_frame, None, end_frame
+
+    closing_mid_frame = hold_end_frame + 1
+    desired_end_frame = closing_mid_frame + normalized_closing_softness_frames
+    if max_end_frame is not None:
+        desired_end_frame = min(desired_end_frame, max_end_frame)
+    if desired_end_frame <= closing_mid_frame:
+        collapsed_end_frame = hold_end_frame + 1
+        if max_end_frame is not None:
+            collapsed_end_frame = min(collapsed_end_frame, max_end_frame)
+        collapsed_end_frame = max(collapsed_end_frame, closing_start_frame + 1)
+        return hold_end_frame, None, collapsed_end_frame
+
+    return hold_end_frame, closing_mid_frame, desired_end_frame
+
+
+def _resolve_hold_shift_frames(
+    *,
+    end_frame: int,
+    closing_hold_frames: int,
+    next_shape_start_frame: int | None = None,
+) -> int:
+    if closing_hold_frames <= 0:
+        return 0
+
+    if next_shape_start_frame is None:
+        return closing_hold_frames
+
+    return max(0, min(closing_hold_frames, (next_shape_start_frame - 1) - end_frame))
+
+
+def _apply_closing_hold_to_trapezoid_spec(
+    spec: AsymmetricTrapezoidSpec,
+    *,
+    closing_hold_frames: int,
+    next_shape_start_frame: int | None = None,
+) -> AsymmetricTrapezoidSpec:
+    normalized_closing_hold_frames = _normalize_closing_hold_frames(
+        closing_hold_frames
+    )
+    if normalized_closing_hold_frames == 0:
+        return spec
+
+    hold_end_frame, _, end_frame = _resolve_closing_tail_frames(
+        closing_start_frame=spec.peak_end_frame,
+        original_end_frame=spec.end_frame,
+        closing_hold_frames=normalized_closing_hold_frames,
+        closing_softness_frames=0,
+        next_shape_start_frame=next_shape_start_frame,
+    )
+    if hold_end_frame == spec.peak_end_frame and end_frame == spec.end_frame:
+        return spec
+
+    return AsymmetricTrapezoidSpec(
+        vowel=spec.vowel,
+        start_frame=spec.start_frame,
+        peak_start_frame=spec.peak_start_frame,
+        peak_end_frame=hold_end_frame,
+        end_frame=end_frame,
+        peak_value=spec.peak_value,
+        peak_end_value=spec.peak_value,
+        closing_mid_frame=None,
+        closing_mid_value=None,
+        source_event_index=spec.source_event_index,
+        is_ms11_2_generated=spec.is_ms11_2_generated,
+        shape_kind=spec.shape_kind,
+        protection_mode=spec.protection_mode,
+    )
+
+
 def _apply_closing_softness_to_trapezoid_spec(
     spec: AsymmetricTrapezoidSpec,
     *,
@@ -1628,26 +2133,88 @@ def _apply_closing_softness_to_trapezoid_spec(
     if normalized_closing_softness_frames == 0:
         return spec
 
-    softened_end_frame = _resolve_softened_end_frame(
-        fall_start_frame=spec.peak_end_frame,
-        end_frame=spec.end_frame,
+    hold_end_frame, closing_mid_frame, softened_end_frame = _resolve_closing_tail_frames(
+        closing_start_frame=spec.peak_end_frame,
+        original_end_frame=spec.end_frame,
+        closing_hold_frames=0,
         closing_softness_frames=normalized_closing_softness_frames,
         next_shape_start_frame=next_shape_start_frame,
     )
-    if softened_end_frame == spec.end_frame:
+    closing_mid_value = None
+    if closing_mid_frame is not None:
+        closing_mid_value = spec.peak_value * 0.7
+    if (
+        hold_end_frame == spec.peak_end_frame
+        and softened_end_frame == spec.end_frame
+        and closing_mid_frame is None
+    ):
         return spec
 
     return AsymmetricTrapezoidSpec(
         vowel=spec.vowel,
         start_frame=spec.start_frame,
         peak_start_frame=spec.peak_start_frame,
-        peak_end_frame=spec.peak_end_frame,
+        peak_end_frame=hold_end_frame,
         end_frame=softened_end_frame,
         peak_value=spec.peak_value,
+        peak_end_value=spec.peak_value,
+        closing_mid_frame=closing_mid_frame,
+        closing_mid_value=closing_mid_value,
         source_event_index=spec.source_event_index,
         is_ms11_2_generated=spec.is_ms11_2_generated,
         shape_kind=spec.shape_kind,
         protection_mode=spec.protection_mode,
+    )
+
+
+def _apply_closing_hold_to_multi_point_envelope_spec(
+    spec: MultiPointEnvelopeSpec,
+    *,
+    closing_hold_frames: int,
+    next_shape_start_frame: int | None = None,
+) -> MultiPointEnvelopeSpec:
+    normalized_closing_hold_frames = _normalize_closing_hold_frames(
+        closing_hold_frames
+    )
+    if normalized_closing_hold_frames == 0:
+        return spec
+    if len(spec.control_points) < 2:
+        return spec
+
+    final_non_zero_point = spec.control_points[-2]
+    final_end_zero_point = spec.control_points[-1]
+    hold_end_frame, _, end_frame = _resolve_closing_tail_frames(
+        closing_start_frame=final_non_zero_point.frame_no,
+        original_end_frame=final_end_zero_point.frame_no,
+        closing_hold_frames=normalized_closing_hold_frames,
+        closing_softness_frames=0,
+        next_shape_start_frame=next_shape_start_frame,
+    )
+    if hold_end_frame == final_non_zero_point.frame_no and end_frame == final_end_zero_point.frame_no:
+        return spec
+
+    hold_point = EnvelopeControlPoint(
+        frame_no=hold_end_frame,
+        value=final_non_zero_point.value,
+        point_kind="hold",
+    )
+    held_end_zero_point = EnvelopeControlPoint(
+        frame_no=end_frame,
+        value=final_end_zero_point.value,
+        point_kind=final_end_zero_point.point_kind,
+    )
+    control_points = list(spec.control_points[:-1])
+    if hold_end_frame > final_non_zero_point.frame_no:
+        control_points.append(hold_point)
+    control_points.append(held_end_zero_point)
+    return MultiPointEnvelopeSpec(
+        vowel=spec.vowel,
+        control_points=tuple(control_points),
+        source_event_indices=spec.source_event_indices,
+        shape_kind=spec.shape_kind,
+        protection_mode=spec.protection_mode,
+        is_ms11_3_generated=spec.is_ms11_3_generated,
+        event_ranges=spec.event_ranges,
     )
 
 
@@ -1667,20 +2234,38 @@ def _apply_closing_softness_to_multi_point_envelope_spec(
 
     final_non_zero_point = spec.control_points[-2]
     final_end_zero_point = spec.control_points[-1]
-    softened_end_frame = _resolve_softened_end_frame(
-        fall_start_frame=final_non_zero_point.frame_no,
-        end_frame=final_end_zero_point.frame_no,
+    hold_end_frame, closing_mid_frame, softened_end_frame = _resolve_closing_tail_frames(
+        closing_start_frame=final_non_zero_point.frame_no,
+        original_end_frame=final_end_zero_point.frame_no,
+        closing_hold_frames=0,
         closing_softness_frames=normalized_closing_softness_frames,
         next_shape_start_frame=next_shape_start_frame,
     )
-    if softened_end_frame == final_end_zero_point.frame_no:
+    if (
+        hold_end_frame == final_non_zero_point.frame_no
+        and softened_end_frame == final_end_zero_point.frame_no
+        and closing_mid_frame is None
+    ):
         return spec
 
-    softened_control_points = list(spec.control_points)
-    softened_control_points[-1] = EnvelopeControlPoint(
+    softened_control_points = list(spec.control_points[:-1])
+    if (
+        closing_mid_frame is not None
+        and closing_mid_frame > final_non_zero_point.frame_no
+    ):
+        softened_control_points.append(
+            EnvelopeControlPoint(
+                frame_no=closing_mid_frame,
+                value=final_non_zero_point.value * 0.7,
+                point_kind="slope_mid",
+            )
+        )
+    softened_control_points.append(
+        EnvelopeControlPoint(
         frame_no=softened_end_frame,
         value=final_end_zero_point.value,
         point_kind=final_end_zero_point.point_kind,
+        )
     )
     return MultiPointEnvelopeSpec(
         vowel=spec.vowel,
@@ -2308,6 +2893,140 @@ def _point_peak_value(point: VowelTimelinePoint) -> float:
     if point.peak_value is not None:
         return float(point.peak_value)
     return float(point.value)
+
+
+def _with_resolved_peak_value(point: VowelTimelinePoint, peak_value: float) -> VowelTimelinePoint:
+    return VowelTimelinePoint(
+        time_sec=point.time_sec,
+        vowel=point.vowel,
+        value=peak_value,
+        peak_value=peak_value,
+        duration_sec=point.duration_sec,
+        start_sec=point.start_sec,
+        end_sec=point.end_sec,
+    )
+
+
+def _observation_for_source_event_index(
+    observations: Sequence[ObservationLike] | None,
+    source_event_index: int | None,
+) -> ObservationLike | None:
+    if observations is None or source_event_index is None:
+        return None
+    if source_event_index < 0 or source_event_index >= len(observations):
+        return None
+    return observations[source_event_index]
+
+
+def _resolve_effective_peak_value(
+    point: VowelTimelinePoint,
+    *,
+    source_event_index: int | None = None,
+    observations: Sequence[ObservationLike] | None = None,
+) -> float:
+    point_peak_value = _point_peak_value(point)
+    if point_peak_value > MORPH_FRAME_OPEN_EPSILON:
+        return point_peak_value
+    observation = _observation_for_source_event_index(observations, source_event_index)
+    if observation is None:
+        return 0.0
+    if getattr(observation, "is_bridgeable_cross_vowel_transition_candidate", False):
+        return CONTINUITY_FLOOR_MORPH_VALUE
+    if getattr(observation, "is_cross_vowel_zero_run_continuity_floor_candidate", False):
+        return CONTINUITY_FLOOR_MORPH_VALUE
+    if getattr(observation, "is_same_vowel_burst_candidate", False):
+        return SAME_VOWEL_BURST_FLOOR_MORPH_VALUE
+    return 0.0
+
+
+def _resolved_peak_end_value(spec: AsymmetricTrapezoidSpec) -> float:
+    peak_end_value = spec.peak_value if spec.peak_end_value is None else float(spec.peak_end_value)
+    return max(0.0, min(spec.peak_value, peak_end_value))
+
+
+def _resolve_peak_end_value_from_observation(
+    spec: AsymmetricTrapezoidSpec,
+    *,
+    source_event_index: int | None = None,
+    observations: Sequence[ObservationLike] | None = None,
+) -> float:
+    observation = _observation_for_source_event_index(observations, source_event_index)
+    if observation is None:
+        return spec.peak_value
+
+    local_peak = getattr(observation, "local_peak", None)
+    times_sec = tuple(float(value) for value in getattr(observation, "rms_window_times_sec", ()))
+    values = tuple(float(value) for value in getattr(observation, "rms_window_values", ()))
+    if (
+        local_peak is None
+        or float(local_peak) <= 0.0
+        or not times_sec
+        or not values
+        or len(times_sec) != len(values)
+    ):
+        return spec.peak_value
+
+    target_sec = spec.peak_end_frame / VMD_FPS
+    forward_indices = [
+        index for index, time_sec in enumerate(times_sec)
+        if time_sec >= target_sec
+    ]
+    if forward_indices:
+        selected_index = min(forward_indices, key=lambda index: times_sec[index])
+    else:
+        selected_index = len(times_sec) - 1
+
+    selected_value = max(0.0, values[selected_index])
+    if selected_value <= 0.0:
+        return spec.peak_value
+
+    normalized_ratio = min(1.0, selected_value / float(local_peak))
+    decayed_value = round(spec.peak_value * normalized_ratio, 4)
+    return max(MORPH_FRAME_OPEN_EPSILON, min(spec.peak_value, decayed_value))
+
+
+def _build_adjusted_trapezoid_spec(
+    point: VowelTimelinePoint,
+    *,
+    source_event_index: int | None = None,
+    observations: Sequence[ObservationLike] | None = None,
+) -> AsymmetricTrapezoidSpec | None:
+    effective_peak_value = _resolve_effective_peak_value(
+        point,
+        source_event_index=source_event_index,
+        observations=observations,
+    )
+    if effective_peak_value <= MORPH_FRAME_OPEN_EPSILON:
+        return None
+
+    spec = _build_interval_trapezoid_spec(
+        point,
+        source_event_index=source_event_index,
+        peak_value_override=effective_peak_value,
+    )
+    if spec is None:
+        return None
+
+    peak_end_value = _resolve_peak_end_value_from_observation(
+        spec,
+        source_event_index=source_event_index,
+        observations=observations,
+    )
+    return AsymmetricTrapezoidSpec(
+        vowel=spec.vowel,
+        start_frame=spec.start_frame,
+        peak_start_frame=spec.peak_start_frame,
+        peak_end_frame=spec.peak_end_frame,
+        end_frame=spec.end_frame,
+        peak_value=spec.peak_value,
+        peak_end_value=peak_end_value,
+        closing_mid_frame=spec.closing_mid_frame,
+        closing_mid_value=spec.closing_mid_value,
+        source_event_index=spec.source_event_index,
+        is_ms11_2_generated=spec.is_ms11_2_generated,
+        shape_kind=spec.shape_kind,
+        protection_mode=spec.protection_mode,
+    )
 
 
 def _finalize_morph_value(value: float) -> float:

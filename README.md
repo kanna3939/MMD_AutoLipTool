@@ -2,7 +2,7 @@
 
 ## Version
 
-Ver 0.3.6.4
+Ver 0.3.6.5
 
 ## 概要
 
@@ -78,6 +78,14 @@ UTF-8 のテキスト 1 ファイルと PCM WAV 1 ファイルを入力し、母
 - MS7 フェーズ7〜8として、修正範囲を `src/gui/main_window.py` の局所修正に固定し、完了判定観点を最終整理
 
 ## 直近更新（2026-03-21）
+
+## 直近更新（2026-04-01 / Ver 0.3.6.5）
+
+- MS11-9D から MS11-9D-6 までの speech-internal lip-motion 改善を反映
+- same-vowel micro-gap bridging、cross-vowel transition bridging、zero-run span bridging を導入
+- `peak_end_value` による top-end shaping、cross-vowel continuity floor、same-vowel burst smoothing を追加
+- Preview / export は `timeline + observations` を正本として同一 semantics を維持
+- `docs/MS11-9_Remaining_Issues.md` を追加し、MS11-9 系の残課題と次段候補を整理
 
 ## 直近更新（2026-04-01）
 

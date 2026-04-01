@@ -5,14 +5,14 @@
 - 文書名: `docs/Specification_Prompt_v3.md`
 - 作成日: 2026-03-20
 - 最終更新日: 2026-04-01
-- 対応リリース: `Ver 0.3.6.4`
+- 対応リリース: `Ver 0.3.6.5`
 - 対象リポジトリ: `MMD_AutoLipTool`
 - 旧版: `docs/Specification_Prompt_v2.md`（本書で置き換え）
 - 文書方針: v2 の意図を引き継ぎつつ、現行実装・確定済み追加仕様・責務分割方針に合わせて更新する
 
-### 0.1 実装同期注記（2026-04-01 / MS11-8 実装反映）
+### 0.1 実装同期注記（2026-04-01 / Ver 0.3.6.5 同期）
 
-- 本書は v3 の目標仕様を含むが、2026-04-01 時点でコード反映済みなのは MS8A / MS8B / MS8C / MS8D-2 / MS9 / MS9-2 / MS10 / MS11-1 / MS11-2 / MS11-2_FIX01 / MS11-2_FIX02 / MS11-3 / MS11-4 / MS11-5 / MS11-6、MS11-7 の文書整備・最小テスト反映、および MS11-8 の writer 主体実装までとする。
+- 本書は v3 の目標仕様を含むが、2026-04-01 時点でコード反映済みなのは MS8A / MS8B / MS8C / MS8D-2 / MS9 / MS9-2 / MS10 / MS11-1 / MS11-2 / MS11-2_FIX01 / MS11-2_FIX02 / MS11-3 / MS11-4 / MS11-5 / MS11-6、MS11-7 の文書整備・最小テスト反映、MS11-8、MS11-9、MS11-9B、MS11-9C、および MS11-9D から MS11-9D-6 までの speech-internal lip-motion 改善までとする。
 - 反映済み（コード実体）:
   - 上部操作列 `OperationPanel`・最下部 `StatusPanel` を含む GUI 再構成
   - `PreviewArea` / `preview_transform.py` による 5 段固定 Preview 表示
@@ -66,12 +66,29 @@
   - 後続 shape 開始直前での clamp と、延長後 shape に追従した normalization metadata の再整合
   - `pipeline.py` から writer への最小 `closing_softness_frames` handoff
   - writer 系テスト、および `tests/test_pipeline_and_vmd.py` における MS11-8 回帰確認の追加
+  - `preview_transform.py` に `PreviewControlPoint` と `shape_kind` / `control_points` を追加し、`rows -> segments` フローを維持したまま shape-aware な Preview 契約へ拡張
+  - writer 側 helper を再利用した、MS11-2 asymmetric trapezoid / legacy triangle / legacy symmetric trapezoid / MS11-3 multi-point envelope / MS11-8 closing softness の Preview shape 再構成
+  - shape semantics の frame basis 計算と、Preview 描画用 seconds basis への再変換
+  - `preview_area.py` における、単純矩形塗りつぶしから polygon / path ベース shape 描画への更新
+  - viewport clipping 時の control point 補間と、shared viewport / playback cursor / waveform plot area rect 基準整合の維持
+  - `tests/test_preview_transform.py` における、trapezoid / legacy 区別 / multi-point / closing softness / mixed case clamp の確認追加
+  - GUI からの `閉口スムース` 入力導線、frame 単位の settings 保存、Preview / export への単一路線 handoff（MS11-9B）
+  - GUI からの `開口保持` / `Lip Hold` 入力導線、frame 単位の settings 保存、Preview / export への単一路線 handoff（MS11-9C）
+  - `closing_hold_frames` による final closing の hold、および最後の non-zero 値の 70% midpoint を経由した zero 到達 shape
+  - `peak == 0.0` 相当イベントを clamp blocker から除外し、次の有効 non-zero shape 開始直前までを伸長上限とする clamp 規則
+  - `tests/test_vmd_writer_intervals.py` / `tests/test_preview_transform.py` における、hold / 70% midpoint / zero-peak clamp 回帰の追加
+  - `observations` を正本とした same-vowel micro-gap bridging、cross-vowel transition bridging、short zero-run span bridging
+  - `span_start_index` / `span_end_index` を用いた short span 解決と、same-vowel / cross-vowel の speech-internal bridge の分離
+  - `AsymmetricTrapezoidSpec.peak_end_value` による 3 点目の decayed top-end shaping
+  - zero-peak cross-vowel case と short zero-run cross-vowel span に対する conservative な continuity floor
+  - same-vowel short zero / low-positive short trapezoid に対する burst candidate 識別と smoothing
+  - `rms_window_times_sec` / `rms_window_values` を利用した top-end shaping の writer / Preview 整合
 - 未反映（後続対象）:
   - より高度な平滑化と出力仕様全体の再設計
-  - GUI / Preview の multi-point 表示対応
-  - GUI からの closing softness 入力導線
   - 実データ観測を踏まえた RMS 定数の必要最小限の再調整
   - MS11-7 として扱う、実データ観測結果の実投入と RMS 定数再調整要否の最終判断確定
+  - MS11-9 系で残っている residual same-vowel burst / residual cross-vowel full closure / observation 契約整理
+- MS11-9 系の残課題整理は `docs/MS11-9_Remaining_Issues.md` を参照する。
 - MS8D-2 の改訂要件差分は `docs/MS8D-2_Requirements_and_Spec_Update.md` を参照する。
 
 ---
@@ -670,7 +687,7 @@
   * 現行台形ベースから変形台形へ拡張
   * 音量変化との同期
   * 同一母音連続時の上辺複数点対応
-* MS11 は MS11-4 まで反映済みとし、残課題は GUI / Preview の multi-point 表示対応、実データ観測を踏まえた RMS 定数の必要最小限の再調整、MS11-5 の観測支援拡張、より高度な平滑化とする
+* MS11 は MS11-9C まで反映済みとし、残課題は実データ観測を踏まえた RMS 定数の必要最小限の再調整、より高度な平滑化、および無音区間の扱いに関する必要最小限の再評価とする
 * 再生詳細機能（スクラブ / 手動シーク / クリック移動）の仕様化
 * ステータス表示内容の最終文言調整
 * 英語表記短文化の最終調整

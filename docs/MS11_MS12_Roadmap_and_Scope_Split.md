@@ -6,7 +6,7 @@
 - Created: 2026-03-30
 - Last Updated: 2026-04-01
 - Target Repository: `MMD_AutoLipTool`
-- Baseline Version: `Ver 0.3.6.4`
+- Baseline Version: `Ver 0.3.6.5`
 - Purpose:
   - Record the agreed milestone split after MS11-5.
   - Clarify which remaining items belong to MS11 and which belong to MS12.
@@ -30,7 +30,7 @@ The following are already completed and should be treated as fixed baseline:
 - writer.py local fixes after MS11-3 completed
 - MS11-4 completed
 - MS11-5 first-stage implementation completed
-- `Ver 0.3.6.4` committed
+- `Ver 0.3.6.5` synchronized as the current documentation baseline
 
 Current understanding of the project state:
 
@@ -38,7 +38,7 @@ Current understanding of the project state:
 - Main remaining work on the MS11 side is:
   - MS11-7 real-data observation review execution
   - RMS retuning necessity judgment finalization
-  - remaining output-quality expansion that still belongs to MS11
+  - residual MS11-9 output-quality issues after the 9D refinement chain
 - GUI responsiveness / splash behavior should be handled separately from MS11.
 - Packaging / distribution dependency handling should also be treated separately from MS11.
 
@@ -100,7 +100,7 @@ Important rule:
 
 ---
 
-## 4. MS11 Roadmap After Ver 0.3.6.4
+## 4. MS11 Roadmap After Ver 0.3.6.5
 
 ## MS11-6
 ### Name
@@ -239,6 +239,21 @@ This is treated as MS11 because it is a representation-alignment task for output
 - Preview representation is closer to actual writer-side shape semantics
 - Existing playback / viewport sync remains intact
 
+### Status Note (2026-04-01)
+- Treated as implemented in the current workspace.
+- `src/gui/preview_transform.py` now keeps the existing `rows -> segments` flow while extending `PreviewSegment` with minimal shape data (`shape_kind`, `control_points`).
+- shape semantics are resolved on the same 30fps frame basis as writer-side logic, then converted back to seconds for Preview rendering.
+- covered Preview targets are:
+  - MS11-2 asymmetric trapezoid
+  - legacy triangle / legacy symmetric trapezoid
+  - MS11-3 representative multi-point envelope cases
+  - MS11-8 final-closing-only softness extension with clamp before the following shape
+- `src/gui/preview_area.py` now renders polygon/path-based shapes instead of simple filled rectangles while preserving:
+  - shared viewport sync
+  - playback cursor sync
+  - waveform plot area rect based horizontal alignment
+- `src/gui/main_window.py` remains on the existing minimum handoff path without additional Preview-specific state wiring.
+
 ---
 
 ## MS11-10
@@ -262,6 +277,275 @@ Synchronize the final MS11 state across code assumptions, documents, and milesto
 ### Completion image
 - MS11 end state is documented consistently
 - Remaining GUI-only work is clearly separated into MS12
+
+---
+
+## MS11-9B
+### Name
+Closing Softness GUI exposure and preview/output handoff alignment
+
+### Goal
+Expose `closing_softness_frames` to the user in GUI and keep Preview reflection and export handoff aligned through the same current-value path.
+
+### Main target
+- `src/gui/main_window.py`
+- `src/gui/central_panels.py`
+- `src/gui/settings_store.py`
+- `src/gui/i18n_strings.py`
+
+### Main work
+- Add `閉口スムース` / `Closing Smooth` next to morph max controls
+- Keep the value as `int >= 0`, default `0`, in frame units
+- Always show the unit label to the right of the input
+- Update Preview without reanalysis or `current_timing_plan` invalidation
+- Pass the same current value to `generate_vmd_from_text_wav(..., closing_softness_frames=...)`
+- Keep processing-time locking behavior consistent with or stricter than morph max controls
+
+### Important note
+This remains in MS11 because it is GUI exposure for output-shape semantics, not a generic MS12 usability task.
+
+### Completion image
+- GUI can edit closing softness directly
+- Preview and export use the same current frame-count value
+- `softness=0` remains compatible
+- MS11-8 final-closing-only semantics remain unchanged
+
+---
+
+## MS11-9C
+### Name
+Lip Hold GUI exposure and final-closing hold semantics alignment
+
+### Goal
+Introduce `closing_hold_frames` as a separate parameter so that long silent intervals do not force the mouth to start closing too early, while keeping Preview and export semantics aligned.
+
+### Main target
+- `src/vmd_writer/writer.py`
+- `src/gui/preview_transform.py`
+- `src/gui/main_window.py`
+- `src/gui/central_panels.py`
+- `src/gui/settings_store.py`
+- `src/gui/i18n_strings.py`
+
+### Main work
+- Add a separate hold parameter for final closing
+- Expose it in GUI as `開口保持` / `Lip Hold`
+- Place it between morph max and closing smooth controls
+- Keep `closing_softness_frames` semantics unchanged
+- Apply hold only to shapes with a valid final closing
+- Keep clamp-before-next-shape behavior
+- Keep Preview and writer family boundaries aligned
+
+### Important note
+This remains in MS11 because it changes output-shape timing semantics rather than generic GUI behavior.
+
+### Completion image
+- Long silence can keep the mouth open slightly longer before closing
+- Hold and softness are controlled independently
+- Preview and export remain consistent
+
+### Status Note (2026-04-01)
+- Treated as implemented in the current workspace.
+- GUI now exposes `開口保持` / `Lip Hold` between morph max and closing smooth, with frame-unit persistence and the same current-value path used by Preview and export.
+- `closing_hold_frames` and `closing_softness_frames` are now applied as:
+  - hold the final non-zero value for `closing_hold_frames`
+  - add a 70% midpoint based on the last non-zero value
+  - descend to zero over `closing_softness_frames`
+- covered families are:
+  - MS11-2 asymmetric trapezoid
+  - legacy symmetric trapezoid
+  - legacy triangle
+  - peak fallback
+  - MS11-3 multi-point envelope
+- clamp behavior is updated so that:
+  - `peak == 0.0` equivalent events do not become clamp blockers
+  - the extension limit is the frame immediately before the next valid non-zero shape start
+  - Preview and export share the same family boundary and clamp rule
+- current implementation stays within MS11 scope and keeps the existing immediate Preview refresh path without WAV reanalysis or Whisper rerun.
+
+---
+
+## MS11-9D
+### Name
+speech-internal micro-gap bridging
+
+### Goal
+Reduce unnatural full mouth closure caused by very narrow zero segments during speech, without redesigning silence handling or mixing this work with final-closing control.
+
+### Main target
+- `src/core/pipeline.py`
+- `src/vmd_writer/writer.py`
+- `src/gui/preview_transform.py`
+- minimum Preview handoff in `src/gui/main_window.py`
+
+### Main work
+- Keep `timeline` as the canonical writer input
+- Use `observations` as the source of truth for same-vowel micro-gap bridge candidates
+- Limit the initial scope to same-vowel cases only
+- Limit the initial scope to micro-gaps up to 1 frame
+- Limit candidate reasons to:
+  - `no_peak_in_window`
+  - `below_rel_threshold`
+- Do not directly overwrite `timeline` peak values
+- Keep Preview and export on the same semantics
+- Do not add a new GUI control in this step
+
+### Important note
+This remains in MS11 because it adjusts speech-internal output semantics rather than generic GUI responsiveness or packaging behavior.
+
+This step does not cover:
+
+- final closing redesign
+- full silence-interval redesign
+- MS12 GUI responsiveness / startup / packaging work
+
+### Completion image
+- bridgeable same-vowel zero events are detected in pipeline-side observation data
+- writer treats those candidates as bridge-only context rather than independent shape peaks
+- Preview uses the same `timeline + observations` semantics as export
+- paths without `observations` remain backward compatible
+
+### Status Note (2026-04-01)
+- Treated as implemented in the current workspace as the initial MS11-9D scope.
+- `PeakValueObservation` is minimally extended so that same-vowel micro-gap bridge candidates can be marked in `observations`.
+- The adopted policy is:
+  - source of truth is `observations`
+  - `timeline` remains unchanged
+  - no separate bridge metadata contract is introduced in this initial scope
+- The current implemented scope is intentionally narrow:
+  - same-vowel only
+  - maximum gap width of 1 frame
+  - candidate reasons limited to `no_peak_in_window` and `below_rel_threshold`
+  - no GUI exposure
+- `src/vmd_writer/writer.py` and `src/gui/preview_transform.py` both use `timeline + observations` and event-index correspondence to suppress bridgeable zero events from independent grouping input.
+- cross-vowel bridging, wider-gap handling, RMS retuning, and full silence redesign remain out of scope.
+
+---
+
+## MS11-9D-2
+### Name
+cross-vowel transition bridging
+
+### Goal
+Reduce unnatural full mouth closure at cross-vowel transitions by allowing a minimal overlap between the previous vowel fall and the next vowel rise, without redesigning silence handling or final-closing control.
+
+### Main target
+- `src/core/pipeline.py`
+- `src/vmd_writer/writer.py`
+- `src/gui/preview_transform.py`
+- minimum Preview handoff in `src/gui/main_window.py`
+
+### Main work
+- Keep `timeline` as the canonical writer input
+- Continue using `observations` as the source of truth for bridge candidates
+- Add cross-vowel transition candidates as a separate rule from same-vowel micro-gap bridging
+- Limit the initial scope to micro-gaps up to 1 frame
+- Limit candidate reasons to:
+  - `no_peak_in_window`
+  - `below_rel_threshold`
+- Do not directly overwrite `timeline` peak values
+- Keep Preview and export on the same semantics
+- Do not add a new GUI control in this step
+
+### Important note
+This remains in MS11 because it adjusts speech-internal transition semantics rather than generic GUI responsiveness or packaging behavior.
+
+This step does not cover:
+
+- same-vowel bridge redesign
+- final closing redesign
+- full silence-interval redesign
+- MS12 GUI responsiveness / startup / packaging work
+
+### Completion image
+- bridgeable cross-vowel zero events are detected in pipeline-side observation data
+- writer reconstructs a minimal transition overlap instead of forcing a full closure before the next vowel opens
+- Preview uses the same `timeline + observations` semantics as export
+- paths without `observations` remain backward compatible
+
+### Status Note (2026-04-01)
+- Treated as implemented in the current workspace as the first cross-vowel refinement step after MS11-9D.
+- `PeakValueObservation` is extended so that cross-vowel transition candidates can be marked separately from same-vowel micro-gap candidates.
+- The implemented scope remains intentionally narrow:
+  - cross-vowel only
+  - maximum gap width of 1 frame
+  - candidate reasons limited to `no_peak_in_window` and `below_rel_threshold`
+  - no GUI exposure
+- writer and Preview reconstruct a minimal overlap so that the next vowel rise can begin before the previous vowel fully closes.
+- wider zero-run handling and residual zero-peak continuity are handled by later 9D follow-up steps.
+
+---
+
+## MS11-9D-3
+### Name
+zero-run span bridging refinement
+
+### Goal
+Extend speech-internal bridging from single zero events to short zero-run spans, especially for real-data cases such as `sample_input2`.
+
+### Status Note (2026-04-01)
+- Treated as implemented in the current workspace.
+- The adopted policy is:
+  - short zero-run spans up to `2 event / 2 frame`
+  - span boundaries stored in `observations`
+  - same-vowel and cross-vowel are both resolved on span basis
+  - `timeline` remains unchanged
+- same-vowel span handling is extended toward multi-valley envelope construction.
+- cross-vowel span handling remains conservative and keeps Preview / export semantics aligned.
+
+---
+
+## MS11-9D-4
+### Name
+top-end shaping and continuity-floor supplement
+
+### Goal
+Reduce unnatural flat-top hold and speech-internal full closure that remain after the first span-based bridging steps.
+
+### Status Note (2026-04-01)
+- Treated as implemented in the current workspace.
+- `AsymmetricTrapezoidSpec` is extended with `peak_end_value`, allowing the third point to use a decayed value instead of inheriting the second-point morph value unchanged.
+- The current implementation uses RMS-derived top-end shaping while preserving backward-compatible behavior when explicit `peak_end_value` is not supplied.
+- a conservative `continuity floor` is introduced for selected zero-peak cross-vowel cases and zero-run spans.
+- this step intentionally does not rescue every zero-peak case.
+
+---
+
+## MS11-9D-5
+### Name
+cross-vowel zero-run continuity-floor refinement
+
+### Goal
+Improve residual speech-internal cross-vowel full closures that remained after MS11-9D-4.
+
+### Status Note (2026-04-01)
+- Treated as implemented in the current workspace.
+- short cross-vowel zero-run spans up to `2 event / 2 frame` can now be classified separately as continuity-floor candidates in `observations`.
+- when overlap and continuity floor coexist, overlap remains the primary rule and floor stays a supplemental fallback.
+- `peak_end_value` selection is refined to prefer the first available RMS sample at or after `peak_end_frame`.
+- the scope remains conservative and does not broaden into full zero-peak rescue.
+
+---
+
+## MS11-9D-6
+### Name
+same-vowel burst smoothing
+
+### Goal
+Reduce residual sharp open-close motion inside same-vowel runs, including short zero and low-positive burst-like re-segmentation.
+
+### Status Note (2026-04-01)
+- Treated as implemented in the current workspace.
+- same-vowel burst candidates are now identified in `observations` for:
+  - short zero
+  - short zero-run
+  - low-positive short trapezoid bursts
+- the current conservative limits are:
+  - maximum width `2 event / 2 frame`
+  - low-positive threshold `0.2`
+  - same-vowel floor `0.1`
+- writer and Preview both route these candidates into same-vowel continuity handling rather than leaving them as isolated short closures.
+- remaining residual quality issues are tracked separately in `docs/MS11-9_Remaining_Issues.md`.
 
 ---
 
@@ -431,7 +715,7 @@ The packaging goal is:
 
 ## 7. Recommended Execution Order
 
-The recommended order after `Ver 0.3.6.4` is:
+The recommended order after `Ver 0.3.6.5` is:
 
 1. MS11-7
 2. MS11-8

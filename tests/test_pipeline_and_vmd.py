@@ -268,7 +268,7 @@ class PipelineAndVmdTests(unittest.TestCase):
             self.assertEqual(result.observations, provided_observations)
             self.assertTrue(result.output_path.exists())
 
-    def test_generate_vmd_passes_closing_softness_frames_to_writer(self) -> None:
+    def test_generate_vmd_passes_closing_shape_parameters_to_writer(self) -> None:
         with workspace_tempdir("pipeline_softness_handoff") as tmp:
             text_path = tmp / "input.txt"
             wav_path = tmp / "voice.wav"
@@ -310,13 +310,22 @@ class PipelineAndVmdTests(unittest.TestCase):
                     wav_path=wav_path,
                     output_path=out_path,
                     timing_plan=provided_plan,
+                    closing_hold_frames=4,
                     closing_softness_frames=3,
                 )
 
             mocked_write_morph_vmd.assert_called_once()
             self.assertEqual(
+                mocked_write_morph_vmd.call_args.kwargs["closing_hold_frames"],
+                4,
+            )
+            self.assertEqual(
                 mocked_write_morph_vmd.call_args.kwargs["closing_softness_frames"],
                 3,
+            )
+            self.assertEqual(
+                mocked_write_morph_vmd.call_args.kwargs["observations"],
+                provided_plan.observations,
             )
 
 

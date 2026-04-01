@@ -1,5 +1,187 @@
 # Version Control Log
 
+## Entry 2026-04-01 / Session: release-v0365-ms11-9-sync
+
+- Date: 2026-04-01
+- Session: release-v0365-ms11-9-sync
+- Summary:
+  - MS11-9 系の拡張実装と残課題整理を、`Ver 0.3.6.5` として関連ドキュメントへ同期した。
+  - MS11-9D から MS11-9D-6 までの speech-internal lip-motion 改善を、現行 workspace の反映済み到達として整理した。
+  - MS11-9 系の残課題は `docs/MS11-9_Remaining_Issues.md` を正本として切り出した。
+- Modified Files:
+  - `README.md`: 版数表記を `Ver 0.3.6.5` に更新し、MS11-9D〜MS11-9D-6 と残課題整理の直近更新を追記。
+  - `pyproject.toml`: プロジェクトバージョンを `0.3.6.5` に更新。
+  - `docs/Specification_Prompt_v3.md`: 対応リリースを `Ver 0.3.6.5` に更新し、MS11-9D〜MS11-9D-6 の反映状態と残課題参照先を同期。
+  - `docs/MS11_MS12_Roadmap_and_Scope_Split.md`: Baseline Version と roadmap 見出しを `Ver 0.3.6.5` 基準へ更新。
+  - `docs/MS11-9_Remaining_Issues.md`: MS11-9 系残課題の正本として追加済み文書を版同期対象へ含めた。
+  - `docs/repo_milestone.md`: `Ver 0.3.6.5` 同期メモを追記。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - 今回は文書同期のみで、追加のコード変更やテスト変更は行っていない。
+  - 実装の細部は既存コード差分と各 `docs/MS11-9D*_Implementation_Plan.md` を正本とする。
+- Verification:
+  - `rg -n "Ver 0.3.6.5|0.3.6.5|MS11-9D-6|MS11-9_Remaining_Issues" README.md pyproject.toml docs/Specification_Prompt_v3.md docs/MS11_MS12_Roadmap_and_Scope_Split.md docs/MS11-9_Remaining_Issues.md docs/repo_milestone.md docs/Version_Control.md`
+
+## Entry 2026-04-01 / Session: ms11-9-doc-wrapup-and-sync
+
+- Date: 2026-04-01
+- Session: ms11-9-doc-wrapup-and-sync
+- Summary:
+  - MS11-9 系を一度区切るため、残課題の正本ドキュメントを新規追加した。
+  - MS11-9D 以降の refinement chain（9D / 9D-2 / 9D-3 / 9D-4 / 9D-5 / 9D-6）の実装到達状態を roadmap / milestone / version log に同期した。
+  - same-vowel / cross-vowel の speech-internal bridge、zero-run span、top-end shaping、continuity floor、same-vowel burst smoothing を反映済み前提として整理し、残課題を別文書へ切り出した。
+- Modified Files:
+  - `docs/MS11-9_Remaining_Issues.md`: MS11-9 系の残課題正本を新規追加。
+  - `docs/MS11_MS12_Roadmap_and_Scope_Split.md`: MS11-9D-2〜MS11-9D-6 の status note と残課題参照先を同期。
+  - `docs/repo_milestone.md`: MS11-9 残課題整理・文書同期メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - `docs/MS11-9_Remaining_Issues.md`
+- Notes:
+  - 今回は文書整理のみで、追加のコード変更やテスト変更は行っていない。
+  - 実装計画の正本は既存の `docs/MS11-9D*_Implementation_Plan.md` 群を参照する。
+  - 実装後に残った見た目課題・暫定閾値・observation 契約の混雑は `docs/MS11-9_Remaining_Issues.md` を正本とする。
+- Verification:
+  - `rg -n "MS11-9D-3|MS11-9D-4|MS11-9D-5|MS11-9D-6|Remaining_Issues" docs/MS11_MS12_Roadmap_and_Scope_Split.md docs/repo_milestone.md docs/Version_Control.md docs/MS11-9_Remaining_Issues.md`
+
+## Entry 2026-04-01 / Session: ms11-9d-2-doc-prep
+
+- Date: 2026-04-01
+- Session: ms11-9d-2-doc-prep
+- Summary:
+  - MS11-9D-2 Cross-vowel transition bridging の実装計画を文書化した。
+  - cross-vowel を same-vowel の単純拡張として扱わず、`timeline` 非改変 / `observations` 正本 / `1 frame max` / `no_peak_in_window` と `below_rel_threshold` 限定の transition bridging として整理した。
+  - Preview / export 整合、GUI 非追加、same-vowel と final closing からの責務分離、最低限のテスト観点を明文化した。
+- Modified Files:
+  - `docs/MS11-9D-2_Implementation_Plan.md`: MS11-9D-2 の実装計画書を新規追加。
+  - `docs/MS11_MS12_Roadmap_and_Scope_Split.md`: MS11-9D-2 の位置づけと planned status note を追加。
+  - `docs/repo_milestone.md`: MS11-9D-2 実装前整理メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - `docs/MS11-9D-2_Implementation_Plan.md`
+- Notes:
+  - この段階では実装は行っていない。
+  - cross-vowel transition の具体 overlap 配置と observation 契約の細部は、実装時の最終固定事項として残している。
+- Verification:
+  - `rg -n "MS11-9D-2|cross-vowel transition bridging|observations|below_rel_threshold|1 frame" docs/MS11-9D-2_Implementation_Plan.md docs/MS11_MS12_Roadmap_and_Scope_Split.md docs/repo_milestone.md docs/Version_Control.md`
+
+## Entry 2026-04-01 / Session: ms11-9d-doc-sync
+
+- Date: 2026-04-01
+- Session: ms11-9d-doc-sync
+- Summary:
+  - MS11-9D 初回実装の到達状態を、roadmap / milestone / version log へ同期した。
+  - same-vowel micro-gap bridging の初回スコープを、`observations` 正本 / `timeline` 非改変 / `1 frame max` / `no_peak_in_window` と `below_rel_threshold` 限定として文書へ固定した。
+  - cross-vowel、広い gap、GUI 追加、RMS 再調整、無音全体再設計は引き続きスコープ外として整理した。
+- Modified Files:
+  - `docs/MS11_MS12_Roadmap_and_Scope_Split.md`: MS11-9D を追加し、初回実装済み status note とスコープ境界を追記。
+  - `docs/repo_milestone.md`: MS11-9D 初回実装反映メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - 今回はドキュメント同期のみで、追加のコード変更やテスト変更は行っていない。
+  - 実装の正本は既存のコード差分と `docs/MS11-9D_Implementation_Plan.md` を参照する。
+- Verification:
+  - `rg -n "MS11-9D|micro-gap bridging|observations|below_rel_threshold|same-vowel only" docs/MS11_MS12_Roadmap_and_Scope_Split.md docs/repo_milestone.md docs/Version_Control.md docs/MS11-9D_Implementation_Plan.md`
+
+## Entry 2026-04-01 / Session: ms11-9c-doc-sync
+
+- Date: 2026-04-01
+- Session: ms11-9c-doc-sync
+- Summary:
+  - MS11-9C の実装到達状態を、主要ドキュメントへ同期した。
+  - `開口保持` / `Lip Hold` の GUI 導線、`hold -> 70% midpoint -> zero` の final closing semantics、`peak == 0.0` 相当イベントを clamp blocker から除外する方針を文書へ反映した。
+  - `sample_input2` 実データ観測で確認された zero-peak blocker 問題と、その修正済み clamp ルールを MS11-9C の現在地として整理した。
+- Modified Files:
+  - `docs/MS11-9C_Implementation_Plan.md`: clamp 判定固定方針と zero-peak blocker 除外を追記し、実装済み前提へ更新。
+  - `docs/MS11_MS12_Roadmap_and_Scope_Split.md`: MS11-9C status note を追加し、GUI / writer / Preview / clamp の実装到達状態を同期。
+  - `docs/Specification_Prompt_v3.md`: 実装同期注記を MS11-9C 反映状態へ更新し、未反映項目から MS11-9B / MS11-9C を削除。
+  - `docs/repo_milestone.md`: MS11-9C 実装反映メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - 今回はドキュメント同期のみで、追加のコード変更は行っていない。
+  - 無音判定ロジック全体の再設計や RMS 再調整は引き続き対象外として維持した。
+- Verification:
+  - `rg -n "MS11-9C|開口保持|Lip Hold|zero-peak|clamp blocker|70% midpoint" docs/MS11-9C_Implementation_Plan.md docs/MS11_MS12_Roadmap_and_Scope_Split.md docs/Specification_Prompt_v3.md docs/repo_milestone.md docs/Version_Control.md`
+
+---
+
+## Entry 2026-04-01 / Session: ms11-9c-doc-prep
+
+- Date: 2026-04-01
+- Session: ms11-9c-doc-prep
+- Summary:
+  - MS11-9C Lip Hold GUI exposure and final-closing hold semantics alignment の実装計画を文書化した。
+  - `closing_softness_frames` の意味を維持したまま、新規 `closing_hold_frames` を追加する前提、対象 family、適用順、GUI / Preview / export 整合方針を明文化した。
+  - GUI 名称を `開口保持` / `Lip Hold` に固定し、UI 並び順を `モーフ最大値` → `開口保持` → `閉口スムース` に更新した。
+- Modified Files:
+  - `docs/MS11-9C_Implementation_Plan.md`: MS11-9C の実装計画書を新規追加。
+  - `docs/MS11_MS12_Roadmap_and_Scope_Split.md`: MS11-9C の位置づけと完了像を追加。
+  - `docs/Specification_Prompt_v3.md`: 未反映項目へ MS11-9C を追加。
+  - `docs/repo_milestone.md`: MS11-9C 実装前整理メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - `docs/MS11-9C_Implementation_Plan.md`
+- Notes:
+  - この段階では実装は行っていない。
+  - `closing_softness_frames` の既存意味は変更せず、別 parameter 導入方針のみを記録した。
+- Verification:
+  - `rg -n "MS11-9C|closing_hold_frames|Lip Hold|開口保持|hold -> softness -> clamp" docs/MS11-9C_Implementation_Plan.md docs/MS11_MS12_Roadmap_and_Scope_Split.md docs/Specification_Prompt_v3.md docs/repo_milestone.md docs/Version_Control.md`
+
+---
+
+## Entry 2026-04-01 / Session: ms11-9b-doc-prep
+
+- Date: 2026-04-01
+- Session: ms11-9b-doc-prep
+- Summary:
+  - MS11-9B Closing Softness GUI exposure and preview/output handoff alignment の実装前提を文書へ固定した。
+  - GUI 配置、単位表示、値仕様、単一の現在値参照経路、再解析なし Preview 更新、処理中ロック方針、最低限のテスト観点を明文化した。
+- Modified Files:
+  - `docs/MS11-9B_Implementation_Plan.md`: MS11-9B の実装計画書を新規追加。
+  - `docs/MS11_MS12_Roadmap_and_Scope_Split.md`: MS11-9B の位置づけと完了像を追加。
+  - `docs/Specification_Prompt_v3.md`: 未反映項目を MS11-9B 名義へ整理。
+  - `docs/repo_milestone.md`: MS11-9B 実装前整理メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - `docs/MS11-9B_Implementation_Plan.md`
+- Notes:
+  - この段階では実装内容そのものはまだ反映していない。
+  - MS11-8 / MS11-9 の既存 semantics は変更しない前提で整理した。
+- Verification:
+  - `rg -n "MS11-9B|閉口スムース|Closing Smooth|closing softness 入力導線|単位表示|single current-value path" docs/MS11-9B_Implementation_Plan.md docs/MS11_MS12_Roadmap_and_Scope_Split.md docs/Specification_Prompt_v3.md docs/repo_milestone.md docs/Version_Control.md`
+
+---
+
+## Entry 2026-04-01 / Session: ms11-9-preview-shape-alignment-doc-sync
+
+- Date: 2026-04-01
+- Session: ms11-9-preview-shape-alignment-doc-sync
+- Summary:
+  - MS11-9 Preview trapezoid / multi-point display alignment の実装到達状態を、主要ドキュメントへ同期した。
+  - `preview_transform.py` の shape-aware 契約拡張、`preview_area.py` の polygon/path ベース描画、shared viewport / playback / plot-area alignment 維持、関連テスト更新の反映状態を文書へ明記した。
+- Modified Files:
+  - `docs/Specification_Prompt_v3.md`: 実装同期注記を MS11-9 反映状態へ更新し、未反映項目から Preview multi-point 表示対応を削除。
+  - `docs/repo_milestone.md`: MS11-9 実装反映メモを追加し、対象・確認状態・スコープ外を整理。
+  - `docs/MS11_MS12_Roadmap_and_Scope_Split.md`: MS11-9 status note を追加し、current workspace での実装到達状態を追記。
+  - `docs/MS11-9_Implementation_Plan.md`: 実装反映注記を追加し、計画書の先頭で current workspace の到達状態を明記。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - 版数更新や release sync は行っていない。
+  - GUI からの closing softness 入力導線、RMS 再調整、MS11-10 / MS12 は引き続き対象外として維持した。
+- Verification:
+  - `rg -n "MS11-9|PreviewControlPoint|polygon / path|multi-point|closing softness|Status Note" docs/Specification_Prompt_v3.md docs/repo_milestone.md docs/MS11_MS12_Roadmap_and_Scope_Split.md docs/MS11-9_Implementation_Plan.md docs/Version_Control.md`
+  - `git status --short docs/Specification_Prompt_v3.md docs/repo_milestone.md docs/MS11_MS12_Roadmap_and_Scope_Split.md docs/MS11-9_Implementation_Plan.md docs/Version_Control.md`
+
+---
+
 ## Entry 2026-04-01 / Session: ms11-8-writer-closing-softness
 
 - Date: 2026-04-01

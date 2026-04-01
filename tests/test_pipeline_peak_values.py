@@ -318,7 +318,158 @@ class PipelinePeakValueTests(unittest.TestCase):
         self.assertAlmostEqual(observations[0].peak_window_end_sec, 0.33, places=6)
         self.assertEqual(observations[0].window_sample_count, 1)
         self.assertEqual(observations[0].local_peak, 0.8)
-        self.assertIsNone(observations[0].reason)
+        self.assertEqual(observations[0].rms_window_times_sec, (0.32,))
+        self.assertEqual(observations[0].rms_window_values, (0.8,))
+
+    def test_observation_marks_same_vowel_one_frame_zero_gap_as_bridgeable_candidate(self) -> None:
+        refined_timeline = [
+            VowelTimelinePoint(time_sec=1.0, vowel="あ", peak_value=0.5, start_sec=0.8, end_sec=1.2),
+            VowelTimelinePoint(time_sec=37 / 30, vowel="あ", peak_value=0.0, start_sec=37 / 30, end_sec=38 / 30),
+            VowelTimelinePoint(time_sec=1.3, vowel="あ", peak_value=0.4, start_sec=1.2666667, end_sec=1.5),
+        ]
+        rms_series = RmsSeriesData(
+            sample_rate_hz=100,
+            channel_count=1,
+            duration_sec=2.0,
+            window_size_samples=5,
+            hop_size_samples=5,
+            times_sec=[1.0, 1.3],
+            values=[1.0, 0.8],
+        )
+        observations = _build_peak_value_observations(
+            timeline=refined_timeline,
+            rms_series=rms_series,
+            speech_start_sec=0.0,
+            speech_end_sec=2.0,
+            upper_limit=0.5,
+        )
+
+        self.assertEqual(len(observations), 3)
+        self.assertTrue(observations[1].is_bridgeable_same_vowel_micro_gap_candidate)
+        self.assertTrue(observations[1].is_bridgeable_micro_gap_candidate)
+        self.assertFalse(observations[1].is_bridgeable_cross_vowel_transition_candidate)
+        self.assertEqual(observations[1].bridge_candidate_reason, "no_peak_in_window")
+        self.assertEqual(observations[1].previous_non_zero_event_index, 0)
+        self.assertEqual(observations[1].next_non_zero_event_index, 2)
+
+    def test_observation_marks_cross_vowel_zero_gap_as_transition_candidate(self) -> None:
+        rms_series = RmsSeriesData(
+            sample_rate_hz=100,
+            channel_count=1,
+            duration_sec=2.0,
+            window_size_samples=5,
+            hop_size_samples=5,
+            times_sec=[1.0, 1.3],
+            values=[1.0, 0.8],
+        )
+        observations = _build_peak_value_observations(
+            timeline=[
+                VowelTimelinePoint(time_sec=1.0, vowel="あ", peak_value=0.5, start_sec=0.8, end_sec=1.2),
+                VowelTimelinePoint(time_sec=37 / 30, vowel="あ", peak_value=0.0, start_sec=37 / 30, end_sec=38 / 30),
+                VowelTimelinePoint(time_sec=1.3, vowel="い", peak_value=0.4, start_sec=1.2666667, end_sec=1.5),
+            ],
+            rms_series=rms_series,
+            speech_start_sec=0.0,
+            speech_end_sec=2.0,
+            upper_limit=0.5,
+        )
+
+        self.assertFalse(observations[1].is_bridgeable_same_vowel_micro_gap_candidate)
+        self.assertFalse(observations[1].is_bridgeable_micro_gap_candidate)
+        self.assertTrue(observations[1].is_bridgeable_cross_vowel_transition_candidate)
+        self.assertFalse(observations[1].is_cross_vowel_zero_run_continuity_floor_candidate)
+        self.assertEqual(observations[1].bridge_candidate_reason, "no_peak_in_window")
+
+    def test_observation_marks_same_vowel_low_positive_short_segment_as_burst_candidate(self) -> None:
+        rms_series = RmsSeriesData(
+            sample_rate_hz=100,
+            channel_count=1,
+            duration_sec=2.0,
+            window_size_samples=5,
+            hop_size_samples=5,
+            times_sec=[1.0, 37 / 30, 1.3],
+            values=[1.0, 0.36, 0.8],
+        )
+        observations = _build_peak_value_observations(
+            timeline=[
+                VowelTimelinePoint(time_sec=1.0, vowel="う", peak_value=0.5, start_sec=0.8, end_sec=1.2),
+                VowelTimelinePoint(time_sec=37 / 30, vowel="う", peak_value=0.12, start_sec=37 / 30, end_sec=38 / 30),
+                VowelTimelinePoint(time_sec=1.3, vowel="う", peak_value=0.4, start_sec=1.2666667, end_sec=1.5),
+            ],
+            rms_series=rms_series,
+            speech_start_sec=0.0,
+            speech_end_sec=2.0,
+            upper_limit=0.5,
+        )
+
+        self.assertFalse(observations[1].is_bridgeable_same_vowel_micro_gap_candidate)
+        self.assertTrue(observations[1].is_same_vowel_burst_candidate)
+        self.assertFalse(observations[1].is_bridgeable_cross_vowel_transition_candidate)
+        self.assertEqual(observations[1].bridge_candidate_reason, "same_vowel_burst")
+        self.assertEqual(observations[1].span_start_index, 1)
+        self.assertEqual(observations[1].span_end_index, 1)
+
+    def test_observation_marks_two_zero_same_vowel_span_as_bridgeable_candidate(self) -> None:
+        rms_series = RmsSeriesData(
+            sample_rate_hz=100,
+            channel_count=1,
+            duration_sec=2.0,
+            window_size_samples=5,
+            hop_size_samples=5,
+            times_sec=[1.0, 1.5],
+            values=[1.0, 0.8],
+        )
+        observations = _build_peak_value_observations(
+            timeline=[
+                VowelTimelinePoint(time_sec=1.0, vowel="あ", peak_value=0.5, start_sec=0.8, end_sec=1.23),
+                VowelTimelinePoint(time_sec=37 / 30, vowel="あ", peak_value=0.0, start_sec=37 / 30, end_sec=38 / 30),
+                VowelTimelinePoint(time_sec=38 / 30, vowel="あ", peak_value=0.0, start_sec=38 / 30, end_sec=39 / 30),
+                VowelTimelinePoint(time_sec=1.5, vowel="あ", peak_value=0.4, start_sec=39 / 30, end_sec=1.7),
+            ],
+            rms_series=rms_series,
+            speech_start_sec=0.0,
+            speech_end_sec=2.0,
+            upper_limit=0.5,
+        )
+
+        self.assertTrue(observations[1].is_bridgeable_same_vowel_micro_gap_candidate)
+        self.assertTrue(observations[2].is_bridgeable_same_vowel_micro_gap_candidate)
+        self.assertEqual(observations[1].span_start_index, 1)
+        self.assertEqual(observations[1].span_end_index, 2)
+        self.assertEqual(observations[2].span_start_index, 1)
+        self.assertEqual(observations[2].span_end_index, 2)
+
+    def test_observation_marks_two_zero_cross_vowel_span_as_transition_candidate(self) -> None:
+        rms_series = RmsSeriesData(
+            sample_rate_hz=100,
+            channel_count=1,
+            duration_sec=2.0,
+            window_size_samples=5,
+            hop_size_samples=5,
+            times_sec=[1.0, 1.5],
+            values=[1.0, 0.8],
+        )
+        observations = _build_peak_value_observations(
+            timeline=[
+                VowelTimelinePoint(time_sec=1.0, vowel="あ", peak_value=0.5, start_sec=0.8, end_sec=1.23),
+                VowelTimelinePoint(time_sec=37 / 30, vowel="い", peak_value=0.0, start_sec=37 / 30, end_sec=38 / 30),
+                VowelTimelinePoint(time_sec=38 / 30, vowel="う", peak_value=0.0, start_sec=38 / 30, end_sec=39 / 30),
+                VowelTimelinePoint(time_sec=1.5, vowel="い", peak_value=0.4, start_sec=39 / 30, end_sec=1.7),
+            ],
+            rms_series=rms_series,
+            speech_start_sec=0.0,
+            speech_end_sec=2.0,
+            upper_limit=0.5,
+        )
+
+        self.assertFalse(observations[1].is_bridgeable_cross_vowel_transition_candidate)
+        self.assertFalse(observations[2].is_bridgeable_cross_vowel_transition_candidate)
+        self.assertTrue(observations[1].is_cross_vowel_zero_run_continuity_floor_candidate)
+        self.assertTrue(observations[2].is_cross_vowel_zero_run_continuity_floor_candidate)
+        self.assertEqual(observations[1].span_start_index, 1)
+        self.assertEqual(observations[1].span_end_index, 2)
+        self.assertEqual(observations[2].span_start_index, 1)
+        self.assertEqual(observations[2].span_end_index, 2)
 
     def test_observation_reports_rms_unavailable_fallback_without_global_peak(self) -> None:
         timeline = [
