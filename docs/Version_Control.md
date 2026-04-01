@@ -1,5 +1,87 @@
 # Version Control Log
 
+## Entry 2026-04-02 / Session: release-v0380-ms12-packaging-sync
+
+- Date: 2026-04-02
+- Session: release-v0380-ms12-packaging-sync
+- Summary:
+  - リポジトリ全体の current version を `Ver 0.3.8.0` として同期した。
+  - MS12-5 までの build / packaging / release-side documentation 整備を、`0.3.8.0` の repository-facing state として確定対象にした。
+  - 手動配置された FFmpeg 実バイナリと未追跡文書をコミット対象へ含める前提で整理した。
+- Modified Files:
+  - `pyproject.toml`: プロジェクト version を `0.3.8.0` に更新。
+  - `README.md`: current version 表記を `Ver. 0.3.8.0` に更新。
+  - `docs/Specification_Prompt_v3.md`: 対応リリースを `Ver 0.3.8.0` に更新。
+  - `docs/MS12_Implementation_Roadmap.md`: Baseline Version を `Ver 0.3.8.0` に更新。
+  - `docs/MS11_MS12_Roadmap_and_Scope_Split.md`: Baseline / status note / recommended order の current version を `Ver 0.3.8.0` に更新。
+  - `docs/MS11-10_Implementation_Plan.md`: current sync version を `Ver 0.3.8.0` に更新。
+  - `docs/MS12-4_Implementation_Plan.md`: `pyproject.toml` 参照 version を `0.3.8.0` に更新。
+  - `tests/test_app_version.py`: current project version に追従。
+  - `tests/test_main_startup_splash.py`: splash version text expectation を `Ver. 0.3.8.0` に更新。
+  - `tests/test_main_window_version_info.py`: Help version expectation を `0.3.8.0` に更新。
+  - `docs/repo_milestone.md`: 本同期メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - 過去ログに残る `0.3.7.1` 記述は履歴として保持し、current version 記述のみ `0.3.8.0` に更新した。
+  - ローカル実行生成物の ini / pyc は current release state には含めない。
+- Verification:
+  - `rg -n "0\\.3\\.8\\.0|Ver 0\\.3\\.8\\.0|Ver\\. 0\\.3\\.8\\.0" README.md pyproject.toml tests docs`
+
+## Entry 2026-04-02 / Session: ms12-5-implement-ffmpeg-bundling-cleanup
+
+- Date: 2026-04-02
+- Session: ms12-5-implement-ffmpeg-bundling-cleanup
+- Summary:
+  - `MS12-5: distribution dependency bundling cleanup` を onedir 前提で実装した。
+  - 公式配布ビルド `FFmpeg v8.1` の `bin` 手動配置を build 契約として固定し、`build.ps1` / `MMD_AutoLipTool.spec` / release-side docs を同期した。
+  - `LICENSE` / `NOTICE` / `THIRD_PARTY_LICENSES.md` を build 出力へ同梱する方針を `.spec` に反映した。
+- Modified Files:
+  - `.gitignore`: `FFmpeg\bin\` 手動配置ルールと `.gitkeep` の例外を追加。
+  - `build.ps1`: `FFmpeg\bin\` / `ffmpeg.exe` / `ffprobe.exe` の事前チェックを追加。
+  - `MMD_AutoLipTool.spec`: `LICENSE` / `NOTICE` / `THIRD_PARTY_LICENSES.md` の datas 追加、`FFmpeg\bin\` の bundling 追加、`.gitkeep` 除外を反映。
+  - `README.md`: FFmpeg v8.1 手動配置を含む onedir build 手順へ更新。
+  - `NOTICE`: 現在の FFmpeg bundling 前提を追記。
+  - `THIRD_PARTY_LICENSES.md`: FFmpeg v8.1 の採用前提、配置先、配布先、確認観点を追記。
+  - `docs/MS12_Implementation_Roadmap.md`: MS12-5 の採択済み FFmpeg 方針へ同期。
+  - `docs/MS11_MS12_Roadmap_and_Scope_Split.md`: MS12-5 の説明を採用済み FFmpeg bundling 前提へ同期。
+  - `docs/Specification_Prompt_v3.md`: build / 配布方針へ FFmpeg v8.1 手動配置と配布物同梱物を追記。
+  - `docs/repo_milestone.md`: MS12-5 実装メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - `FFmpeg/bin/.gitkeep`
+  - `docs/MS12-5_Implementation_Plan.md`
+- Notes:
+  - 現時点では実リポジトリに FFmpeg 実バイナリを置いていないため、build 実行そのものは未実施。
+  - 今回の主目的は、FFmpeg v8.1 を使う onedir build 契約と release-side 文書整合の固定である。
+- Verification:
+  - `rg -n "FFmpeg|v8.1|LICENSE|NOTICE|THIRD_PARTY_LICENSES|gitkeep" .gitignore build.ps1 MMD_AutoLipTool.spec README.md NOTICE THIRD_PARTY_LICENSES.md docs/MS12_Implementation_Roadmap.md docs/MS11_MS12_Roadmap_and_Scope_Split.md docs/Specification_Prompt_v3.md`
+  - `.\.venv\Scripts\python.exe -c "compile(open('MMD_AutoLipTool.spec', encoding='utf-8').read(), 'MMD_AutoLipTool.spec', 'exec'); print('spec ok')"`
+  - `powershell -Command "[void][scriptblock]::Create((Get-Content build.ps1 -Raw)); 'build script ok'"`
+
+## Entry 2026-04-02 / Session: ms12-5-plan-doc
+
+- Date: 2026-04-02
+- Session: ms12-5-plan-doc
+- Summary:
+  - `MS12-5: distribution dependency bundling cleanup` の個別実装 plan を追加した。
+  - 現行 build / spec / notice / third-party docs を前提に、配布依存方針と文書同期方針を整理した。
+  - FFmpeg bundling 採用可否が実装内容を大きく左右するため、ここをユーザー判断項目として分離した。
+- Modified Files:
+  - `docs/repo_milestone.md`: MS12-5 実装 plan 整理メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - `docs/MS12-5_Implementation_Plan.md`
+- Notes:
+  - 今回は実装 plan 文書化のみで、コード変更や build 定義変更は行っていない。
+  - 後続判断として、FFmpeg bundling は採用する前提へ進める。
+  - 配置方法は手動配置を採る。
+  - 手動配置先は exe ルート下 `FFmpeg`、配布物単位は `bin` のみ、版数記録は関連ドキュメント全てへ反映する方針を採る。
+  - 次段は、この前提で MS12-5 実装へ入る。
+- Verification:
+  - `rg -n "MS12-5|FFmpeg|bundling|build|NOTICE|THIRD_PARTY_LICENSES|保留課題" docs/MS12-5_Implementation_Plan.md docs/repo_milestone.md docs/Version_Control.md`
+
 ## Entry 2026-04-02 / Session: ms12-4-implement-splash-version
 
 - Date: 2026-04-02

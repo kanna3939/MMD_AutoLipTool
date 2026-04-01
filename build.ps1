@@ -10,6 +10,20 @@ if (!(Test-Path -Path $PythonExe)) {
     throw "Python executable not found: $PythonExe"
 }
 
+$ffmpegBinPath = "FFmpeg\bin"
+$requiredFfmpegExecutables = @("ffmpeg.exe", "ffprobe.exe")
+
+if (!(Test-Path -Path $ffmpegBinPath -PathType Container)) {
+    throw "FFmpeg bin directory not found: $ffmpegBinPath`nPlace the official FFmpeg v8.1 build bin files under .\$ffmpegBinPath before running build."
+}
+
+foreach ($exeName in $requiredFfmpegExecutables) {
+    $exePath = Join-Path $ffmpegBinPath $exeName
+    if (!(Test-Path -Path $exePath -PathType Leaf)) {
+        throw "Required FFmpeg executable not found: $exePath`nPlace the official FFmpeg v8.1 build bin files under .\$ffmpegBinPath before running build."
+    }
+}
+
 if ($Clean) {
     if (Test-Path -Path "build") {
         Remove-Item -Recurse -Force "build"

@@ -50,10 +50,10 @@ class MainStartupSplashTests(unittest.TestCase):
         mocked_process_events.assert_called_once()
 
     def test_build_splash_version_text_uses_ver_prefix(self) -> None:
-        with patch("main.resolve_app_version", return_value="0.3.7.1"):
+        with patch("main.resolve_app_version", return_value="0.3.8.0"):
             text = main._build_splash_version_text()
 
-        self.assertEqual(text, "Ver. 0.3.7.1")
+        self.assertEqual(text, "Ver. 0.3.8.0")
 
     def test_decorate_splash_pixmap_draws_version_text(self) -> None:
         pixmap = Mock()
@@ -69,11 +69,11 @@ class MainStartupSplashTests(unittest.TestCase):
             patch("main.QPixmap", return_value=copied_pixmap),
             patch("main.QPainter", return_value=fake_painter),
         ):
-            result = main._decorate_splash_pixmap(pixmap, "Ver. 0.3.7.1")
+            result = main._decorate_splash_pixmap(pixmap, "Ver. 0.3.8.0")
 
         self.assertIs(result, copied_pixmap)
         draw_rect, draw_flags, draw_text = fake_painter.drawText.call_args.args
-        self.assertEqual(draw_text, "Ver. 0.3.7.1")
+        self.assertEqual(draw_text, "Ver. 0.3.8.0")
         self.assertGreater(draw_rect.x(), 0)
         self.assertGreater(draw_rect.y(), 0)
         self.assertGreater(draw_rect.width(), 0)

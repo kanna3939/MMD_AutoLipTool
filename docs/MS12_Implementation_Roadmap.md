@@ -2,7 +2,7 @@
 
 ## 0. 文書目的
 
-本書は、`Ver 0.3.7.1` 時点の repo 現状を前提に、
+本書は、`Ver 0.3.8.0` 時点の repo 現状を前提に、
 **MS12 をどの順で、どの責務境界で、どの未確定事項を抱えたまま進めるか**
 を整理するための実装ロードマップである。
 
@@ -21,7 +21,7 @@
 
 ## 1. 基準時点
 
-- Repository Baseline: `Ver 0.3.7.1`
+- Repository Baseline: `Ver 0.3.8.0`
 - 現在の主前提:
   - MS11 系は closeout 済み前提
   - MS12 は未着手前提
@@ -67,7 +67,7 @@
 - VMD 保存先フォルダの記憶と永続化
 - 重処理を UI スレッドから分離する実装
 - splash 上への version 表示
-- FFmpeg bundling 契約
+- FFmpeg bundling 契約（公式配布ビルド `v8.1` / `FFmpeg\bin\` 手動配置 / `bin` のみ）
 - MS12 専用テスト群
 
 ---
@@ -227,7 +227,7 @@ splash に現在 version を表示する。
 
 #### 目的
 
-配布時依存関係の扱いを固定し、必要なら FFmpeg bundling を最小構成で導入する。
+配布時依存関係の扱いを固定し、FFmpeg bundling を最小構成で導入する。
 
 #### 主対象
 
@@ -240,8 +240,8 @@ splash に現在 version を表示する。
 
 #### この段でやること
 
-- FFmpeg bundling を採用するか否かを文書化前提で整理する
-- 採用時は最小構成の同梱方法を固定する
+- 公式配布ビルド `FFmpeg v8.1` の bundling 方針を固定する
+- `FFmpeg\bin\` 手動配置を build 入力前提として固定する
 - 実行時に PATH 前提を持たない解決方法を用意する
 - ライセンス / notice を必要範囲だけ更新する
 
@@ -254,7 +254,7 @@ splash に現在 version を表示する。
 #### 完了条件
 
 - release build の依存解決方針が再現可能になる
-- bundling 採用時は、最小構成とライセンス同梱方針が明文化される
+- FFmpeg v8.1 の最小構成とライセンス同梱方針が明文化される
 
 ---
 
@@ -374,12 +374,11 @@ MS12-5 でのみ変更対象とし、それ以前では触らない。
 - responsiveness を `QThread` / `QRunnable` / 別 helper class のどれで実装するか
 - worker から返す payload を `VowelTimingPlan` / warning / exception detail のどこまで含めるか
 - splash version 表示を画像直描きにするか、別 widget overlay にするか
-- FFmpeg bundling を採用するか否か
-- bundling 採用時の配布元、同梱ライセンス、exe 隣配置ルール
+- FFmpeg v8.1 の exact release-time notice 同梱内容
+- staged `bin` に含める最小ファイル集合の release 時最終確認
 
 ### 8.2 ユーザー判断が必要になりうるが、今は保留課題として置く項目
 
-- FFmpeg bundling の採否
 - splash 上の version 表示位置と視認性優先度
 - responsiveness 改修で cancel 機能まで欲しいか
 - 保存先記憶を「フォルダのみ」に留めるか、「直近ファイル名」まで広げるか
@@ -389,7 +388,7 @@ MS12-5 でのみ変更対象とし、それ以前では触らない。
 - 保存先記憶は「フォルダのみ」
 - responsiveness は最小 worker 化
 - splash version は最小文字重ね
-- FFmpeg は MS12-5 まで実装保留
+- FFmpeg は MS12-5 で、公式配布ビルド `v8.1` を `FFmpeg\bin\` 手動配置・`bin` のみ採用で固定
 
 ---
 

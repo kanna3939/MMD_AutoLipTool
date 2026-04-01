@@ -25,5 +25,12 @@ Additional note for binary distribution:
 
 When distributing binary builds, include this NOTICE file, the LICENSE file,
 and the applicable third-party license notices together with the distribution.
-If future releases bundle additional external components such as FFmpeg,
-their license notices must be added separately at that time.
+
+Current FFmpeg note:
+
+- MS12-5 assumes manual staging of the official FFmpeg v8.1 build.
+- Only the `bin` contents are staged for build input.
+- The staged files are expected under `FFmpeg\bin\` before running `build.ps1`.
+- The bundled binary output is expected under the executable root as `FFmpeg\`.
+- FFmpeg version and bundling notes must stay synchronized with
+  `README.md`, `THIRD_PARTY_LICENSES.md`, and the MS12 packaging documents.

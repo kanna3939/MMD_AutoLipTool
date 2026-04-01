@@ -5,12 +5,12 @@
 - 文書名: `docs/Specification_Prompt_v3.md`
 - 作成日: 2026-03-20
 - 最終更新日: 2026-04-02
-- 対応リリース: `Ver 0.3.7.1`
+- 対応リリース: `Ver 0.3.8.0`
 - 対象リポジトリ: `MMD_AutoLipTool`
 - 旧版: `docs/Specification_Prompt_v2.md`（本書で置き換え）
 - 文書方針: v2 の意図を引き継ぎつつ、現行実装・確定済み追加仕様・責務分割方針に合わせて更新する
 
-### 0.1 実装同期注記（2026-04-02 / Ver 0.3.7.1 同期）
+### 0.1 実装同期注記（2026-04-02 / Ver 0.3.8.0 同期）
 
 - 本書は v3 の目標仕様を含むが、2026-04-02 時点でコード反映済みなのは MS8A / MS8B / MS8C / MS8D-2 / MS9 / MS9-2 / MS10 / MS11-1 / MS11-2 / MS11-2_FIX01 / MS11-2_FIX02 / MS11-3 / MS11-4 / MS11-5 / MS11-6、MS11-7 の文書整備・最小テスト反映、MS11-8、MS11-9、MS11-9B、MS11-9C、および MS11-9D から MS11-9D-6、MS11-9E から MS11-9E-4、MS11-9F から MS11-9F-4、MS11-9G、MS11-9FIX7 までの speech-internal lip-motion / top-end / closing smoothing refinement とする。
 - 反映済み（コード実体）:
@@ -682,6 +682,10 @@
 * ビルド定義: `MMD_AutoLipTool.spec`
 * 実行スクリプト: `build.ps1`
 * 出力先: `dist\MMD_AutoLipTool\MMD_AutoLipTool.exe`
+* 配布 build では、公式配布ビルド `FFmpeg v8.1` の `bin` 内容を repo 直下 `FFmpeg\bin\` へ手動配置してから build する
+* 最低限 `FFmpeg\bin\ffmpeg.exe` と `FFmpeg\bin\ffprobe.exe` を要求する
+* FFmpeg は PyInstaller `onedir` 出力の exe ルート下 `FFmpeg\` へ同梱する
+* 配布物には `LICENSE` / `NOTICE` / `THIRD_PARTY_LICENSES.md` を同梱する
 * 言語設定 / 履歴設定の保存先は exe 配布形態に応じて安全な書込先を使う
 * アプリアイコン（`.ico`）およびスプラッシュスクリーン画像（`.png`）のアセットをビルドに同梱する
 

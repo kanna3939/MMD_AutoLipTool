@@ -1,4 +1,53 @@
 ﻿# MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
+## 2026-04-02 / Ver 0.3.8.0 / MS12 packaging sync メモ
+
+- 対象: Ver 0.3.8.0 同期
+- 同期内容:
+  - `README.md` / `pyproject.toml` / `docs/Specification_Prompt_v3.md` / `docs/MS12_Implementation_Roadmap.md` / `docs/MS11_MS12_Roadmap_and_Scope_Split.md` / `docs/MS11-10_Implementation_Plan.md` / `docs/MS12-4_Implementation_Plan.md` を `Ver 0.3.8.0` 基準へ更新
+  - MS12-5 の build / packaging / license 文書整備を、`Ver 0.3.8.0` の repository-facing current state として整理
+  - 手動配置された `FFmpeg\bin\` の実バイナリを、release build 入力としてコミット対象へ含める前提を確認
+- 現在地:
+  - 現在版の正本は `pyproject.toml` の `0.3.8.0`
+  - splash / Help / README / 主要仕様文書は `Ver 0.3.8.0` 前提へ同期済み
+  - 次段は、この状態をコミットし GitHub main と同期する
+
+---
+
+## 2026-04-02 / MS12-5 実装メモ
+
+- 対象: MS12-5
+- 実装反映:
+  - `.gitignore` に `FFmpeg\bin\` 手動配置用の ignore ルールを追加し、`.gitkeep` のみを repo 管理対象にした
+  - `build.ps1` に、公式配布ビルド `FFmpeg v8.1` の `bin` 手動配置前提チェックを追加し、`ffmpeg.exe` / `ffprobe.exe` 不在時は build 前に停止するようにした
+  - `MMD_AutoLipTool.spec` に、`LICENSE` / `NOTICE` / `THIRD_PARTY_LICENSES.md` の同梱と、`FFmpeg\bin\` 配下バイナリの `FFmpeg\` への bundling を追加した
+  - `README.md` / `NOTICE` / `THIRD_PARTY_LICENSES.md` / `docs/MS12_Implementation_Roadmap.md` / `docs/MS11_MS12_Roadmap_and_Scope_Split.md` / `docs/Specification_Prompt_v3.md` を、公式配布ビルド `FFmpeg v8.1`・手動配置・`bin` のみ・`onedir` 前提へ同期した
+- 確認状態:
+  - `MMD_AutoLipTool.spec` は `.gitkeep` を bundling 対象から除外する形で整合済み
+  - 実コード上には現時点で FFmpeg 直接呼出し経路は無く、今回の主責務は build / release 契約の固定であることを確認済み
+  - 実 build は、実バイナリ未配置のためこの時点では未実施
+- 現在地:
+  - MS12-5 の最小契約である onedir 配布前提の FFmpeg bundling 方針固定と release-side documentation 同期が repo 上に反映された
+  - 次段は、実バイナリを配置した上での build 実施と実機確認になる
+
+---
+
+## 2026-04-02 / MS12-5 実装 plan 整理メモ
+
+- 対象: MS12-5
+- 追加文書:
+  - `docs/MS12-5_Implementation_Plan.md` を追加
+- 整理内容:
+  - distribution dependency bundling cleanup について、対象 / 非対象 / build / spec / docs 同期方針 / 保留課題を単独文書化
+  - 現行 build には FFmpeg bundling が無いこと、採用時は取得元・同梱対象・license 案内をセットで定義すべきことを整理
+  - MS12-5 は FFmpeg 採用可否で実装内容が大きく変わることを明記
+- 現在地:
+  - MS12-5 実装前の論点分解はできた
+  - FFmpeg bundling を採用して進める方針を確定
+  - 配置方法は手動配置で確定
+  - 手動配置先は exe ルート下 `FFmpeg`、配布物単位は `bin` のみ、版数記録は関連ドキュメント全てへ反映する方針を確定
+
+---
+
 ## 2026-04-02 / MS12-4 実装メモ
 
 - 対象: MS12-4

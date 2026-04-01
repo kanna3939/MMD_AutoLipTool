@@ -6,7 +6,7 @@
 - Created: 2026-03-30
 - Last Updated: 2026-04-02
 - Target Repository: `MMD_AutoLipTool`
-- Baseline Version: `Ver 0.3.7.1`
+- Baseline Version: `Ver 0.3.8.0`
 - Purpose:
   - Record the agreed milestone split after MS11-5.
   - Clarify which remaining items belong to MS11 and which belong to MS12.
@@ -30,7 +30,7 @@ The following are already completed and should be treated as fixed baseline:
 - writer.py local fixes after MS11-3 completed
 - MS11-4 completed
 - MS11-5 first-stage implementation completed
-- `Ver 0.3.7.1` synchronized as the current documentation baseline
+- `Ver 0.3.8.0` synchronized as the current documentation baseline
 
 Current understanding of the project state:
 
@@ -74,7 +74,7 @@ The following user-requested items are treated as part of MS12:
 2. Prevent the UI from appearing frozen during processing; allow periodic UI refresh / animation while heavy processing runs.
 3. Fix the splash screen so that it appears earlier during application startup.
 4. Show the current version number on the splash screen.
-5. Bundle FFmpeg with the distributed application if bundling is adopted as the release policy.
+5. Bundle FFmpeg with the distributed application under the adopted MS12-5 release policy.
 
 Interpretation:
 
@@ -284,9 +284,9 @@ Synchronize the final MS11 state across code assumptions, documents, and milesto
 - MS11 end state is documented consistently
 - Remaining GUI-only work is clearly separated into MS12
 
-### Status Note (2026-04-02 / Ver 0.3.7.1)
+### Status Note (2026-04-02 / Ver 0.3.8.0)
 - Treated as completed as a documentation-sync milestone.
-- The repository-facing version baseline is now `Ver 0.3.7.1`.
+- The repository-facing version baseline is now `Ver 0.3.8.0`.
 - MS11-9 through MS11-9G are synchronized into:
   - `docs/MS11-9_Summary_and_Handoff.md`
   - `docs/MS11-9_Remaining_Issues.md`
@@ -698,7 +698,7 @@ Show the current application version on the splash screen.
 distribution dependency bundling cleanup
 
 ### Goal
-Handle bundling-oriented release cleanup separately from GUI responsiveness work, including possible FFmpeg bundling.
+Handle bundling-oriented release cleanup separately from GUI responsiveness work, with FFmpeg bundling adopted as part of the release policy.
 
 ### Main target
 - build / packaging definition
@@ -706,8 +706,8 @@ Handle bundling-oriented release cleanup separately from GUI responsiveness work
 - only the minimum runtime dependency resolution path required for distribution
 
 ### Main work
-- Decide whether FFmpeg bundling is adopted
-- If adopted, define the bundling method for the release build
+- Fix the FFmpeg bundling policy for the release build
+- Use the official distribution build `FFmpeg v8.1` with manual staging under `FFmpeg\bin\`
 - Update build scripts / spec files only where required
 - Update release-side license / notice documents accordingly
 - Confirm runtime dependency resolution without requiring user-side PATH setup
@@ -717,8 +717,8 @@ This is a **distribution / packaging** task, not an MS11 task.
 
 ### Completion image
 - External runtime dependency handling is documented and reproducible
-- If FFmpeg is bundled, it is bundled intentionally and minimally
-- User-side manual FFmpeg installation is not required if bundling policy is adopted
+- FFmpeg is bundled intentionally and minimally
+- User-side manual FFmpeg installation is not required for the distributed app
 
 ---
 
@@ -742,9 +742,11 @@ Only bundle files that are **strictly necessary** for runtime execution and agre
 
 ### 6.3 FFmpeg-specific minimization rule
 
-If FFmpeg bundling is adopted:
+For the adopted FFmpeg bundling policy:
 
-- bundle only the minimum required executable set
+- use the official distribution build `FFmpeg v8.1`
+- stage only the `bin` contents under `FFmpeg\bin\`
+- bundle only the minimum required binary set from that staged `bin`
 - do not bundle unrelated FFmpeg companion files unless actually required
 - do not bundle multiple alternative FFmpeg builds
 - keep the distribution-side FFmpeg footprint as small as possible
@@ -763,7 +765,7 @@ The packaging goal is:
 
 ## 7. Recommended Execution Order
 
-The recommended order after `Ver 0.3.7.1` is:
+The recommended order after `Ver 0.3.8.0` is:
 
 1. MS11-7
 2. MS11-8
@@ -784,7 +786,7 @@ Reasoning:
 - Then perform final MS11 sync.
 - After MS11 is stable, first address output-save convenience that fits existing settings persistence boundaries.
 - Then address GUI responsiveness and startup UX.
-- Put dependency bundling cleanup, including FFmpeg bundling, at the end of MS12 so it reflects the final agreed release behavior and avoids rework.
+- Put dependency bundling cleanup, including the adopted FFmpeg v8.1 bundling policy, at the end of MS12 so it reflects the final agreed release behavior and avoids rework.
 
 ---
 
@@ -816,7 +818,7 @@ What Codex should infer from this document:
 - If asked to implement one of the listed tasks, Codex should first check which milestone it belongs to.
 - If a requested implementation would cross the milestone boundary, Codex should stop and ask before broadening scope.
 - Bundling-related work should stay minimal and explicit.
-- If FFmpeg bundling is implemented, it should be done in the MS12 packaging phase, not earlier.
+- FFmpeg bundling should be handled only in the MS12 packaging phase, not earlier.
 
 What Codex should **not** infer:
 

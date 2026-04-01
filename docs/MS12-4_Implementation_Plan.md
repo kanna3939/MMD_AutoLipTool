@@ -39,7 +39,7 @@ MS12-4 着手時点で、repo には次の土台がある。
 
 - splash は画像のみで、version 表示はまだ無い
 - Help の version 情報は `_resolve_installed_version(["mmd-autolip-tool"])` を使っている
-- `pyproject.toml` の project version は `0.3.7.1` である
+- `pyproject.toml` の project version は `0.3.8.0` である
 - 現行コードでは splash 表示用の version source helper は存在しない
 
 したがって、MS12-4 の主題は
