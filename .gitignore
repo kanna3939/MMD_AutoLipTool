@@ -14,6 +14,10 @@ dist/
 .pytest_cache/
 .mypy_cache/
 
+# Manual FFmpeg staging for distribution build
+FFmpeg/bin/*
+!FFmpeg/bin/.gitkeep
+
 # Tooling / IDE
 .vscode/
 .idea/
@@ -21,4 +25,3 @@ dist/
 # OS files
 .DS_Store
 Thumbs.db
-

@@ -108,6 +108,26 @@ documented implementation state.
 - Notes:
   - PyInstaller itself is a build tool, but retain its notice where appropriate in release documentation
 
+### 3.8 FFmpeg
+
+- Package / Binary: `FFmpeg`
+- Role:
+  - External multimedia runtime binary bundled for Windows distribution
+- Source:
+  - Official distribution build
+- Version:
+  - `v8.1`
+- Bundling policy:
+  - Manual staging before build
+  - Only the `bin` contents are used as build input
+  - Staging path in repository: `FFmpeg\bin\`
+  - Bundled output path: `dist\MMD_AutoLipTool\FFmpeg\`
+- License:
+  - Review and include the applicable FFmpeg license notices for the chosen official build
+- Notes:
+  - Keep the recorded FFmpeg version synchronized across README, NOTICE, and packaging-related docs
+  - Do not silently switch FFmpeg source or version without updating release-side documents
+
 ---
 
 ## 4. Current Distribution Assumption
@@ -122,6 +142,7 @@ Documented included areas currently mention:
 - whisper submodules and assets
 - pyopenjtalk data / dynamic libraries
 - tiktoken / tiktoken_ext data and submodules
+- FFmpeg v8.1 `bin` contents staged under `FFmpeg\bin\`
 
 Because actual bundled content may vary by environment and spec file changes,
 final release verification should be performed against the built artifact.
@@ -141,18 +162,26 @@ Before a public GitHub release or binary distribution, verify at least the follo
    - applicable third-party license texts / notices
 5. Exact package versions used for the release are recorded
 6. If new dependencies are added, this file is updated
-7. If FFmpeg or other external binaries are bundled in the future, add a dedicated section and include their exact license notices
+7. FFmpeg v8.1 bundling details and exact applicable license notices are confirmed for the release build
 
 ---
 
-## 6. Future External Binary Note
+## 6. FFmpeg Bundling Note
 
-At the time of writing, this document does **not** assume FFmpeg is bundled.
+At the time of writing, this document **does assume** FFmpeg is bundled.
 
-If a future release bundles FFmpeg or other external multimedia binaries:
+Current assumption:
 
-- add them explicitly to this document
-- record the exact build source and version
+- official distribution build
+- version `v8.1`
+- manual staging under `FFmpeg\bin\`
+- bundle only the `bin` contents
+- place bundled files under executable root `FFmpeg\`
+
+If this policy changes in a future release:
+
+- update this document explicitly
+- record the new build source and version
 - include the exact applicable license notices in the release package
 
 ---

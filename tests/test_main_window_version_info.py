@@ -25,7 +25,7 @@ class MainWindowVersionInfoTests(unittest.TestCase):
 
     def test_show_version_info_uses_shared_app_version_source(self) -> None:
         with (
-            patch("gui.main_window.resolve_app_version", return_value="0.3.7.1") as mocked_app_version,
+            patch("gui.main_window.resolve_app_version", return_value="0.3.8.0") as mocked_app_version,
             patch("gui.main_window.resolve_installed_version", side_effect=["1.0.0", "2.0.0"]),
             patch.object(QMessageBox, "information") as mocked_information,
         ):
@@ -33,7 +33,7 @@ class MainWindowVersionInfoTests(unittest.TestCase):
 
         mocked_app_version.assert_called_once()
         message = mocked_information.call_args.args[2]
-        self.assertIn("0.3.7.1", message)
+        self.assertIn("0.3.8.0", message)
         self.assertIn("1.0.0", message)
         self.assertIn("2.0.0", message)
 
