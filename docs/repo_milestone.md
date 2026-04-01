@@ -1,4 +1,34 @@
 ﻿# MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
+## 2026-04-02 / MS12-2 実装メモ
+
+- 対象: MS12-2
+- 実装反映:
+  - `src/gui/main_window.py` に `QThread + QObject worker` ベースの最小 processing worker 導線を追加した
+  - `build_vowel_timing_plan(...)` の実行を worker 側へ切り出し、timing plan 反映・waveform / preview / status 更新は UI 側へ残した
+  - `tests/test_main_window_processing_responsiveness.py` を追加し、処理開始時の busy state、成功時の UI 反映、失敗時の warning / 復帰を固定した
+- 確認状態:
+  - `tests/test_main_window_processing_responsiveness.py tests/test_main_window_vmd_output_dir.py tests/test_main_window_closing_softness.py` は通過
+- 現在地:
+  - MS12-2 の最小契約である processing-time responsiveness improvement が実装済みになった
+  - 次段は MS12-3 の splash timing improvement へ進める状態
+
+---
+
+## 2026-04-02 / MS12-2 実装 plan 整理メモ
+
+- 対象: MS12-2
+- 追加文書:
+  - `docs/MS12-2_Implementation_Plan.md` を追加
+- 整理内容:
+  - processing-time UI responsiveness improvement について、対象 / 非対象 / 壊さない前提 / worker 境界 / 想定実装ステップ / テスト方針 / 保留課題を単独文書化
+  - `build_vowel_timing_plan(...)` の同期実行を worker 側へ寄せ、timing plan 反映・waveform / preview / status 更新は UI 側へ残す方針を固定
+  - 未確定事項は問い合わせず、worker 形式、payload 形、dialog modality などを保留課題として明記
+- 現在地:
+  - MS12-2 に入る前提となる責務境界が整理され、実装着手可能な状態になった
+  - まだコード実装・テスト追加には入っていない
+
+---
+
 ## 2026-04-02 / MS12-1 実装メモ
 
 - 対象: MS12-1

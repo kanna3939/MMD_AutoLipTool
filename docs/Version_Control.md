@@ -1,5 +1,45 @@
 # Version Control Log
 
+## Entry 2026-04-02 / Session: ms12-2-implement-processing-worker
+
+- Date: 2026-04-02
+- Session: ms12-2-implement-processing-worker
+- Summary:
+  - `MS12-2: processing-time UI responsiveness improvement` を実装した。
+  - `main_window.py` に最小の `QThread + QObject worker` 導線を追加し、`build_vowel_timing_plan(...)` の実行を UI スレッド外へ切り出した。
+  - 成功時の timing plan 反映、waveform / preview 更新、失敗時の warning / 復帰を UI 側 handler に整理し、最小回帰テストを追加した。
+- Modified Files:
+  - `src/gui/main_window.py`: processing worker、成功 / 失敗 handler、UI 側 apply / reset 導線を追加。
+  - `docs/repo_milestone.md`: MS12-2 実装メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - `docs/MS12-2_Implementation_Plan.md`
+  - `tests/test_main_window_processing_responsiveness.py`
+- Notes:
+  - 今回は processing responsiveness の最小導線のみで、キャンセル機能や詳細 progress 表示は追加していない。
+  - dialog modality と completion sound の契約は既存挙動を維持している。
+- Verification:
+  - `.\\.venv\\Scripts\\python.exe -m pytest tests/test_main_window_processing_responsiveness.py tests/test_main_window_vmd_output_dir.py tests/test_main_window_closing_softness.py`
+
+## Entry 2026-04-02 / Session: ms12-2-plan-doc
+
+- Date: 2026-04-02
+- Session: ms12-2-plan-doc
+- Summary:
+  - `MS12-2: processing-time UI responsiveness improvement` の個別実装 plan を追加した。
+  - 現行の `_run_processing()` / `_refresh_waveform_morph_labels()` / `_begin_processing_session()` 周辺の責務を踏まえ、worker 境界と UI 側に残す更新責務を整理した。
+  - 未確定事項は今回も問い合わせず、worker 方式、payload 形、dialog modality などを保留課題として文書へ残した。
+- Modified Files:
+  - `docs/repo_milestone.md`: MS12-2 実装 plan 整理メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - `docs/MS12-2_Implementation_Plan.md`
+- Notes:
+  - 今回は実装 plan 文書化のみで、コード変更やテスト追加は行っていない。
+  - 次段は、この plan を基準に MS12-2 実装へ入る前提とする。
+- Verification:
+  - `rg -n "MS12-2|worker|_run_processing|_refresh_waveform_morph_labels|保留課題|完了条件" docs/MS12-2_Implementation_Plan.md docs/repo_milestone.md docs/Version_Control.md`
+
 ## Entry 2026-04-02 / Session: ms12-1-implement-vmd-output-dir-memory
 
 - Date: 2026-04-02
