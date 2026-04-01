@@ -25,6 +25,7 @@ _MorphFrameWithFlags = tuple[int, str, float, bool]
 
 
 class ObservationLike(Protocol):
+    """writer が読む observation 契約の最小 subset."""
     event_index: int
     is_bridgeable_micro_gap_candidate: bool
     is_bridgeable_same_vowel_micro_gap_candidate: bool
@@ -269,6 +270,15 @@ class FinalNormalizationMetadata:
             "required_zero_frames",
             _normalize_required_zero_frames(self.required_zero_frames),
         )
+
+
+@dataclass(frozen=True)
+class _ObservationShapeContract:
+    """writer が shape family を読むための read-only view."""
+
+    is_cross_vowel_transition_candidate: bool = False
+    is_cross_vowel_zero_run_floor_candidate: bool = False
+    is_same_vowel_burst_candidate: bool = False
 
 
 @dataclass(frozen=True)
@@ -1255,6 +1265,8 @@ def _build_points_for_grouping_with_observations(
     *,
     observations: Sequence[ObservationLike] | None = None,
 ) -> tuple[list[VowelTimelinePoint], tuple[int, ...]]:
+    # pipeline が observation 側で確定した candidate family を、
+    # writer の grouping 入力へ翻訳する最初の handoff 点。
     if not points:
         return [], ()
     adjusted_points = _apply_cross_vowel_transition_candidates_to_points(
@@ -3044,6 +3056,30 @@ def _observation_for_source_event_index(
     return observations[source_event_index]
 
 
+def _resolve_observation_shape_contract(
+    observation: ObservationLike | None,
+) -> _ObservationShapeContract:
+    if observation is None:
+        return _ObservationShapeContract()
+    return _ObservationShapeContract(
+        is_cross_vowel_transition_candidate=getattr(
+            observation,
+            "is_bridgeable_cross_vowel_transition_candidate",
+            False,
+        ),
+        is_cross_vowel_zero_run_floor_candidate=getattr(
+            observation,
+            "is_cross_vowel_zero_run_continuity_floor_candidate",
+            False,
+        ),
+        is_same_vowel_burst_candidate=getattr(
+            observation,
+            "is_same_vowel_burst_candidate",
+            False,
+        ),
+    )
+
+
 def _resolve_effective_peak_value(
     point: VowelTimelinePoint,
     *,
@@ -3053,14 +3089,14 @@ def _resolve_effective_peak_value(
     point_peak_value = _point_peak_value(point)
     if point_peak_value > MORPH_FRAME_OPEN_EPSILON:
         return point_peak_value
-    observation = _observation_for_source_event_index(observations, source_event_index)
-    if observation is None:
-        return 0.0
-    if getattr(observation, "is_bridgeable_cross_vowel_transition_candidate", False):
+    contract = _resolve_observation_shape_contract(
+        _observation_for_source_event_index(observations, source_event_index)
+    )
+    if contract.is_cross_vowel_transition_candidate:
         return CONTINUITY_FLOOR_MORPH_VALUE
-    if getattr(observation, "is_cross_vowel_zero_run_continuity_floor_candidate", False):
+    if contract.is_cross_vowel_zero_run_floor_candidate:
         return CONTINUITY_FLOOR_MORPH_VALUE
-    if getattr(observation, "is_same_vowel_burst_candidate", False):
+    if contract.is_same_vowel_burst_candidate:
         return SAME_VOWEL_BURST_FLOOR_MORPH_VALUE
     return 0.0
 

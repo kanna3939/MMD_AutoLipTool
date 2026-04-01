@@ -2780,6 +2780,8 @@ QSplitter#CenterSplitter::handle {{
         if self.current_timing_plan is None:
             self._clear_preview_display()
             return
+        # Preview は current timing plan の canonical timeline と observations、
+        # そして GUI の現在値をそのまま downstream へ handoff する。
         preview_data = build_preview_data(
             self.current_timing_plan.timeline,
             observations=self.current_timing_plan.observations,
