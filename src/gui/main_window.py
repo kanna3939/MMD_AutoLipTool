@@ -2,7 +2,6 @@ import os
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 
 try:
@@ -11,6 +10,7 @@ except ImportError:  # pragma: no cover - non-Windows fallback
     winsound = None
 
 from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
+from app_version import resolve_app_version, resolve_installed_version
 from core import (
     PipelineError,
     TextProcessingError,
@@ -941,9 +941,15 @@ class MainWindow(QWidget):
             return
 
     def _show_version_info(self) -> None:
-        app_version = self._resolve_installed_version(["mmd-autolip-tool"])
-        pyopenjtalk_version = self._resolve_installed_version(["pyopenjtalk"])
-        whisper_version = self._resolve_installed_version(["openai-whisper", "whisper"])
+        app_version = resolve_app_version() or self._main_window_text(
+            "VERSION_INFO_NOT_INSTALLED"
+        )
+        pyopenjtalk_version = resolve_installed_version(["pyopenjtalk"]) or self._main_window_text(
+            "VERSION_INFO_NOT_INSTALLED"
+        )
+        whisper_version = resolve_installed_version(
+            ["openai-whisper", "whisper"]
+        ) or self._main_window_text("VERSION_INFO_NOT_INSTALLED")
         strings = MainWindowStrings.for_language(self._current_language)
         QMessageBox.information(
             self,
@@ -965,14 +971,6 @@ class MainWindow(QWidget):
                 ]
             ),
         )
-
-    def _resolve_installed_version(self, package_names: list[str]) -> str:
-        for package_name in package_names:
-            try:
-                return package_version(package_name)
-            except PackageNotFoundError:
-                continue
-        return self._main_window_text("VERSION_INFO_NOT_INSTALLED")
 
     def _main_window_text(self, key: str) -> str:
         return MainWindowStrings.for_language(self._current_language)[key]

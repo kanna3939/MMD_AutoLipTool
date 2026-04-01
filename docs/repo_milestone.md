@@ -1,4 +1,67 @@
 ﻿# MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
+## 2026-04-02 / MS12-4 実装メモ
+
+- 対象: MS12-4
+- 実装反映:
+  - `src/app_version.py` を追加し、app version / installed version の共通解決 helper を導入した
+  - `src/main.py` で splash pixmap に `Ver. x.y.z` 形式の version 文字列を重ねる導線を追加した
+  - `src/gui/main_window.py` の Help version 表示を共通 helper 参照へ切り替えた
+  - `tests/test_app_version.py`、`tests/test_main_startup_splash.py`、`tests/test_main_window_version_info.py` で version source と splash 表示の最小回帰を追加した
+- 確認状態:
+  - `tests/test_app_version.py tests/test_main_startup_splash.py tests/test_main_window_version_info.py tests/test_main_window_processing_responsiveness.py` は通過
+- 現在地:
+  - MS12-4 の最小契約である splash version display が実装済みになった
+  - 次段は MS12-5 の packaging 系整理へ進める状態
+
+---
+
+## 2026-04-02 / MS12-4 実装 plan 整理メモ
+
+- 対象: MS12-4
+- 追加文書:
+  - `docs/MS12-4_Implementation_Plan.md` を追加
+- 整理内容:
+  - splash version display について、対象 / 非対象 / version source 単一化 / splash 描画方針 / テスト方針 / 保留課題を単独文書化
+  - app version source を helper へ 1 本化し、splash と Help が同じ version を参照する方針を固定
+  - 表記形式と表示位置のような見た目判断は保留課題として分離
+- 現在地:
+  - MS12-4 実装に必要な責務境界と論点分解ができた
+  - まだコード実装・テスト追加には入っていない
+  - 追加方針として、表記は `Ver. x.y.z`、位置はロゴ下の中央下寄り空白帯に固定した
+
+---
+
+## 2026-04-02 / MS12-3 実装メモ
+
+- 対象: MS12-3
+- 実装反映:
+  - `src/main.py` に splash の生成・表示・finish を扱う最小 helper を追加した
+  - splash 表示開始時刻を保持し、起動が速い環境でも短時間は表示されるよう最小表示時間付きの finish 予約を追加した
+  - `tests/test_main_startup_splash.py` を追加し、splash 表示、missing asset fallback、finish 予約を固定した
+- 確認状態:
+  - `tests/test_main_startup_splash.py tests/test_main_window_processing_responsiveness.py tests/test_main_window_vmd_output_dir.py` は通過
+- 現在地:
+  - MS12-3 の最小契約である splash timing improvement が実装済みになった
+  - 次段は MS12-4 の splash version display へ進める状態
+
+---
+
+## 2026-04-02 / MS12-3 実装 plan 整理メモ
+
+- 対象: MS12-3
+- 追加文書:
+  - `docs/MS12-3_Implementation_Plan.md` を追加
+- 整理内容:
+  - splash timing improvement について、対象 / 非対象 / 壊さない前提 / 起動順整理 / finish タイミング / テスト方針 / 保留課題を単独文書化
+  - `QApplication` 作成後のできるだけ早い段階で splash を表示し、settings load と `MainWindow` 構築待ちを splash 中に吸収する方針を固定
+  - finish 遅延や最小表示時間のような見た目判断は保留課題として分離
+- 現在地:
+  - MS12-3 実装に必要な起動導線の整理と論点分解ができた
+  - まだコード実装・テスト追加には入っていない
+  - 追加方針として、起動が速い環境でも splash を一瞬だけでも表示させる方向を採る
+
+---
+
 ## 2026-04-02 / MS12-2 実装メモ
 
 - 対象: MS12-2

@@ -1,5 +1,89 @@
 # Version Control Log
 
+## Entry 2026-04-02 / Session: ms12-4-implement-splash-version
+
+- Date: 2026-04-02
+- Session: ms12-4-implement-splash-version
+- Summary:
+  - `MS12-4: splash version display` を実装した。
+  - `app_version.py` を追加して app version source を共通化し、splash と Help の両方が同じ version 解決経路を使うようにした。
+  - splash へ `Ver. x.y.z` 形式の文字重ねを追加し、最小回帰テストを整備した。
+- Modified Files:
+  - `src/main.py`: splash version 文字重ねと共通 version helper 利用を追加。
+  - `src/gui/main_window.py`: Help version 表示を共通 helper 参照へ切り替え。
+  - `tests/test_main_startup_splash.py`: splash version 表示テストを追加。
+  - `docs/repo_milestone.md`: MS12-4 実装メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - `src/app_version.py`
+  - `tests/test_app_version.py`
+  - `tests/test_main_window_version_info.py`
+- Notes:
+  - splash 上の表記は `Ver. x.y.z`、位置はロゴ下の中央下寄り空白帯に寄せた。
+  - dependency version は従来どおり Help ダイアログのみで表示している。
+- Verification:
+  - `.\\.venv\\Scripts\\python.exe -m pytest tests/test_app_version.py tests/test_main_startup_splash.py tests/test_main_window_version_info.py tests/test_main_window_processing_responsiveness.py`
+
+## Entry 2026-04-02 / Session: ms12-4-plan-doc
+
+- Date: 2026-04-02
+- Session: ms12-4-plan-doc
+- Summary:
+  - `MS12-4: splash version display` の個別実装 plan を追加した。
+  - `main.py` の splash 導線と `main_window.py` の Help version 表示を前提に、app version source を単一化して両者から共有する方針を整理した。
+  - version 表記形式と splash 上の表示位置は保留課題として切り分けた。
+- Modified Files:
+  - `docs/repo_milestone.md`: MS12-4 実装 plan 整理メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - `docs/MS12-4_Implementation_Plan.md`
+- Notes:
+  - 今回は実装 plan 文書化のみで、コード変更やテスト追加は行っていない。
+  - 次段は、この plan を基準に MS12-4 実装へ入る前提とする。
+  - 後続判断として、表記は `Ver. x.y.z`、表示位置はロゴ下の中央下寄り空白帯を採る。
+- Verification:
+  - `rg -n "MS12-4|version source|splash|Help|保留課題|完了条件" docs/MS12-4_Implementation_Plan.md docs/repo_milestone.md docs/Version_Control.md`
+
+## Entry 2026-04-02 / Session: ms12-3-implement-splash-timing
+
+- Date: 2026-04-02
+- Session: ms12-3-implement-splash-timing
+- Summary:
+  - `MS12-3: splash timing improvement` を実装した。
+  - `main.py` に splash の生成・表示・finish helper を追加し、起動が速い環境でも短時間は splash が表示される最小表示時間付き finish 予約を導入した。
+  - splash asset 無しの fallback と finish 予約を固定する最小テストを追加した。
+- Modified Files:
+  - `src/main.py`: splash helper、最小表示時間計算、finish 予約導線を追加。
+  - `docs/repo_milestone.md`: MS12-3 実装メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - `tests/test_main_startup_splash.py`
+- Notes:
+  - 今回は splash timing のみを対象とし、version 表示や splash デザイン変更は含めていない。
+  - 最小表示時間は短めの固定値で導入し、実機確認で調整する前提を維持している。
+- Verification:
+  - `.\\.venv\\Scripts\\python.exe -m pytest tests/test_main_startup_splash.py tests/test_main_window_processing_responsiveness.py tests/test_main_window_vmd_output_dir.py`
+
+## Entry 2026-04-02 / Session: ms12-3-plan-doc
+
+- Date: 2026-04-02
+- Session: ms12-3-plan-doc
+- Summary:
+  - `MS12-3: splash timing improvement` の個別実装 plan を追加した。
+  - `main.py` の現行起動順を前提に、splash 表示順、settings load と main window 構築待ちの吸収位置、finish タイミングを整理した。
+  - 最小表示時間や finish 遅延のような見た目判断は保留課題として切り分けた。
+- Modified Files:
+  - `docs/repo_milestone.md`: MS12-3 実装 plan 整理メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - `docs/MS12-3_Implementation_Plan.md`
+- Notes:
+  - 今回は実装 plan 文書化のみで、コード変更やテスト追加は行っていない。
+  - 次段は、この plan を基準に MS12-3 実装へ入る前提とする。
+  - 後続判断として、起動が速い環境でも splash を一瞬だけでも表示させる方向を採る。
+- Verification:
+  - `rg -n "MS12-3|splash|finish|最小表示時間|保留課題|完了条件" docs/MS12-3_Implementation_Plan.md docs/repo_milestone.md docs/Version_Control.md`
+
 ## Entry 2026-04-02 / Session: ms12-2-implement-processing-worker
 
 - Date: 2026-04-02
