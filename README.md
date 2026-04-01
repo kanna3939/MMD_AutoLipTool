@@ -2,7 +2,7 @@
 
 ## Version
 
-Ver 0.3.6.5
+Ver 0.3.7.1
 
 ## 概要
 
@@ -78,6 +78,14 @@ UTF-8 のテキスト 1 ファイルと PCM WAV 1 ファイルを入力し、母
 - MS7 フェーズ7〜8として、修正範囲を `src/gui/main_window.py` の局所修正に固定し、完了判定観点を最終整理
 
 ## 直近更新（2026-03-21）
+
+## 直近更新（2026-04-02 / Ver 0.3.7.1）
+
+- MS11-10 相当として、MS11 系の総まとめ文書を `Ver 0.3.7.1` 基準へ再同期
+- MS11-9FIX7 として、closing smoothing を family 別局所処理から tail 共通 post-process 契約へ整理
+- `Test11_9S1.vmd` / `S2` / `S3` / `S4` の比較で、`開口維持` / `閉口スムーズ` は短縮ではなく末尾追加として出ていることを確認
+- `docs/MS11-10_Implementation_Plan.md` を、MS11 全体の closeout と FIX7 反映済み状態が読める文書へ更新
+- MS11 系の主残テーマを、same-vowel 微調整 / observation 契約整理 / closing smoothing の自然さ確認へ整理
 
 ## 直近更新（2026-04-01 / Ver 0.3.6.5）
 

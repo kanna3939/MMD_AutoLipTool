@@ -4,15 +4,15 @@
 
 - 文書名: `docs/Specification_Prompt_v3.md`
 - 作成日: 2026-03-20
-- 最終更新日: 2026-04-01
-- 対応リリース: `Ver 0.3.6.5`
+- 最終更新日: 2026-04-02
+- 対応リリース: `Ver 0.3.7.1`
 - 対象リポジトリ: `MMD_AutoLipTool`
 - 旧版: `docs/Specification_Prompt_v2.md`（本書で置き換え）
 - 文書方針: v2 の意図を引き継ぎつつ、現行実装・確定済み追加仕様・責務分割方針に合わせて更新する
 
-### 0.1 実装同期注記（2026-04-01 / Ver 0.3.6.5 同期）
+### 0.1 実装同期注記（2026-04-02 / Ver 0.3.7.1 同期）
 
-- 本書は v3 の目標仕様を含むが、2026-04-01 時点でコード反映済みなのは MS8A / MS8B / MS8C / MS8D-2 / MS9 / MS9-2 / MS10 / MS11-1 / MS11-2 / MS11-2_FIX01 / MS11-2_FIX02 / MS11-3 / MS11-4 / MS11-5 / MS11-6、MS11-7 の文書整備・最小テスト反映、MS11-8、MS11-9、MS11-9B、MS11-9C、および MS11-9D から MS11-9D-6 までの speech-internal lip-motion 改善までとする。
+- 本書は v3 の目標仕様を含むが、2026-04-02 時点でコード反映済みなのは MS8A / MS8B / MS8C / MS8D-2 / MS9 / MS9-2 / MS10 / MS11-1 / MS11-2 / MS11-2_FIX01 / MS11-2_FIX02 / MS11-3 / MS11-4 / MS11-5 / MS11-6、MS11-7 の文書整備・最小テスト反映、MS11-8、MS11-9、MS11-9B、MS11-9C、および MS11-9D から MS11-9D-6、MS11-9E から MS11-9E-4、MS11-9F から MS11-9F-4、MS11-9G、MS11-9FIX7 までの speech-internal lip-motion / top-end / closing smoothing refinement とする。
 - 反映済み（コード実体）:
   - 上部操作列 `OperationPanel`・最下部 `StatusPanel` を含む GUI 再構成
   - `PreviewArea` / `preview_transform.py` による 5 段固定 Preview 表示
@@ -83,12 +83,19 @@
   - zero-peak cross-vowel case と short zero-run cross-vowel span に対する conservative な continuity floor
   - same-vowel short zero / low-positive short trapezoid に対する burst candidate 識別と smoothing
   - `rms_window_times_sec` / `rms_window_values` を利用した top-end shaping の writer / Preview 整合
+  - same-vowel residual に対する candidate 補強、representative span、single-event synthetic bridge の refinement
+  - cross-vowel residual に対する representative span、transition residual helper、floor residual helper、停止基準整理
+  - `peak_end_value` の 1 点依存を和らげる writer-side top-end refinement
+  - `closing_hold_frames` / `closing_softness_frames` を、family 別局所 smoothing ではなく元 tail を短縮しない共通 tail post-process として再整理
+  - `Test11_9S1.vmd` / `S2` / `S3` / `S4` 比較に基づく、closing smoothing の実出力確認
 - 未反映（後続対象）:
   - より高度な平滑化と出力仕様全体の再設計
   - 実データ観測を踏まえた RMS 定数の必要最小限の再調整
   - MS11-7 として扱う、実データ観測結果の実投入と RMS 定数再調整要否の最終判断確定
-  - MS11-9 系で残っている residual same-vowel burst / residual cross-vowel full closure / observation 契約整理
+  - MS11-9 系で残っている same-vowel の最終的な見え方微調整 / observation 契約整理
 - MS11-9 系の残課題整理は `docs/MS11-9_Remaining_Issues.md` を参照する。
+- MS11-9 系の横断要約は `docs/MS11-9_Summary_and_Handoff.md` を参照する。
+- MS11-10 相当の文書同期内容は `docs/MS11-10_Implementation_Plan.md` を参照する。
 - MS8D-2 の改訂要件差分は `docs/MS8D-2_Requirements_and_Spec_Update.md` を参照する。
 
 ---

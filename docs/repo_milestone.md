@@ -1,4 +1,111 @@
 ﻿# MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
+## 2026-04-02 / MS11-9FIX7 closing smoothing 契約整理メモ
+
+- 対象: MS11-9FIX7
+- 実装反映:
+  - `src/vmd_writer/writer.py` の closing smoothing を、family ごとの tail 再構成から
+    **元の end-zero 以降へ hold / softness を追加する共通 tail post-process** へ整理
+  - `src/gui/preview_transform.py` を writer の post-process 結果に追随させ、
+    Preview 独自補正を増やさない方針を維持
+  - `tests/test_vmd_writer_intervals.py` / `tests/test_preview_transform.py` を、
+    「元 tail を短縮しない」契約ベースへ更新
+- 確認状態:
+  - `tests/test_vmd_writer_intervals.py tests/test_preview_transform.py tests/test_pipeline_and_vmd.py tests/test_main_window_closing_softness.py`
+    が `78 passed`
+  - `Test11_9S1.vmd` / `Test11_9S2.vmd` / `Test11_9S3.vmd` / `Test11_9S4.vmd` の比較で、
+    `開口維持` / `閉口スムーズ` は短縮ではなく末尾追加として出ている
+- 現在地:
+  - FIX7 により、旧不具合だった「全音の後半スロープが一律 1 フレーム短くなる」挙動は
+    実出力 VMD 差分上では確認されなくなった
+  - 今後の主題は不具合修正よりも、closing smoothing の効き方の自然さ確認へ移る
+
+---
+
+## 2026-04-02 / Ver 0.3.7.1 / MS11-10 closeout sync メモ
+
+- 対象: MS11-10 相当の総まとめ文書整備
+- 同期内容:
+  - `README.md` / `pyproject.toml` / `docs/Specification_Prompt_v3.md` / `docs/MS11_MS12_Roadmap_and_Scope_Split.md` / `docs/repo_milestone.md` / `docs/Version_Control.md` を `Ver 0.3.7.1` 基準へ同期
+  - `docs/MS11-10_Implementation_Plan.md` を、MS11 全体の closeout と MS11-9FIX7 まで反映済みの現在地が読める文書へ更新
+  - MS11-9 系の横断文書群と `MS11-10` の記述を、same-vowel 微調整 / observation 契約整理 / closing smoothing 自然さ確認という残テーマへ揃えた
+- 現在地:
+  - 反映版を `Ver 0.3.7.1` としてコミット前同期可能な状態まで整備
+  - MS11 系は FIX7 までを含めて closeout 状態を文書上で追跡可能
+  - MS12 は引き続き GUI responsiveness / splash / packaging 系の別ラインとして維持
+
+---
+
+## 2026-04-02 / Ver 0.3.7.0 / MS11-10 文書同期メモ
+
+- 対象: MS11-10 相当の最終文書整備
+- 同期内容:
+  - `README.md` / `pyproject.toml` / `docs/Specification_Prompt_v3.md` / `docs/MS11_MS12_Roadmap_and_Scope_Split.md` / `docs/repo_milestone.md` / `docs/Version_Control.md` を `Ver 0.3.7.0` 基準へ同期
+  - `docs/MS11-10_Implementation_Plan.md` を追加し、MS11 final consistency sync の目的・対象・完了条件を固定
+  - `docs/MS11-9_Summary_and_Handoff.md` を MS11-9 系の横断入口として採用し、same-vowel / cross-vowel / top-end shaping の現在地を参照しやすく整理
+  - MS11-9G は MMD 側確認込みで一旦クローズ扱いとし、MS11 側の主残テーマを same-vowel 微調整と observation 契約整理へ絞った
+- 現在地:
+  - 反映版を `Ver 0.3.7.0` としてコミット前同期可能な状態まで整備
+  - MS11-9 系の個別計画書は保持しつつ、見返し入口を summary / remaining / contract memo へ寄せた
+  - MS12 は引き続き GUI responsiveness / splash / packaging 系の別ラインとして維持
+
+---
+
+## 2026-04-01 / MS11-9 closeout and summary sync
+
+- 対象: MS11-9 系全体
+- 文書反映:
+  - [docs/MS11-9_Summary_and_Handoff.md](d:/Kanna_Works/MMD_AppWork/MMD_AutoLipTool/MMD_AutoLipTool_Codex/docs/MS11-9_Summary_and_Handoff.md) を追加し、MS11-9 から MS11-9G までの変遷、レイヤ責務、実出力確認、現在の残課題を横断要約した
+  - [docs/MS11-9_Remaining_Issues.md](d:/Kanna_Works/MMD_AppWork/MMD_AutoLipTool/MMD_AutoLipTool_Codex/docs/MS11-9_Remaining_Issues.md) を更新し、MS11-9G を MMD 側確認込みで一旦クローズ扱いへ整理した
+  - [docs/MS11-9_Observation_Handoff_Contract_Memo.md](d:/Kanna_Works/MMD_AppWork/MMD_AutoLipTool/MMD_AutoLipTool_Codex/docs/MS11-9_Observation_Handoff_Contract_Memo.md) を更新し、top-end shaping を保留テーマへ移した
+  - [docs/MS11_MS12_Roadmap_and_Scope_Split.md](d:/Kanna_Works/MMD_AppWork/MMD_AutoLipTool/MMD_AutoLipTool_Codex/docs/MS11_MS12_Roadmap_and_Scope_Split.md) と [docs/Specification_Prompt_v3.md](d:/Kanna_Works/MMD_AppWork/MMD_AutoLipTool/MMD_AutoLipTool_Codex/docs/Specification_Prompt_v3.md) を現状へ同期した
+- 現在地:
+  - same-vowel は微調整テーマとして継続
+  - cross-vowel は F-4 で一旦停止基準を確定
+  - top-end shaping は G と MMD 側確認をもって一旦クローズ
+  - MS11-9 系の主な残テーマは same-vowel 微調整と observation 契約整理に絞られた
+
+---
+
+## 2026-04-01 / MS11-9G top-end shaping residual 整理メモ
+
+- 対象: MS11-9G
+- 実装反映:
+  - `src/vmd_writer/writer.py` の `_resolve_peak_end_value_from_observation(...)` を更新し、`peak_end_frame` 以降の最初の RMS を主値に、直後 1 点を補助参照する局所安定化を追加
+  - `tests/test_vmd_writer_intervals.py` と `tests/test_preview_transform.py` に、flat-top residual / 急減衰 residual の top-end 回帰を追加
+  - `docs/MS11-9G_Implementation_Plan.md` に実装・確認結果を追記
+- 確認状態:
+  - `writer / Preview` 系と `pipeline / and_vmd` 系の主要回帰は通過
+  - ローカル再生成の [dist/_tmp_ms11_9g_sample_input2_upper1.vmd](d:/Kanna_Works/MMD_AppWork/MMD_AutoLipTool/MMD_AutoLipTool_Codex/dist/_tmp_ms11_9g_sample_input2_upper1.vmd) は [Test11_9o.vmd](d:/Visual%20Works/Kanna%20Work/Voice/Test11_9o.vmd) と不一致であり、top-end shaping 差分が実出力へ届くことを確認
+  - [Test11_9p.vmd](d:/Visual%20Works/Kanna%20Work/Voice/Test11_9p.vmd) はローカル再生成結果と一致
+- 現在地:
+  - MS11-9G は、新 family を増やさず writer-side の top-end 値配分だけで差分を出す段階まで到達した
+  - 次段は「差分が出たか」より、「MMD 上で flat-top / 急減衰の見え方がどこまで自然になったか」の評価と微調整が主題になる
+
+---
+
+## 2026-04-01 / MS11-9F cross-vowel residual 整理メモ
+
+- 対象: MS11-9F / MS11-9F-2 / MS11-9F-3 / MS11-9F-4
+- 実装反映:
+  - `src/core/pipeline.py` に cross-vowel representative span、moderate right-gap residual transition helper、wide 2-event zero-run residual floor helper を追加
+  - `tests/test_pipeline_peak_values.py` に cross-vowel residual transition / floor の回帰を追加
+  - `docs/MS11-9F_Implementation_Plan.md`、`docs/MS11-9F-2_Implementation_Plan.md`、`docs/MS11-9F-3_Implementation_Plan.md`、`docs/MS11-9F-4_Implementation_Plan.md` に段階到達を整理
+- 確認状態:
+  - `sample_input2` の residual cross-vowel は `23 -> 10 -> 7 -> 3`
+  - `cross_transition = 17`, `cross_floor = 4` まで到達
+  - `Test11_9n.vmd` は MS11-9F、`Test11_9m.vmd` は MS11-9F-2、`Test11_9o.vmd` は MS11-9F-3 のローカル再生成結果と一致
+  - cross-vowel 改善は段階的に実出力差分まで到達している
+- 文書上の確定:
+  - `idx 172` / `193` は pause 寄りの非対象候補として扱う
+  - `idx 6` は mixed-gap 境界 case として保留する
+  - MS11-9F-4 は「残件を無理に救済し切る」のではなく、「ここで閉じる基準を明示する」段階として確定扱いとする
+- スコープ外として維持:
+  - `idx 6` の mixed-gap 個別救済
+  - top-end shaping 再調整
+  - MS12
+
+---
+
 ## 2026-04-01 / MS11-9C 実装反映メモ
 
 - 対象: MS11-9C Lip Hold GUI exposure and final-closing hold semantics alignment

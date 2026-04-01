@@ -1,5 +1,148 @@
 # Version Control Log
 
+## Entry 2026-04-02 / Session: ms11-10-doc-sync-v0371
+
+- Date: 2026-04-02
+- Session: ms11-10-doc-sync-v0371
+- Summary:
+  - MS11-10 相当の総まとめ文書を、MS11-9FIX7 まで反映した `Ver 0.3.7.1` 基準へ更新した。
+  - `docs/MS11-10_Implementation_Plan.md` を、MS11 final consistency sync から MS11 closeout / FIX7 反映済みの総まとめ文書へ更新した。
+  - README / 仕様書 / roadmap / milestone / version log の版数と現在地記述を揃え、コミット直前に見返せる文書状態へ整えた。
+- Modified Files:
+  - `README.md`: 版数を `Ver 0.3.7.1` に更新し、MS11-10 総まとめの直近更新を追記。
+  - `pyproject.toml`: プロジェクトバージョンを `0.3.7.1` に更新。
+  - `docs/MS11-10_Implementation_Plan.md`: FIX7 まで反映した closeout 文書へ更新。
+  - `docs/MS11_MS12_Roadmap_and_Scope_Split.md`: Baseline Version と MS11-10 status note を `Ver 0.3.7.1` 基準へ更新。
+  - `docs/Specification_Prompt_v3.md`: 対応リリースを `Ver 0.3.7.1` に更新し、FIX7 までの実装同期注記を追記。
+  - `docs/repo_milestone.md`: `Ver 0.3.7.1 / MS11-10 closeout sync メモ` を追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - 今回はコミット前準備として文書整備と版数同期のみを行い、追加コード実装は含まない。
+  - MS11 系の主残テーマは same-vowel 微調整、observation 契約整理、closing smoothing の自然さ確認である。
+- Verification:
+  - `rg -n "0\\.3\\.7\\.1|Ver 0\\.3\\.7\\.1|MS11-10|MS11-9FIX7|Test11_9S2|Test11_9S3|Test11_9S4" README.md pyproject.toml docs/MS11-10_Implementation_Plan.md docs/MS11_MS12_Roadmap_and_Scope_Split.md docs/Specification_Prompt_v3.md docs/repo_milestone.md docs/Version_Control.md`
+
+## Entry 2026-04-02 / Session: ms11-9fix7-tail-contract-sync
+
+- Date: 2026-04-02
+- Session: ms11-9fix7-tail-contract-sync
+- Summary:
+  - MS11-9FIX7 の closing smoothing 契約整理を、関連文書へ横断同期した。
+  - FIX7 により `closing_hold_frames` / `closing_softness_frames` の smoothing を family ごとの局所契約から、
+    末尾 tail の共通 post-process 契約へ寄せた現在地を文書へ反映した。
+  - `Test11_9S1.vmd` / `Test11_9S2.vmd` / `Test11_9S3.vmd` / `Test11_9S4.vmd` 比較により、
+    短縮ではなく末尾追加として出ている確認結果を MS11-9 系全体へ同期した。
+- Modified Files:
+  - `docs/MS11-9FIX7_Implementation_Plan.md`: FIX7 実装反映メモ、repo 内テスト結果、`S1-S4` 実出力確認を追記。
+  - `docs/MS11-9_Remaining_Issues.md`: FIX7 を MS11-9 系反映項目へ追加し、closing smoothing を自然さ評価フェーズとして整理。
+  - `docs/MS11-9_Summary_and_Handoff.md`: FIX7 を横断要約へ追加し、closing smoothing の現在地を明記。
+  - `docs/MS11-9_Observation_Handoff_Contract_Memo.md`: closing smoothing を tail 契約整理テーマとして追記。
+  - `docs/repo_milestone.md`: MS11-9FIX7 closing smoothing 契約整理メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - 今回は文書同期のみで、追加コード実装は行っていない。
+  - FIX7 後の主題は「短縮バグの再発有無」ではなく、closing smoothing の効き方の自然さ確認である。
+- Verification:
+  - `rg -n "MS11-9FIX7|Test11_9S2|Test11_9S3|Test11_9S4|closing smoothing|tail post-process" docs/MS11-9FIX7_Implementation_Plan.md docs/MS11-9_Remaining_Issues.md docs/MS11-9_Summary_and_Handoff.md docs/MS11-9_Observation_Handoff_Contract_Memo.md docs/repo_milestone.md docs/Version_Control.md`
+
+## Entry 2026-04-02 / Session: ms11-10-doc-sync-v0370
+
+- Date: 2026-04-02
+- Session: ms11-10-doc-sync-v0370
+- Summary:
+  - MS11-10 相当として、MS11 系の最終整合ドキュメント同期を `Ver 0.3.7.0` 基準で実施した。
+  - `docs/MS11-10_Implementation_Plan.md` を追加し、MS11 final consistency sync の対象・完了条件・スコープ外を明文化した。
+  - MS11-9 系は `docs/MS11-9_Summary_and_Handoff.md` を横断入口に据え、same-vowel 継続・cross-vowel 保留・top-end クローズの現在地を版数同期文書へ反映した。
+- Modified Files:
+  - `README.md`: 版数を `Ver 0.3.7.0` に更新し、MS11-10 相当の直近更新を追記。
+  - `pyproject.toml`: プロジェクトバージョンを `0.3.7.0` に更新。
+  - `docs/MS11_MS12_Roadmap_and_Scope_Split.md`: Baseline Version を `Ver 0.3.7.0` に更新し、MS11-10 の status note を追加。
+  - `docs/Specification_Prompt_v3.md`: 対応リリースを `Ver 0.3.7.0` に更新し、MS11-10 文書参照を追加。
+  - `docs/repo_milestone.md`: `Ver 0.3.7.0 / MS11-10 文書同期メモ` を追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - `docs/MS11-10_Implementation_Plan.md`
+- Notes:
+  - 今回はコミット前準備として文書整備と版数同期のみを行い、追加コード実装は含まない。
+  - MS11 系の主残テーマは same-vowel 微調整と observation 契約整理であり、MS12 は別ラインのまま維持する。
+- Verification:
+  - `rg -n "0\\.3\\.7\\.0|Ver 0\\.3\\.7\\.0|MS11-10|MS11-9_Summary_and_Handoff" README.md pyproject.toml docs`
+
+## Entry 2026-04-01 / Session: ms11-9-closeout-and-summary
+
+- Date: 2026-04-01
+- Session: ms11-9-closeout-and-summary
+- Summary:
+  - MS11-9G を MMD 側確認込みで一旦クローズ扱いとし、MS11-9 系全体の現在地を文書横断で同期した。
+  - `docs/MS11-9_Summary_and_Handoff.md` を新規追加し、MS11-9 から MS11-9G までの変遷、レイヤ責務、実出力確認、残課題を 1 枚に集約した。
+  - `Remaining_Issues` / 契約メモ / Roadmap / Specification を、same-vowel 継続・cross-vowel 保留・top-end クローズという現在地へ更新した。
+- Modified Files:
+  - `docs/MS11-9_Remaining_Issues.md`: MS11-9G を一旦クローズ扱いへ更新し、MS11-9 全体サマリ文書への参照を追加。
+  - `docs/MS11-9_Observation_Handoff_Contract_Memo.md`: top-end shaping を保留テーマへ移行し、現在地を更新。
+  - `docs/MS11_MS12_Roadmap_and_Scope_Split.md`: MS11 側の残テーマを E / F / G 後の現在地へ更新。
+  - `docs/Specification_Prompt_v3.md`: MS11-9E / F / G の反映状態と未反映テーマを現状へ同期。
+  - `docs/repo_milestone.md`: MS11-9 closeout and summary sync メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - `docs/MS11-9_Summary_and_Handoff.md`
+- Notes:
+  - 個別の計画書は保持しつつ、現時点の参照入口を 1 枚へ寄せた。
+  - MS11-9 系の主な残テーマは same-vowel 微調整と observation 契約整理であり、cross-vowel と top-end shaping は現時点で主対象から外してよい。
+- Verification:
+  - `rg -n "MS11-9_Summary_and_Handoff|MS11-9G|Test11_9p|same-vowel|cross-vowel|top-end shaping" docs/MS11-9_Summary_and_Handoff.md docs/MS11-9_Remaining_Issues.md docs/MS11-9_Observation_Handoff_Contract_Memo.md docs/MS11_MS12_Roadmap_and_Scope_Split.md docs/Specification_Prompt_v3.md docs/repo_milestone.md docs/Version_Control.md`
+
+## Entry 2026-04-01 / Session: ms11-9g-top-end-sync
+
+- Date: 2026-04-01
+- Session: ms11-9g-top-end-sync
+- Summary:
+  - MS11-9G の top-end shaping residual 対応を、実装・実出力確認・文書同期まで進めた。
+  - `src/vmd_writer/writer.py` の `peak_end_value` 解決を局所安定化し、`tests/test_vmd_writer_intervals.py` と `tests/test_preview_transform.py` に residual top-end 回帰を追加した。
+  - [Test11_9p.vmd](d:/Visual%20Works/Kanna%20Work/Voice/Test11_9p.vmd) がローカル再生成 [dist/_tmp_ms11_9g_sample_input2_upper1.vmd](d:/Kanna_Works/MMD_AppWork/MMD_AutoLipTool/MMD_AutoLipTool_Codex/dist/_tmp_ms11_9g_sample_input2_upper1.vmd) と一致したことを記録した。
+- Modified Files:
+  - `src/vmd_writer/writer.py`: `peak_end_value` の 1 点依存を和らげる局所安定化を追加。
+  - `tests/test_vmd_writer_intervals.py`: flat-top / 急減衰 residual の writer 回帰を追加。
+  - `tests/test_preview_transform.py`: 同等の Preview 回帰を追加。
+  - `docs/MS11-9G_Implementation_Plan.md`: 実装・確認結果を追記。
+  - `docs/MS11-9_Remaining_Issues.md`: top-end shaping の現在地を MS11-9G / `Test11_9p.vmd` 反映状態へ更新。
+  - `docs/MS11-9_Observation_Handoff_Contract_Memo.md`: top-end shaping の契約整理と次段候補を追記。
+  - `docs/repo_milestone.md`: MS11-9G top-end shaping residual 整理メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - 今回の変更は candidate family を増やさず、writer-side の top-end 値配分だけで差分を出す方針を維持している。
+  - 次段は、新しい classification 追加よりも MMD 上の見え方評価と必要時の微調整を主題にするのが自然である。
+- Verification:
+  - `.\.venv\Scripts\python.exe -m pytest tests\test_vmd_writer_intervals.py tests\test_preview_transform.py -q`
+  - `$env:PYTHONPATH='src;tests'; .\.venv\Scripts\python.exe -m pytest tests\test_pipeline_peak_values.py tests\test_pipeline_and_vmd.py -q`
+
+## Entry 2026-04-01 / Session: ms11-9f-doc-closeout
+
+- Date: 2026-04-01
+- Session: ms11-9f-doc-closeout
+- Summary:
+  - MS11-9F / F-2 / F-3 の cross-vowel residual refinement 到達状態を、残課題文書・契約メモ・マイルストーンへ同期した。
+  - `sample_input2` の residual cross-vowel を `23 -> 10 -> 7 -> 3` まで圧縮した現在地と、`Test11_9n.vmd` / `Test11_9m.vmd` / `Test11_9o.vmd` が各段階のローカル再生成結果と一致したことを記録した。
+  - MS11-9F-4 は、残件 3 件を無理に救済し切るのではなく、`idx 172 / 193` を非対象候補、`idx 6` を mixed-gap 境界 case として文書上で確定扱いにした。
+- Modified Files:
+  - `docs/MS11-9F-4_Implementation_Plan.md`: 文書上の確定事項を追記。
+  - `docs/MS11-9_Remaining_Issues.md`: cross-vowel 現在地を F / F-2 / F-3 反映状態へ更新済み。
+  - `docs/MS11-9_Observation_Handoff_Contract_Memo.md`: cross-vowel 契約整理メモを F / F-2 / F-3 到達状態へ更新済み。
+  - `docs/repo_milestone.md`: MS11-9F cross-vowel residual 整理メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - コード変更の実装本体は既存差分を正本とし、このエントリでは文書同期と F-4 の確定判断を記録する。
+  - 現時点の cross-vowel 残件 3 件は、追加救済ルール導入前に「救済対象かどうか」を見直す段階とする。
+- Verification:
+  - `rg -n "MS11-9F|MS11-9F-2|MS11-9F-3|MS11-9F-4|23 -> 10 -> 7 -> 3|Test11_9o" docs/MS11-9F-4_Implementation_Plan.md docs/MS11-9_Remaining_Issues.md docs/MS11-9_Observation_Handoff_Contract_Memo.md docs/repo_milestone.md docs/Version_Control.md`
+
 ## Entry 2026-04-01 / Session: release-v0365-ms11-9-sync
 
 - Date: 2026-04-01

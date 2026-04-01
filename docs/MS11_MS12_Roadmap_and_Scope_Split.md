@@ -4,9 +4,9 @@
 
 - Document Name: `docs/MS11_MS12_Roadmap_and_Scope_Split.md`
 - Created: 2026-03-30
-- Last Updated: 2026-04-01
+- Last Updated: 2026-04-02
 - Target Repository: `MMD_AutoLipTool`
-- Baseline Version: `Ver 0.3.6.5`
+- Baseline Version: `Ver 0.3.7.1`
 - Purpose:
   - Record the agreed milestone split after MS11-5.
   - Clarify which remaining items belong to MS11 and which belong to MS12.
@@ -30,7 +30,7 @@ The following are already completed and should be treated as fixed baseline:
 - writer.py local fixes after MS11-3 completed
 - MS11-4 completed
 - MS11-5 first-stage implementation completed
-- `Ver 0.3.6.5` synchronized as the current documentation baseline
+- `Ver 0.3.7.1` synchronized as the current documentation baseline
 
 Current understanding of the project state:
 
@@ -38,9 +38,14 @@ Current understanding of the project state:
 - Main remaining work on the MS11 side is:
   - MS11-7 real-data observation review execution
   - RMS retuning necessity judgment finalization
-  - residual MS11-9 output-quality issues after the 9D refinement chain
+  - MS11-9 after-care items, now mainly narrowed to same-vowel final quality tuning and observation-layer cleanup after the E / F / G refinement chain
 - GUI responsiveness / splash behavior should be handled separately from MS11.
 - Packaging / distribution dependency handling should also be treated separately from MS11.
+
+Reference note:
+
+- A current cross-phase summary of the MS11-9 line is maintained in
+  [docs/MS11-9_Summary_and_Handoff.md](d:/Kanna_Works/MMD_AppWork/MMD_AutoLipTool/MMD_AutoLipTool_Codex/docs/MS11-9_Summary_and_Handoff.md).
 
 ---
 
@@ -277,6 +282,22 @@ Synchronize the final MS11 state across code assumptions, documents, and milesto
 ### Completion image
 - MS11 end state is documented consistently
 - Remaining GUI-only work is clearly separated into MS12
+
+### Status Note (2026-04-02 / Ver 0.3.7.1)
+- Treated as completed as a documentation-sync milestone.
+- The repository-facing version baseline is now `Ver 0.3.7.1`.
+- MS11-9 through MS11-9G are synchronized into:
+  - `docs/MS11-9_Summary_and_Handoff.md`
+  - `docs/MS11-9_Remaining_Issues.md`
+  - `docs/MS11-9_Observation_Handoff_Contract_Memo.md`
+- MS11-9FIX7 is also reflected as the current closing smoothing contract baseline:
+  - `closing_hold_frames` / `closing_softness_frames` are treated as common tail post-process adjustments
+  - `Test11_9S1.vmd` / `S2` / `S3` / `S4` confirm tail extension rather than global tail shortening
+- At this point, the main remaining MS11-side themes are narrowed to:
+  - same-vowel final quality tuning
+  - observation / handoff contract cleanup
+  - closing smoothing naturalness review
+- cross-vowel residual handling and top-end shaping residual handling are no longer primary open tracks.
 
 ---
 
@@ -715,7 +736,7 @@ The packaging goal is:
 
 ## 7. Recommended Execution Order
 
-The recommended order after `Ver 0.3.6.5` is:
+The recommended order after `Ver 0.3.7.1` is:
 
 1. MS11-7
 2. MS11-8

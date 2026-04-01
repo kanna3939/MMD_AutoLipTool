@@ -13,6 +13,7 @@ MAX_MORPH_FRAMES = 22000
 MORPH_FRAME_OPEN_EPSILON = 1e-9
 CONTINUITY_FLOOR_MORPH_VALUE = 0.1
 SAME_VOWEL_BURST_FLOOR_MORPH_VALUE = 0.1
+SAME_VOWEL_ZERO_SPAN_BRIDGE_RATIO = 0.65
 ISOLATED_OPEN_MAX_LENGTH_FRAMES = 3
 ISOLATED_OPEN_MAX_PEAK_VALUE = MAX_MORPH_VALUE
 MORPH_PULSE_MAX_LENGTH_FRAMES = 1
@@ -110,6 +111,8 @@ class AsymmetricTrapezoidSpec:
     end_frame: int
     peak_value: float
     peak_end_value: float | None = None
+    closing_hold_frame: int | None = None
+    closing_hold_value: float | None = None
     closing_mid_frame: int | None = None
     closing_mid_value: float | None = None
     # Keep the metadata minimal for MS11-2 Phase 2 while leaving a stable
@@ -1057,12 +1060,23 @@ def _build_peak_morph_frames(
     next_shape_start_frame: int | None = None,
 ) -> list[MorphFrame]:
     expanded: list[MorphFrame] = []
+    effective_closing_hold_frames = _resolve_effective_final_closing_hold_frames(
+        closing_hold_frames=closing_hold_frames,
+        next_shape_start_frame=next_shape_start_frame,
+    )
+    effective_closing_softness_frames = _resolve_effective_final_closing_softness_frames(
+        closing_softness_frames=closing_softness_frames,
+        next_shape_start_frame=next_shape_start_frame,
+    )
     for point in points:
         peak_value = _point_peak_value(point)
         center_frame = _sec_to_frame(point.time_sec)
         before_frame = max(0, center_frame - PEAK_SIDE_FRAME_OFFSET)
         after_frame = center_frame + PEAK_SIDE_FRAME_OFFSET
-        if closing_hold_frames == 0 and closing_softness_frames == 0:
+        if (
+            effective_closing_hold_frames == 0
+            and effective_closing_softness_frames == 0
+        ):
             expanded.append((before_frame, point.vowel, 0.0))
             expanded.append((center_frame, point.vowel, peak_value))
             expanded.append((after_frame, point.vowel, 0.0))
@@ -1071,14 +1085,14 @@ def _build_peak_morph_frames(
         hold_end_frame, closing_mid_frame, end_frame = _resolve_closing_tail_frames(
             closing_start_frame=center_frame,
             original_end_frame=after_frame,
-            closing_hold_frames=closing_hold_frames,
-            closing_softness_frames=closing_softness_frames,
+            closing_hold_frames=effective_closing_hold_frames,
+            closing_softness_frames=effective_closing_softness_frames,
             next_shape_start_frame=next_shape_start_frame,
         )
 
         expanded.append((before_frame, point.vowel, 0.0))
         expanded.append((center_frame, point.vowel, peak_value))
-        if hold_end_frame > center_frame:
+        if hold_end_frame is not None and hold_end_frame > center_frame:
             expanded.append((hold_end_frame, point.vowel, peak_value))
         if closing_mid_frame is not None:
             expanded.append((closing_mid_frame, point.vowel, peak_value * 0.7))
@@ -1403,21 +1417,59 @@ def _build_same_vowel_span_synthetic_points(
     points: Sequence[VowelTimelinePoint],
     span: dict[str, int],
 ) -> list[VowelTimelinePoint]:
-    span_event_count = (span["span_end_index"] - span["span_start_index"]) + 1
-    if span_event_count <= 1:
+    span_points = tuple(
+        points[index]
+        for index in range(span["span_start_index"], span["span_end_index"] + 1)
+    )
+    span_event_count = len(span_points)
+    if span_event_count <= 0:
         return []
 
     previous_point = points[span["previous_non_zero_event_index"]]
     next_point = points[span["next_non_zero_event_index"]]
-    span_start_point = points[span["span_start_index"]]
-    span_end_point = points[span["span_end_index"]]
+    span_start_point = span_points[0]
+    span_end_point = span_points[-1]
 
     span_start_sec, _ = _event_bounds(span_start_point)
     _, span_end_sec = _event_bounds(span_end_point)
-    bridge_time_sec = (span_start_sec + span_end_sec) * 0.5
+    continuity_peak_value = min(
+        _point_peak_value(previous_point),
+        _point_peak_value(next_point),
+    )
+    positive_span_points = [
+        point
+        for point in span_points
+        if _point_peak_value(point) > MORPH_FRAME_OPEN_EPSILON
+    ]
+
+    if positive_span_points and span_event_count > 1:
+        bridge_time_sec = sum(point.time_sec for point in positive_span_points) / len(positive_span_points)
+        span_peak_value = max(_point_peak_value(point) for point in positive_span_points)
+        bridge_peak_value = min(span_peak_value, continuity_peak_value * SAME_VOWEL_ZERO_SPAN_BRIDGE_RATIO)
+    elif span_event_count == 1:
+        bridge_time_sec = span_points[0].time_sec
+        if positive_span_points:
+            span_peak_value = max(_point_peak_value(point) for point in positive_span_points)
+            bridge_peak_value = min(
+                span_peak_value,
+                continuity_peak_value * SAME_VOWEL_ZERO_SPAN_BRIDGE_RATIO,
+            )
+        else:
+            bridge_peak_value = continuity_peak_value * SAME_VOWEL_ZERO_SPAN_BRIDGE_RATIO
+    else:
+        bridge_time_sec = (span_start_sec + span_end_sec) * 0.5
+        bridge_peak_value = continuity_peak_value * SAME_VOWEL_ZERO_SPAN_BRIDGE_RATIO
+
+    bridge_peak_value = max(
+        SAME_VOWEL_BURST_FLOOR_MORPH_VALUE,
+        bridge_peak_value,
+    )
+    bridge_peak_value = min(
+        bridge_peak_value,
+        continuity_peak_value,
+    )
     bridge_start_sec = bridge_time_sec - (2.0 / VMD_FPS)
     bridge_end_sec = bridge_time_sec + (2.0 / VMD_FPS)
-    bridge_peak_value = min(_point_peak_value(previous_point), _point_peak_value(next_point)) * 0.8
 
     return [
         VowelTimelinePoint(
@@ -1497,14 +1549,22 @@ def _build_ms11_3_group_morph_frames_with_spec(
     if not build_result.is_valid or build_result.spec is None:
         return None
 
+    effective_closing_hold_frames = _resolve_effective_final_closing_hold_frames(
+        closing_hold_frames=closing_hold_frames,
+        next_shape_start_frame=next_shape_start_frame,
+    )
+    effective_closing_softness_frames = _resolve_effective_final_closing_softness_frames(
+        closing_softness_frames=closing_softness_frames,
+        next_shape_start_frame=next_shape_start_frame,
+    )
     held_spec = _apply_closing_hold_to_multi_point_envelope_spec(
         build_result.spec,
-        closing_hold_frames=closing_hold_frames,
+        closing_hold_frames=effective_closing_hold_frames,
         next_shape_start_frame=next_shape_start_frame,
     )
     softened_spec = _apply_closing_softness_to_multi_point_envelope_spec(
         held_spec,
-        closing_softness_frames=closing_softness_frames,
+        closing_softness_frames=effective_closing_softness_frames,
         next_shape_start_frame=next_shape_start_frame,
     )
 
@@ -1716,6 +1776,14 @@ def _build_existing_point_morph_frames_with_metadata(
     AsymmetricTrapezoidSpec | None,
     tuple[int, int] | None,
 ]:
+    effective_closing_hold_frames = _resolve_effective_final_closing_hold_frames(
+        closing_hold_frames=closing_hold_frames,
+        next_shape_start_frame=next_shape_start_frame,
+    )
+    effective_closing_softness_frames = _resolve_effective_final_closing_softness_frames(
+        closing_softness_frames=closing_softness_frames,
+        next_shape_start_frame=next_shape_start_frame,
+    )
     spec = _build_adjusted_trapezoid_spec(
         point,
         source_event_index=source_event_index,
@@ -1734,8 +1802,8 @@ def _build_existing_point_morph_frames_with_metadata(
             (frame_no, vowel, value, False)
             for frame_no, vowel, value in _build_peak_morph_frames(
                 [fallback_point],
-                closing_hold_frames=closing_hold_frames,
-                closing_softness_frames=closing_softness_frames,
+                closing_hold_frames=effective_closing_hold_frames,
+                closing_softness_frames=effective_closing_softness_frames,
                 next_shape_start_frame=next_shape_start_frame,
             )
         ]
@@ -1747,12 +1815,12 @@ def _build_existing_point_morph_frames_with_metadata(
 
     spec = _apply_closing_hold_to_trapezoid_spec(
         spec,
-        closing_hold_frames=closing_hold_frames,
+        closing_hold_frames=effective_closing_hold_frames,
         next_shape_start_frame=next_shape_start_frame,
     )
     spec = _apply_closing_softness_to_trapezoid_spec(
         spec,
-        closing_softness_frames=closing_softness_frames,
+        closing_softness_frames=effective_closing_softness_frames,
         next_shape_start_frame=next_shape_start_frame,
     )
     protected_spec = spec if _is_protectable_ms11_2_spec(spec) else None
@@ -1920,6 +1988,10 @@ def _expand_trapezoid_spec_to_morph_frames(
         ]
         if spec.peak_end_frame > spec.peak_start_frame:
             frames.append((spec.peak_end_frame, spec.vowel, peak_end_value, False))
+        if spec.closing_hold_frame is not None and spec.closing_hold_value is not None:
+            frames.append(
+                (spec.closing_hold_frame, spec.vowel, spec.closing_hold_value, False)
+            )
         if spec.closing_mid_frame is not None and spec.closing_mid_value is not None:
             frames.append(
                 (spec.closing_mid_frame, spec.vowel, spec.closing_mid_value, False)
@@ -1933,6 +2005,10 @@ def _expand_trapezoid_spec_to_morph_frames(
             (spec.peak_start_frame, spec.vowel, spec.peak_value, False),
             (spec.peak_end_frame, spec.vowel, peak_end_value, False),
         ]
+        if spec.closing_hold_frame is not None and spec.closing_hold_value is not None:
+            frames.append(
+                (spec.closing_hold_frame, spec.vowel, spec.closing_hold_value, False)
+            )
         if spec.closing_mid_frame is not None and spec.closing_mid_value is not None:
             frames.append(
                 (spec.closing_mid_frame, spec.vowel, spec.closing_mid_value, False)
@@ -1946,6 +2022,10 @@ def _expand_trapezoid_spec_to_morph_frames(
             (spec.peak_start_frame, spec.vowel, spec.peak_value, False),
             (spec.peak_end_frame, spec.vowel, peak_end_value, False),
         ]
+        if spec.closing_hold_frame is not None and spec.closing_hold_value is not None:
+            frames.append(
+                (spec.closing_hold_frame, spec.vowel, spec.closing_hold_value, False)
+            )
         if spec.closing_mid_frame is not None and spec.closing_mid_value is not None:
             frames.append(
                 (spec.closing_mid_frame, spec.vowel, spec.closing_mid_value, False)
@@ -1982,6 +2062,24 @@ def _normalize_closing_hold_frames(closing_hold_frames: int) -> int:
     if normalized_closing_hold_frames < 0:
         raise ValueError("closing_hold_frames must be >= 0")
     return normalized_closing_hold_frames
+
+
+def _resolve_effective_final_closing_hold_frames(
+    *,
+    closing_hold_frames: int,
+    next_shape_start_frame: int | None,
+) -> int:
+    _ = next_shape_start_frame
+    return _normalize_closing_hold_frames(closing_hold_frames)
+
+
+def _resolve_effective_final_closing_softness_frames(
+    *,
+    closing_softness_frames: int,
+    next_shape_start_frame: int | None,
+) -> int:
+    _ = next_shape_start_frame
+    return _normalize_closing_softness_frames(closing_softness_frames)
 
 
 def _event_start_frame(point: VowelTimelinePoint) -> int:
@@ -2023,7 +2121,7 @@ def _resolve_closing_tail_frames(
     closing_hold_frames: int,
     closing_softness_frames: int,
     next_shape_start_frame: int | None = None,
-) -> tuple[int, int | None, int]:
+) -> tuple[int | None, int | None, int]:
     normalized_closing_hold_frames = _normalize_closing_hold_frames(
         closing_hold_frames
     )
@@ -2034,37 +2132,57 @@ def _resolve_closing_tail_frames(
         normalized_closing_hold_frames == 0
         and normalized_closing_softness_frames == 0
     ):
-        return closing_start_frame, None, original_end_frame
+        return None, None, original_end_frame
 
     max_end_frame = None
     if next_shape_start_frame is not None:
         max_end_frame = next_shape_start_frame - 1
 
-    required_tail_frames = 2 if normalized_closing_softness_frames > 0 else 1
-    hold_end_frame = closing_start_frame + normalized_closing_hold_frames
+    available_extension = None
     if max_end_frame is not None:
-        hold_end_frame = min(hold_end_frame, max_end_frame - required_tail_frames)
-        hold_end_frame = max(closing_start_frame, hold_end_frame)
+        available_extension = max(0, max_end_frame - original_end_frame)
 
-    if normalized_closing_softness_frames <= 0:
-        end_frame = hold_end_frame + 1
-        if max_end_frame is not None:
-            end_frame = min(end_frame, max_end_frame)
-        end_frame = max(end_frame, closing_start_frame + 1)
-        return hold_end_frame, None, end_frame
+    effective_hold_frames = normalized_closing_hold_frames
+    effective_softness_frames = normalized_closing_softness_frames
+    if available_extension is not None:
+        effective_hold_frames = min(effective_hold_frames, available_extension)
+        remaining_extension = max(0, available_extension - effective_hold_frames)
+        effective_softness_frames = min(
+            effective_softness_frames,
+            remaining_extension,
+        )
 
-    closing_mid_frame = hold_end_frame + 1
-    desired_end_frame = closing_mid_frame + normalized_closing_softness_frames
+    hold_frame = None
+    end_frame = original_end_frame + effective_hold_frames + effective_softness_frames
     if max_end_frame is not None:
-        desired_end_frame = min(desired_end_frame, max_end_frame)
-    if desired_end_frame <= closing_mid_frame:
-        collapsed_end_frame = hold_end_frame + 1
-        if max_end_frame is not None:
-            collapsed_end_frame = min(collapsed_end_frame, max_end_frame)
-        collapsed_end_frame = max(collapsed_end_frame, closing_start_frame + 1)
-        return hold_end_frame, None, collapsed_end_frame
+        end_frame = min(end_frame, max_end_frame)
 
-    return hold_end_frame, closing_mid_frame, desired_end_frame
+    if end_frame <= original_end_frame:
+        return None, None, original_end_frame
+
+    # FIX7: smoothing must never rebuild the existing tail inside the original
+    # anchor->end span. We only append points at or after the original end so
+    # hold/softness cannot shorten the base tail.
+    if effective_hold_frames > 0:
+        hold_frame = end_frame - effective_softness_frames - 1
+        if hold_frame < original_end_frame:
+            hold_frame = original_end_frame
+        if hold_frame >= end_frame:
+            hold_frame = None
+
+    if effective_softness_frames <= 0:
+        return hold_frame, None, end_frame
+
+    closing_mid_frame = end_frame - 1
+    minimum_mid_frame = original_end_frame
+    if hold_frame is not None:
+        minimum_mid_frame = max(minimum_mid_frame, hold_frame + 1)
+    if closing_mid_frame < minimum_mid_frame:
+        closing_mid_frame = minimum_mid_frame
+    if closing_mid_frame >= end_frame:
+        return hold_frame, None, end_frame
+
+    return hold_frame, closing_mid_frame, end_frame
 
 
 def _resolve_hold_shift_frames(
@@ -2094,24 +2212,28 @@ def _apply_closing_hold_to_trapezoid_spec(
     if normalized_closing_hold_frames == 0:
         return spec
 
-    hold_end_frame, _, end_frame = _resolve_closing_tail_frames(
+    hold_frame, _, end_frame = _resolve_closing_tail_frames(
         closing_start_frame=spec.peak_end_frame,
         original_end_frame=spec.end_frame,
         closing_hold_frames=normalized_closing_hold_frames,
         closing_softness_frames=0,
         next_shape_start_frame=next_shape_start_frame,
     )
-    if hold_end_frame == spec.peak_end_frame and end_frame == spec.end_frame:
+    if hold_frame is None and end_frame == spec.end_frame:
         return spec
+
+    held_peak_end_value = _resolved_peak_end_value(spec)
 
     return AsymmetricTrapezoidSpec(
         vowel=spec.vowel,
         start_frame=spec.start_frame,
         peak_start_frame=spec.peak_start_frame,
-        peak_end_frame=hold_end_frame,
+        peak_end_frame=spec.peak_end_frame,
         end_frame=end_frame,
         peak_value=spec.peak_value,
-        peak_end_value=spec.peak_value,
+        peak_end_value=held_peak_end_value,
+        closing_hold_frame=hold_frame,
+        closing_hold_value=held_peak_end_value if hold_frame is not None else None,
         closing_mid_frame=None,
         closing_mid_value=None,
         source_event_index=spec.source_event_index,
@@ -2133,8 +2255,15 @@ def _apply_closing_softness_to_trapezoid_spec(
     if normalized_closing_softness_frames == 0:
         return spec
 
-    hold_end_frame, closing_mid_frame, softened_end_frame = _resolve_closing_tail_frames(
-        closing_start_frame=spec.peak_end_frame,
+    tail_anchor_frame = (
+        spec.closing_hold_frame if spec.closing_hold_frame is not None else spec.peak_end_frame
+    )
+    tail_anchor_value = (
+        spec.closing_hold_value if spec.closing_hold_value is not None else _resolved_peak_end_value(spec)
+    )
+
+    _, closing_mid_frame, softened_end_frame = _resolve_closing_tail_frames(
+        closing_start_frame=tail_anchor_frame,
         original_end_frame=spec.end_frame,
         closing_hold_frames=0,
         closing_softness_frames=normalized_closing_softness_frames,
@@ -2142,22 +2271,20 @@ def _apply_closing_softness_to_trapezoid_spec(
     )
     closing_mid_value = None
     if closing_mid_frame is not None:
-        closing_mid_value = spec.peak_value * 0.7
-    if (
-        hold_end_frame == spec.peak_end_frame
-        and softened_end_frame == spec.end_frame
-        and closing_mid_frame is None
-    ):
+        closing_mid_value = tail_anchor_value * 0.7
+    if softened_end_frame == spec.end_frame and closing_mid_frame is None:
         return spec
 
     return AsymmetricTrapezoidSpec(
         vowel=spec.vowel,
         start_frame=spec.start_frame,
         peak_start_frame=spec.peak_start_frame,
-        peak_end_frame=hold_end_frame,
+        peak_end_frame=spec.peak_end_frame,
         end_frame=softened_end_frame,
         peak_value=spec.peak_value,
-        peak_end_value=spec.peak_value,
+        peak_end_value=_resolved_peak_end_value(spec),
+        closing_hold_frame=spec.closing_hold_frame,
+        closing_hold_value=spec.closing_hold_value,
         closing_mid_frame=closing_mid_frame,
         closing_mid_value=closing_mid_value,
         source_event_index=spec.source_event_index,
@@ -2183,18 +2310,18 @@ def _apply_closing_hold_to_multi_point_envelope_spec(
 
     final_non_zero_point = spec.control_points[-2]
     final_end_zero_point = spec.control_points[-1]
-    hold_end_frame, _, end_frame = _resolve_closing_tail_frames(
+    hold_frame, _, end_frame = _resolve_closing_tail_frames(
         closing_start_frame=final_non_zero_point.frame_no,
         original_end_frame=final_end_zero_point.frame_no,
         closing_hold_frames=normalized_closing_hold_frames,
         closing_softness_frames=0,
         next_shape_start_frame=next_shape_start_frame,
     )
-    if hold_end_frame == final_non_zero_point.frame_no and end_frame == final_end_zero_point.frame_no:
+    if hold_frame is None and end_frame == final_end_zero_point.frame_no:
         return spec
 
     hold_point = EnvelopeControlPoint(
-        frame_no=hold_end_frame,
+        frame_no=hold_frame if hold_frame is not None else final_non_zero_point.frame_no,
         value=final_non_zero_point.value,
         point_kind="hold",
     )
@@ -2204,7 +2331,7 @@ def _apply_closing_hold_to_multi_point_envelope_spec(
         point_kind=final_end_zero_point.point_kind,
     )
     control_points = list(spec.control_points[:-1])
-    if hold_end_frame > final_non_zero_point.frame_no:
+    if hold_frame is not None and hold_frame > final_non_zero_point.frame_no:
         control_points.append(hold_point)
     control_points.append(held_end_zero_point)
     return MultiPointEnvelopeSpec(
@@ -2234,7 +2361,7 @@ def _apply_closing_softness_to_multi_point_envelope_spec(
 
     final_non_zero_point = spec.control_points[-2]
     final_end_zero_point = spec.control_points[-1]
-    hold_end_frame, closing_mid_frame, softened_end_frame = _resolve_closing_tail_frames(
+    _, closing_mid_frame, softened_end_frame = _resolve_closing_tail_frames(
         closing_start_frame=final_non_zero_point.frame_no,
         original_end_frame=final_end_zero_point.frame_no,
         closing_hold_frames=0,
@@ -2242,8 +2369,7 @@ def _apply_closing_softness_to_multi_point_envelope_spec(
         next_shape_start_frame=next_shape_start_frame,
     )
     if (
-        hold_end_frame == final_non_zero_point.frame_no
-        and softened_end_frame == final_end_zero_point.frame_no
+        softened_end_frame == final_end_zero_point.frame_no
         and closing_mid_frame is None
     ):
         return spec
@@ -2980,7 +3106,12 @@ def _resolve_peak_end_value_from_observation(
     if selected_value <= 0.0:
         return spec.peak_value
 
-    normalized_ratio = min(1.0, selected_value / float(local_peak))
+    smoothed_value = selected_value
+    if selected_index + 1 < len(values):
+        support_value = max(0.0, values[selected_index + 1])
+        smoothed_value = (selected_value * 0.75) + (support_value * 0.25)
+
+    normalized_ratio = min(1.0, smoothed_value / float(local_peak))
     decayed_value = round(spec.peak_value * normalized_ratio, 4)
     return max(MORPH_FRAME_OPEN_EPSILON, min(spec.peak_value, decayed_value))
 
@@ -3020,6 +3151,8 @@ def _build_adjusted_trapezoid_spec(
         end_frame=spec.end_frame,
         peak_value=spec.peak_value,
         peak_end_value=peak_end_value,
+        closing_hold_frame=spec.closing_hold_frame,
+        closing_hold_value=spec.closing_hold_value,
         closing_mid_frame=spec.closing_mid_frame,
         closing_mid_value=spec.closing_mid_value,
         source_event_index=spec.source_event_index,

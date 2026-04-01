@@ -177,6 +177,66 @@ class PreviewTransformTests(unittest.TestCase):
             (0.0, 0.5, 0.15, 0.0),
         )
 
+    def test_trapezoid_preview_top_end_is_slightly_lowered_when_following_rms_is_lower(self) -> None:
+        preview_data = build_preview_data(
+            [
+                DummyTimelinePoint(
+                    vowel="あ",
+                    time_sec=1.0,
+                    duration_sec=0.4,
+                    start_sec=0.8,
+                    end_sec=1.2,
+                    peak_value=0.5,
+                    value=0.5,
+                )
+            ],
+            observations=[
+                DummyObservation(
+                    event_index=0,
+                    is_bridgeable_micro_gap_candidate=False,
+                    local_peak=1.0,
+                    rms_window_times_sec=(1.09, 1.1, 1.2),
+                    rms_window_values=(1.0, 0.8, 0.4),
+                )
+            ],
+        )
+
+        segment = preview_data.rows[0].segments[0]
+        self.assertEqual(
+            tuple(point.value for point in segment.control_points),
+            (0.0, 0.5, 0.35, 0.0),
+        )
+
+    def test_trapezoid_preview_top_end_drop_is_softened_when_following_rms_recovers(self) -> None:
+        preview_data = build_preview_data(
+            [
+                DummyTimelinePoint(
+                    vowel="あ",
+                    time_sec=1.0,
+                    duration_sec=0.4,
+                    start_sec=0.8,
+                    end_sec=1.2,
+                    peak_value=0.5,
+                    value=0.5,
+                )
+            ],
+            observations=[
+                DummyObservation(
+                    event_index=0,
+                    is_bridgeable_micro_gap_candidate=False,
+                    local_peak=1.0,
+                    rms_window_times_sec=(1.09, 1.1, 1.2),
+                    rms_window_values=(1.0, 0.1, 0.5),
+                )
+            ],
+        )
+
+        segment = preview_data.rows[0].segments[0]
+        self.assertEqual(
+            tuple(point.value for point in segment.control_points),
+            (0.0, 0.5, 0.1, 0.0),
+        )
+
     def test_zero_peak_cross_vowel_candidate_uses_continuity_floor_in_preview(self) -> None:
         preview_data = build_preview_data(
             [
@@ -288,7 +348,7 @@ class PreviewTransformTests(unittest.TestCase):
         segment = preview_data.rows[0].segments[0]
         self.assertEqual(
             tuple(point.frame_no for point in segment.control_points),
-            (24, 27, 33, 34, 37),
+            (24, 27, 33, 38, 39),
         )
         self.assertEqual(
             tuple(point.point_kind for point in segment.control_points),
@@ -314,7 +374,101 @@ class PreviewTransformTests(unittest.TestCase):
         segment = preview_data.rows[0].segments[0]
         self.assertEqual(
             tuple(point.frame_no for point in segment.control_points),
-            (24, 27, 36, 37),
+            (24, 27, 33, 38, 39),
+        )
+
+    def test_closing_hold_preview_preserves_decayed_peak_end_value_for_trapezoid(self) -> None:
+        preview_data = build_preview_data(
+            [
+                DummyTimelinePoint(
+                    vowel="あ",
+                    time_sec=1.0,
+                    duration_sec=0.4,
+                    start_sec=0.8,
+                    end_sec=1.2,
+                    peak_value=0.5,
+                    value=0.5,
+                )
+            ],
+            observations=[
+                DummyObservation(
+                    event_index=0,
+                    is_bridgeable_micro_gap_candidate=False,
+                    local_peak=1.0,
+                    rms_window_times_sec=(1.09, 1.2),
+                    rms_window_values=(1.0, 0.3),
+                )
+            ],
+            closing_hold_frames=3,
+        )
+
+        segment = preview_data.rows[0].segments[0]
+        self.assertEqual(
+            tuple(point.value for point in segment.control_points),
+            (0.0, 0.5, 0.15, 0.15, 0.0),
+        )
+
+    def test_closing_softness_preview_uses_decayed_peak_end_value_for_midpoint(self) -> None:
+        preview_data = build_preview_data(
+            [
+                DummyTimelinePoint(
+                    vowel="あ",
+                    time_sec=1.0,
+                    duration_sec=0.4,
+                    start_sec=0.8,
+                    end_sec=1.2,
+                    peak_value=0.5,
+                    value=0.5,
+                )
+            ],
+            observations=[
+                DummyObservation(
+                    event_index=0,
+                    is_bridgeable_micro_gap_candidate=False,
+                    local_peak=1.0,
+                    rms_window_times_sec=(1.09, 1.2),
+                    rms_window_values=(1.0, 0.3),
+                )
+            ],
+            closing_softness_frames=3,
+        )
+
+        segment = preview_data.rows[0].segments[0]
+        self.assertEqual(
+            tuple(point.value for point in segment.control_points),
+            (0.0, 0.5, 0.15, 0.105, 0.0),
+        )
+
+    def test_closing_hold_does_not_change_non_final_preview_interval_width(self) -> None:
+        preview_data = build_preview_data(
+            [
+                DummyTimelinePoint(
+                    vowel="あ",
+                    time_sec=1.0,
+                    duration_sec=0.4,
+                    start_sec=0.8,
+                    end_sec=1.2,
+                    peak_value=0.5,
+                    value=0.5,
+                ),
+                DummyTimelinePoint(
+                    vowel="あ",
+                    time_sec=1.5,
+                    duration_sec=0.4,
+                    start_sec=1.3,
+                    end_sec=1.7,
+                    peak_value=0.5,
+                    value=0.5,
+                ),
+            ],
+            closing_hold_frames=3,
+        )
+
+        self.assertEqual(len(preview_data.rows[0].segments), 1)
+        segment = preview_data.rows[0].segments[0]
+        self.assertEqual(
+            tuple(point.frame_no for point in segment.control_points),
+            (24, 30, 37, 45, 53, 54),
         )
 
     def test_closing_softness_adds_final_midpoint_for_multi_point(self) -> None:
@@ -345,7 +499,7 @@ class PreviewTransformTests(unittest.TestCase):
         segment = preview_data.rows[0].segments[0]
         self.assertEqual(
             tuple(point.frame_no for point in segment.control_points),
-            (24, 30, 34, 39, 40, 43),
+            (24, 30, 34, 39, 47, 48),
         )
         self.assertEqual(
             tuple(point.point_kind for point in segment.control_points),
@@ -380,7 +534,7 @@ class PreviewTransformTests(unittest.TestCase):
         segment = preview_data.rows[0].segments[0]
         self.assertEqual(
             tuple(point.frame_no for point in segment.control_points),
-            (24, 30, 34, 39, 42, 43),
+            (24, 30, 34, 39, 47, 48),
         )
 
     def test_peak_fallback_closing_softness_adds_midpoint(self) -> None:
@@ -403,7 +557,7 @@ class PreviewTransformTests(unittest.TestCase):
         self.assertEqual(segment.shape_kind, "peak_fallback")
         self.assertEqual(
             tuple(point.frame_no for point in segment.control_points),
-            (28, 30, 31, 34),
+            (28, 30, 34, 35),
         )
         self.assertEqual(
             tuple(point.point_kind for point in segment.control_points),
@@ -430,7 +584,7 @@ class PreviewTransformTests(unittest.TestCase):
         self.assertEqual(segment.shape_kind, "peak_fallback")
         self.assertEqual(
             tuple(point.frame_no for point in segment.control_points),
-            (28, 30, 33, 34),
+            (28, 30, 34, 35),
         )
         self.assertEqual(
             tuple(point.point_kind for point in segment.control_points),
@@ -457,14 +611,14 @@ class PreviewTransformTests(unittest.TestCase):
         segment = preview_data.rows[0].segments[0]
         self.assertEqual(
             tuple(point.frame_no for point in segment.control_points),
-            (28, 30, 33, 34, 36),
+            (28, 30, 34, 36, 37),
         )
         self.assertEqual(
             tuple(point.point_kind for point in segment.control_points),
             ("start_zero", "top", "top", "slope_mid", "end_zero"),
         )
 
-    def test_peak_fallback_closing_softness_clamps_before_following_shape_start(self) -> None:
+    def test_peak_fallback_closing_softness_uses_available_extension_before_following_shape(self) -> None:
         preview_data = build_preview_data(
             [
                 DummyTimelinePoint(
@@ -493,11 +647,11 @@ class PreviewTransformTests(unittest.TestCase):
         self.assertEqual(len(segments), 2)
         self.assertEqual(
             tuple(point.frame_no for point in segments[0].control_points),
-            (28, 30, 31, 33),
+            (28, 30, 32, 33),
         )
         self.assertEqual(
             tuple(point.frame_no for point in segments[1].control_points),
-            (32, 34, 35, 45),
+            (32, 34, 45, 46),
         )
 
     def test_zero_peak_event_is_not_used_as_preview_clamp_blocker(self) -> None:
@@ -538,14 +692,14 @@ class PreviewTransformTests(unittest.TestCase):
         row_map = {row.vowel: row for row in preview_data.rows}
         self.assertEqual(
             tuple(point.frame_no for point in row_map["あ"].segments[0].control_points),
-            (28, 30, 33, 34, 38),
+            (28, 30, 34, 38, 39),
         )
         self.assertEqual(
             tuple(point.frame_no for point in row_map["い"].segments[0].control_points),
-            (48, 50, 53, 54, 58),
+            (48, 50, 54, 58, 59),
         )
 
-    def test_closing_softness_clamps_before_following_shape_start_even_in_mixed_case(self) -> None:
+    def test_closing_softness_uses_only_available_extension_even_in_mixed_case(self) -> None:
         preview_data = build_preview_data(
             [
                 DummyTimelinePoint(
@@ -582,7 +736,7 @@ class PreviewTransformTests(unittest.TestCase):
         row_map = {row.vowel: row for row in preview_data.rows}
         self.assertEqual(
             tuple(point.frame_no for point in row_map["あ"].segments[0].control_points),
-            (24, 30, 34, 39, 40, 45),
+            (24, 30, 34, 39, 45),
         )
         self.assertEqual(len(row_map["い"].segments), 1)
         self.assertGreaterEqual(row_map["い"].segments[0].start_sec, 45 / 30)
@@ -629,7 +783,11 @@ class PreviewTransformTests(unittest.TestCase):
         self.assertEqual(segment.shape_kind, "ms11_3_multi_point_envelope")
         self.assertEqual(
             tuple(point.frame_no for point in segment.control_points),
-            (24, 30, 34, 39, 45),
+            (24, 30, 33, 37, 39),
+        )
+        self.assertEqual(
+            tuple(point.value for point in segment.control_points),
+            (0.0, 0.4, 0.06824999999999999, 0.195, 0.0),
         )
 
     def test_cross_vowel_transition_candidate_shifts_preview_boundaries_without_same_vowel_grouping(self) -> None:
@@ -761,6 +919,10 @@ class PreviewTransformTests(unittest.TestCase):
             tuple(point.frame_no for point in segment.control_points),
             (24, 30, 34, 38, 40, 42, 48),
         )
+        self.assertEqual(
+            tuple(point.value for point in segment.control_points),
+            (0.0, 0.4, 0.06824999999999999, 0.195, 0.06824999999999999, 0.3, 0.0),
+        )
 
     def test_same_vowel_low_positive_short_segment_uses_burst_smoothed_preview_shape(self) -> None:
         preview_data = build_preview_data(
@@ -812,7 +974,144 @@ class PreviewTransformTests(unittest.TestCase):
         self.assertEqual(segment.shape_kind, "ms11_3_multi_point_envelope")
         self.assertEqual(
             tuple(point.frame_no for point in segment.control_points),
-            (24, 30, 34, 39, 45),
+            (24, 30, 33, 37, 39),
+        )
+        self.assertEqual(
+            tuple(point.value for point in segment.control_points),
+            (0.0, 0.4, 0.05, 0.12, 0.0),
+        )
+
+    def test_same_vowel_low_positive_and_zero_span_uses_smoothed_sub_peak_preview_shape(self) -> None:
+        preview_data = build_preview_data(
+            [
+                DummyTimelinePoint(
+                    vowel="う",
+                    time_sec=1.00,
+                    duration_sec=13 / 30,
+                    start_sec=24 / 30,
+                    end_sec=37 / 30,
+                    peak_value=0.40,
+                    value=0.40,
+                ),
+                DummyTimelinePoint(
+                    vowel="う",
+                    time_sec=37 / 30,
+                    duration_sec=1 / 30,
+                    start_sec=37 / 30,
+                    end_sec=38 / 30,
+                    peak_value=0.12,
+                    value=0.12,
+                ),
+                DummyTimelinePoint(
+                    vowel="う",
+                    time_sec=38 / 30,
+                    duration_sec=1 / 30,
+                    start_sec=38 / 30,
+                    end_sec=39 / 30,
+                    peak_value=0.0,
+                    value=0.0,
+                ),
+                DummyTimelinePoint(
+                    vowel="う",
+                    time_sec=42 / 30,
+                    duration_sec=9 / 30,
+                    start_sec=39 / 30,
+                    end_sec=48 / 30,
+                    peak_value=0.30,
+                    value=0.30,
+                ),
+            ],
+            observations=[
+                DummyObservation(event_index=0, is_bridgeable_micro_gap_candidate=False, previous_non_zero_event_index=None, next_non_zero_event_index=3),
+                DummyObservation(
+                    event_index=1,
+                    is_bridgeable_micro_gap_candidate=False,
+                    is_same_vowel_burst_candidate=True,
+                    previous_non_zero_event_index=0,
+                    next_non_zero_event_index=3,
+                    span_start_index=1,
+                    span_end_index=2,
+                ),
+                DummyObservation(
+                    event_index=2,
+                    is_bridgeable_micro_gap_candidate=False,
+                    is_same_vowel_burst_candidate=True,
+                    previous_non_zero_event_index=0,
+                    next_non_zero_event_index=3,
+                    span_start_index=1,
+                    span_end_index=2,
+                ),
+                DummyObservation(event_index=3, is_bridgeable_micro_gap_candidate=False, previous_non_zero_event_index=0, next_non_zero_event_index=None),
+            ],
+        )
+
+        segment = preview_data.rows[2].segments[0]
+        self.assertEqual(segment.shape_kind, "ms11_3_multi_point_envelope")
+        self.assertEqual(
+            tuple(point.frame_no for point in segment.control_points),
+            (24, 30, 33, 37, 39, 42, 48),
+        )
+        self.assertEqual(
+            tuple(point.value for point in segment.control_points),
+            (0.0, 0.4, 0.05, 0.12, 0.05, 0.3, 0.0),
+        )
+
+    def test_same_vowel_single_zero_span_uses_bridge_preview_shape(self) -> None:
+        preview_data = build_preview_data(
+            [
+                DummyTimelinePoint(
+                    vowel="あ",
+                    time_sec=1.00,
+                    duration_sec=13 / 30,
+                    start_sec=24 / 30,
+                    end_sec=37 / 30,
+                    peak_value=0.40,
+                    value=0.40,
+                ),
+                DummyTimelinePoint(
+                    vowel="あ",
+                    time_sec=37 / 30,
+                    duration_sec=8 / 30,
+                    start_sec=30 / 30,
+                    end_sec=38 / 30,
+                    peak_value=0.0,
+                    value=0.0,
+                ),
+                DummyTimelinePoint(
+                    vowel="あ",
+                    time_sec=42 / 30,
+                    duration_sec=9 / 30,
+                    start_sec=39 / 30,
+                    end_sec=48 / 30,
+                    peak_value=0.30,
+                    value=0.30,
+                ),
+            ],
+            observations=[
+                DummyObservation(event_index=0, is_bridgeable_micro_gap_candidate=False, previous_non_zero_event_index=None, next_non_zero_event_index=2),
+                DummyObservation(
+                    event_index=1,
+                    is_bridgeable_micro_gap_candidate=True,
+                    is_bridgeable_same_vowel_micro_gap_candidate=True,
+                    is_same_vowel_burst_candidate=True,
+                    previous_non_zero_event_index=0,
+                    next_non_zero_event_index=2,
+                    span_start_index=1,
+                    span_end_index=1,
+                ),
+                DummyObservation(event_index=2, is_bridgeable_micro_gap_candidate=False, previous_non_zero_event_index=0, next_non_zero_event_index=None),
+            ],
+        )
+
+        segment = preview_data.rows[0].segments[0]
+        self.assertEqual(segment.shape_kind, "ms11_3_multi_point_envelope")
+        self.assertEqual(
+            tuple(point.frame_no for point in segment.control_points),
+            (24, 30, 33, 37, 39, 42, 48),
+        )
+        self.assertEqual(
+            tuple(point.value for point in segment.control_points),
+            (0.0, 0.4, 0.06824999999999999, 0.195, 0.06824999999999999, 0.3, 0.0),
         )
 
     def test_cross_vowel_two_zero_span_shifts_preview_boundaries(self) -> None:
