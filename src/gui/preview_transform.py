@@ -25,6 +25,8 @@ from vmd_writer.writer import (
     _is_ms11_3_attemptable_group,
     _normalize_closing_hold_frames,
     _normalize_closing_softness_frames,
+    _resolve_effective_final_closing_hold_frames,
+    _resolve_effective_final_closing_softness_frames,
 )
 
 PREVIEW_ROW_VOWELS: tuple[str, str, str, str, str] = INTERNAL_VOWEL_ORDER
@@ -203,10 +205,18 @@ def _build_preview_segment_from_multi_point_group(
     if not _is_ms11_3_attemptable_group(grouped_events):
         return None
 
+    effective_closing_hold_frames = _resolve_effective_final_closing_hold_frames(
+        closing_hold_frames=closing_hold_frames,
+        next_shape_start_frame=next_shape_start_frame,
+    )
+    effective_closing_softness_frames = _resolve_effective_final_closing_softness_frames(
+        closing_softness_frames=closing_softness_frames,
+        next_shape_start_frame=next_shape_start_frame,
+    )
     result = _build_ms11_3_group_morph_frames_with_spec(
         grouped_events,
-        closing_hold_frames=closing_hold_frames,
-        closing_softness_frames=closing_softness_frames,
+        closing_hold_frames=effective_closing_hold_frames,
+        closing_softness_frames=effective_closing_softness_frames,
         next_shape_start_frame=next_shape_start_frame,
     )
     if result is None:
@@ -260,6 +270,14 @@ def _build_preview_segment_from_existing_point(
     closing_softness_frames: int,
     next_shape_start_frame: int | None,
 ) -> PreviewSegment | None:
+    effective_closing_hold_frames = _resolve_effective_final_closing_hold_frames(
+        closing_hold_frames=closing_hold_frames,
+        next_shape_start_frame=next_shape_start_frame,
+    )
+    effective_closing_softness_frames = _resolve_effective_final_closing_softness_frames(
+        closing_softness_frames=closing_softness_frames,
+        next_shape_start_frame=next_shape_start_frame,
+    )
     spec = _build_adjusted_trapezoid_spec(
         point,
         source_event_index=source_event_index,
@@ -269,10 +287,10 @@ def _build_preview_segment_from_existing_point(
         softened_spec = _apply_closing_softness_to_trapezoid_spec(
             _apply_closing_hold_to_trapezoid_spec(
                 spec,
-                closing_hold_frames=closing_hold_frames,
+                closing_hold_frames=effective_closing_hold_frames,
                 next_shape_start_frame=next_shape_start_frame,
             ),
-            closing_softness_frames=closing_softness_frames,
+            closing_softness_frames=effective_closing_softness_frames,
             next_shape_start_frame=next_shape_start_frame,
         )
         return _preview_segment_from_trapezoid_spec(softened_spec)
@@ -281,8 +299,8 @@ def _build_preview_segment_from_existing_point(
         point,
         source_event_index=source_event_index,
         observations=observations,
-        closing_hold_frames=closing_hold_frames,
-        closing_softness_frames=closing_softness_frames,
+        closing_hold_frames=effective_closing_hold_frames,
+        closing_softness_frames=effective_closing_softness_frames,
         next_shape_start_frame=next_shape_start_frame,
     )
     if not expanded_with_flags:
@@ -312,13 +330,25 @@ def _preview_segment_from_trapezoid_spec(
             point_kind="top",
             frame_no=spec.peak_start_frame,
         ),
-        PreviewControlPoint(
-            time_sec=_frame_to_seconds(spec.peak_end_frame),
-            value=spec.peak_value if spec.peak_end_value is None else spec.peak_end_value,
-            point_kind="top",
-            frame_no=spec.peak_end_frame,
-        ),
     ]
+    if spec.peak_end_frame != spec.peak_start_frame:
+        control_points.append(
+            PreviewControlPoint(
+                time_sec=_frame_to_seconds(spec.peak_end_frame),
+                value=spec.peak_value if spec.peak_end_value is None else spec.peak_end_value,
+                point_kind="top",
+                frame_no=spec.peak_end_frame,
+            )
+        )
+    if spec.closing_hold_frame is not None and spec.closing_hold_value is not None:
+        control_points.append(
+            PreviewControlPoint(
+                time_sec=_frame_to_seconds(spec.closing_hold_frame),
+                value=max(0.0, min(spec.closing_hold_value, 1.0)),
+                point_kind="hold",
+                frame_no=spec.closing_hold_frame,
+            )
+        )
     if spec.closing_mid_frame is not None and spec.closing_mid_value is not None:
         control_points.append(
             PreviewControlPoint(

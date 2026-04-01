@@ -23,6 +23,18 @@ _PEAK_WINDOW_HALO_SEC = 0.03
 _RMS_UNAVAILABLE_FALLBACK_RATIO = 0.25
 _DEFAULT_MORPH_UPPER_LIMIT = 0.5
 _SAME_VOWEL_BURST_LOW_POSITIVE_MAX = 0.2
+_SAME_VOWEL_MAX_CANDIDATE_SPAN_FRAMES = 2
+_SAME_VOWEL_MAX_CANDIDATE_OVERLAP_FRAMES = 1
+_SAME_VOWEL_REPRESENTATIVE_HALF_WIDTH_FRAMES = 1
+_CROSS_VOWEL_MAX_CANDIDATE_SPAN_FRAMES = 2
+_CROSS_VOWEL_ZERO_RUN_MAX_CANDIDATE_SPAN_FRAMES = 5
+_CROSS_VOWEL_MAX_CANDIDATE_OVERLAP_FRAMES = 1
+_CROSS_VOWEL_REPRESENTATIVE_HALF_WIDTH_FRAMES = 1
+_CROSS_VOWEL_RIGHT_GAP_RESIDUAL_MAX_FRAMES = 4
+_CROSS_VOWEL_RIGHT_GAP_RESIDUAL_MAX_SPAN_FRAMES = 7
+_CROSS_VOWEL_FLOOR_RESIDUAL_MAX_SPAN_FRAMES = 7
+_CROSS_VOWEL_FLOOR_RESIDUAL_MAX_RIGHT_GAP_FRAMES = 3
+_CROSS_VOWEL_FLOOR_RESIDUAL_MAX_END_TIME_GAP_FRAMES = 2
 
 
 class PipelineError(ValueError):
@@ -1041,20 +1053,112 @@ def _classify_bridgeable_zero_run_span(
     span_start_frame = _seconds_to_frame(span_start_observation.refined_interval_start_sec)
     span_end_frame = _seconds_to_frame(span_end_observation.refined_interval_end_sec)
 
-    if span_start_frame < previous_end_frame:
-        return None
-    if next_start_frame < span_end_frame:
-        return None
-    if (next_start_frame - previous_end_frame) > 2:
-        return None
-
     if (previous_end_frame - previous_start_frame) < 2:
         return None
     if (next_end_frame - next_start_frame) < 2:
         return None
 
     if previous_observation.vowel == next_observation.vowel:
+        representative_start_frame, representative_end_frame = _resolve_same_vowel_candidate_span_frames(
+            observations=observations,
+            span_start_index=span_start_index,
+            span_end_index=span_end_index,
+            previous_non_zero_event_index=previous_non_zero_event_index,
+            next_non_zero_event_index=next_non_zero_event_index,
+        )
+        if (
+            representative_end_frame - representative_start_frame
+        ) > _SAME_VOWEL_MAX_CANDIDATE_SPAN_FRAMES:
+            return None
+        if (
+            previous_end_frame - representative_start_frame
+        ) > _SAME_VOWEL_MAX_CANDIDATE_OVERLAP_FRAMES:
+            return None
+        if (
+            representative_end_frame - next_start_frame
+        ) > _SAME_VOWEL_MAX_CANDIDATE_OVERLAP_FRAMES:
+            return None
+        if (
+            representative_start_frame - previous_end_frame
+        ) > _SAME_VOWEL_MAX_CANDIDATE_SPAN_FRAMES:
+            return None
+        if (
+            next_start_frame - representative_end_frame
+        ) > _SAME_VOWEL_MAX_CANDIDATE_SPAN_FRAMES:
+            return None
         return "same_vowel"
+    representative_start_frame, representative_end_frame = _resolve_cross_vowel_candidate_span_frames(
+        observations=observations,
+        span_start_index=span_start_index,
+        span_end_index=span_end_index,
+        previous_non_zero_event_index=previous_non_zero_event_index,
+        next_non_zero_event_index=next_non_zero_event_index,
+    )
+    cross_vowel_max_span_frames = (
+        _CROSS_VOWEL_MAX_CANDIDATE_SPAN_FRAMES
+        if span_count == 1
+        else _CROSS_VOWEL_ZERO_RUN_MAX_CANDIDATE_SPAN_FRAMES
+    )
+    if (
+        representative_end_frame - representative_start_frame
+    ) > cross_vowel_max_span_frames:
+        if _is_cross_vowel_right_gap_residual_transition_span(
+            observations=observations,
+            span_start_index=span_start_index,
+            span_end_index=span_end_index,
+            previous_non_zero_event_index=previous_non_zero_event_index,
+            next_non_zero_event_index=next_non_zero_event_index,
+            representative_start_frame=representative_start_frame,
+            representative_end_frame=representative_end_frame,
+        ):
+            return "cross_vowel_transition"
+        if _is_cross_vowel_floor_residual_span(
+            observations=observations,
+            span_start_index=span_start_index,
+            span_end_index=span_end_index,
+            previous_non_zero_event_index=previous_non_zero_event_index,
+            next_non_zero_event_index=next_non_zero_event_index,
+            representative_start_frame=representative_start_frame,
+            representative_end_frame=representative_end_frame,
+        ):
+            return "cross_vowel_floor"
+        return None
+    if (
+        previous_end_frame - representative_start_frame
+    ) > _CROSS_VOWEL_MAX_CANDIDATE_OVERLAP_FRAMES:
+        return None
+    if (
+        representative_end_frame - next_start_frame
+    ) > _CROSS_VOWEL_MAX_CANDIDATE_OVERLAP_FRAMES:
+        return None
+    if (
+        representative_start_frame - previous_end_frame
+    ) > _CROSS_VOWEL_MAX_CANDIDATE_SPAN_FRAMES:
+        return None
+    if (
+        next_start_frame - representative_end_frame
+    ) > _CROSS_VOWEL_MAX_CANDIDATE_SPAN_FRAMES:
+        if _is_cross_vowel_right_gap_residual_transition_span(
+            observations=observations,
+            span_start_index=span_start_index,
+            span_end_index=span_end_index,
+            previous_non_zero_event_index=previous_non_zero_event_index,
+            next_non_zero_event_index=next_non_zero_event_index,
+            representative_start_frame=representative_start_frame,
+            representative_end_frame=representative_end_frame,
+        ):
+            return "cross_vowel_transition"
+        if _is_cross_vowel_floor_residual_span(
+            observations=observations,
+            span_start_index=span_start_index,
+            span_end_index=span_end_index,
+            previous_non_zero_event_index=previous_non_zero_event_index,
+            next_non_zero_event_index=next_non_zero_event_index,
+            representative_start_frame=representative_start_frame,
+            representative_end_frame=representative_end_frame,
+        ):
+            return "cross_vowel_floor"
+        return None
     if span_count == 1:
         return "cross_vowel_transition"
     return "cross_vowel_floor"
@@ -1109,15 +1213,237 @@ def _is_same_vowel_burst_span(
     span_start_frame = _seconds_to_frame(span_start_observation.refined_interval_start_sec)
     span_end_frame = _seconds_to_frame(span_end_observation.refined_interval_end_sec)
 
-    if span_start_frame < previous_end_frame:
+    representative_start_frame, representative_end_frame = _resolve_same_vowel_candidate_span_frames(
+        observations=observations,
+        span_start_index=span_start_index,
+        span_end_index=span_end_index,
+        previous_non_zero_event_index=previous_non_zero_event_index,
+        next_non_zero_event_index=next_non_zero_event_index,
+    )
+
+    if (
+        representative_end_frame - representative_start_frame
+    ) > _SAME_VOWEL_MAX_CANDIDATE_SPAN_FRAMES:
         return False
-    if next_start_frame < span_end_frame:
+    if (
+        previous_end_frame - representative_start_frame
+    ) > _SAME_VOWEL_MAX_CANDIDATE_OVERLAP_FRAMES:
         return False
-    if (span_end_frame - span_start_frame) > 2:
+    if (
+        representative_end_frame - next_start_frame
+    ) > _SAME_VOWEL_MAX_CANDIDATE_OVERLAP_FRAMES:
         return False
-    if (next_start_frame - previous_end_frame) > 2:
+    if (
+        representative_start_frame - previous_end_frame
+    ) > _SAME_VOWEL_MAX_CANDIDATE_SPAN_FRAMES:
+        return False
+    if (
+        next_start_frame - representative_end_frame
+    ) > _SAME_VOWEL_MAX_CANDIDATE_SPAN_FRAMES:
         return False
     return True
+
+
+def _is_cross_vowel_right_gap_residual_transition_span(
+    *,
+    observations: Sequence[PeakValueObservation],
+    span_start_index: int,
+    span_end_index: int,
+    previous_non_zero_event_index: int,
+    next_non_zero_event_index: int,
+    representative_start_frame: int,
+    representative_end_frame: int,
+) -> bool:
+    span_count = (span_end_index - span_start_index) + 1
+    if span_count <= 0 or span_count > 2:
+        return False
+
+    previous_observation = observations[previous_non_zero_event_index]
+    next_observation = observations[next_non_zero_event_index]
+    if previous_observation.vowel == next_observation.vowel:
+        return False
+
+    for span_index in range(span_start_index, span_end_index + 1):
+        if _resolve_bridge_candidate_reason(observations[span_index]) is None:
+            return False
+
+    previous_end_frame = _seconds_to_frame(previous_observation.refined_interval_end_sec)
+    next_start_frame = _seconds_to_frame(next_observation.refined_interval_start_sec)
+    representative_span_frames = representative_end_frame - representative_start_frame
+    right_gap_frames = next_start_frame - representative_end_frame
+
+    if representative_span_frames > _CROSS_VOWEL_RIGHT_GAP_RESIDUAL_MAX_SPAN_FRAMES:
+        return False
+    if (previous_end_frame - representative_start_frame) > _CROSS_VOWEL_MAX_CANDIDATE_OVERLAP_FRAMES:
+        return False
+    if (representative_start_frame - previous_end_frame) > _CROSS_VOWEL_MAX_CANDIDATE_SPAN_FRAMES:
+        return False
+    if right_gap_frames <= _CROSS_VOWEL_MAX_CANDIDATE_SPAN_FRAMES:
+        return False
+    if right_gap_frames > _CROSS_VOWEL_RIGHT_GAP_RESIDUAL_MAX_FRAMES:
+        return False
+    return True
+
+
+def _is_cross_vowel_floor_residual_span(
+    *,
+    observations: Sequence[PeakValueObservation],
+    span_start_index: int,
+    span_end_index: int,
+    previous_non_zero_event_index: int,
+    next_non_zero_event_index: int,
+    representative_start_frame: int,
+    representative_end_frame: int,
+) -> bool:
+    span_count = (span_end_index - span_start_index) + 1
+    if span_count != 2:
+        return False
+
+    previous_observation = observations[previous_non_zero_event_index]
+    next_observation = observations[next_non_zero_event_index]
+    if previous_observation.vowel == next_observation.vowel:
+        return False
+
+    for span_index in range(span_start_index, span_end_index + 1):
+        if _resolve_bridge_candidate_reason(observations[span_index]) is None:
+            return False
+
+    previous_end_frame = _seconds_to_frame(previous_observation.refined_interval_end_sec)
+    next_start_frame = _seconds_to_frame(next_observation.refined_interval_start_sec)
+    next_initial_start_frame = _seconds_to_frame(next_observation.initial_interval_start_sec)
+    span_start_observation = observations[span_start_index]
+    span_end_observation = observations[span_end_index]
+    span_start_time_frame = _seconds_to_frame(span_start_observation.time_sec)
+    span_end_time_frame = _seconds_to_frame(span_end_observation.time_sec)
+    span_end_initial_end_frame = _seconds_to_frame(span_end_observation.initial_interval_end_sec)
+    representative_span_frames = representative_end_frame - representative_start_frame
+    right_gap_refined_frames = next_start_frame - representative_end_frame
+    right_gap_initial_frames = next_initial_start_frame - representative_end_frame
+
+    if representative_span_frames <= _CROSS_VOWEL_ZERO_RUN_MAX_CANDIDATE_SPAN_FRAMES:
+        return False
+    if representative_span_frames > _CROSS_VOWEL_FLOOR_RESIDUAL_MAX_SPAN_FRAMES:
+        if not (
+            0 <= (span_start_time_frame - previous_end_frame) <= _CROSS_VOWEL_MAX_CANDIDATE_OVERLAP_FRAMES
+            and 0 <= (next_initial_start_frame - span_end_time_frame) <= _CROSS_VOWEL_FLOOR_RESIDUAL_MAX_END_TIME_GAP_FRAMES
+            and (next_initial_start_frame - span_end_initial_end_frame) <= 0
+        ):
+            return False
+    if (previous_end_frame - representative_start_frame) > _CROSS_VOWEL_MAX_CANDIDATE_OVERLAP_FRAMES:
+        return False
+    if right_gap_refined_frames > _CROSS_VOWEL_FLOOR_RESIDUAL_MAX_RIGHT_GAP_FRAMES:
+        return False
+    if right_gap_initial_frames > _CROSS_VOWEL_MAX_CANDIDATE_OVERLAP_FRAMES:
+        return False
+    return True
+
+
+def _resolve_same_vowel_candidate_span_frames(
+    *,
+    observations: Sequence[PeakValueObservation],
+    span_start_index: int,
+    span_end_index: int,
+    previous_non_zero_event_index: int,
+    next_non_zero_event_index: int,
+) -> tuple[int, int]:
+    span_start_observation = observations[span_start_index]
+    span_end_observation = observations[span_end_index]
+    previous_observation = observations[previous_non_zero_event_index]
+    next_observation = observations[next_non_zero_event_index]
+
+    span_start_frame = _seconds_to_frame(span_start_observation.refined_interval_start_sec)
+    span_end_frame = _seconds_to_frame(span_end_observation.refined_interval_end_sec)
+    previous_end_frame = _seconds_to_frame(previous_observation.refined_interval_end_sec)
+    next_start_frame = _seconds_to_frame(next_observation.refined_interval_start_sec)
+
+    time_based_start_frame = (
+        _seconds_to_frame(span_start_observation.time_sec)
+        - _SAME_VOWEL_REPRESENTATIVE_HALF_WIDTH_FRAMES
+    )
+    time_based_end_frame = (
+        _seconds_to_frame(span_end_observation.time_sec)
+        + _SAME_VOWEL_REPRESENTATIVE_HALF_WIDTH_FRAMES
+    )
+
+    representative_start_frame = max(
+        span_start_frame,
+        time_based_start_frame,
+        previous_end_frame - _SAME_VOWEL_MAX_CANDIDATE_OVERLAP_FRAMES,
+    )
+    representative_end_frame = min(
+        span_end_frame,
+        time_based_end_frame,
+        next_start_frame + _SAME_VOWEL_MAX_CANDIDATE_OVERLAP_FRAMES,
+    )
+
+    if representative_end_frame < representative_start_frame:
+        midpoint_frame = round(
+            (
+                _seconds_to_frame(span_start_observation.time_sec)
+                + _seconds_to_frame(span_end_observation.time_sec)
+            )
+            * 0.5
+        )
+        midpoint_frame = max(midpoint_frame, previous_end_frame)
+        midpoint_frame = min(midpoint_frame, next_start_frame)
+        representative_start_frame = midpoint_frame
+        representative_end_frame = midpoint_frame
+
+    return representative_start_frame, representative_end_frame
+
+
+def _resolve_cross_vowel_candidate_span_frames(
+    *,
+    observations: Sequence[PeakValueObservation],
+    span_start_index: int,
+    span_end_index: int,
+    previous_non_zero_event_index: int,
+    next_non_zero_event_index: int,
+) -> tuple[int, int]:
+    span_start_observation = observations[span_start_index]
+    span_end_observation = observations[span_end_index]
+    previous_observation = observations[previous_non_zero_event_index]
+    next_observation = observations[next_non_zero_event_index]
+
+    span_start_frame = _seconds_to_frame(span_start_observation.refined_interval_start_sec)
+    span_end_frame = _seconds_to_frame(span_end_observation.refined_interval_end_sec)
+    previous_end_frame = _seconds_to_frame(previous_observation.refined_interval_end_sec)
+    next_start_frame = _seconds_to_frame(next_observation.refined_interval_start_sec)
+
+    time_based_start_frame = (
+        _seconds_to_frame(span_start_observation.time_sec)
+        - _CROSS_VOWEL_REPRESENTATIVE_HALF_WIDTH_FRAMES
+    )
+    time_based_end_frame = (
+        _seconds_to_frame(span_end_observation.time_sec)
+        + _CROSS_VOWEL_REPRESENTATIVE_HALF_WIDTH_FRAMES
+    )
+
+    representative_start_frame = max(
+        span_start_frame,
+        time_based_start_frame,
+        previous_end_frame - _CROSS_VOWEL_MAX_CANDIDATE_OVERLAP_FRAMES,
+    )
+    representative_end_frame = min(
+        span_end_frame,
+        time_based_end_frame,
+        next_start_frame + _CROSS_VOWEL_MAX_CANDIDATE_OVERLAP_FRAMES,
+    )
+
+    if representative_end_frame < representative_start_frame:
+        midpoint_frame = round(
+            (
+                _seconds_to_frame(span_start_observation.time_sec)
+                + _seconds_to_frame(span_end_observation.time_sec)
+            )
+            * 0.5
+        )
+        midpoint_frame = max(midpoint_frame, previous_end_frame)
+        midpoint_frame = min(midpoint_frame, next_start_frame)
+        representative_start_frame = midpoint_frame
+        representative_end_frame = midpoint_frame
+
+    return representative_start_frame, representative_end_frame
 
 
 def _previous_non_zero_event_index(

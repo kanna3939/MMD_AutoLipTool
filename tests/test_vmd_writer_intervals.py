@@ -92,6 +92,88 @@ class VmdWriterIntervalTests(unittest.TestCase):
             ],
         )
 
+    def test_trapezoid_top_end_is_slightly_lowered_when_following_rms_is_lower(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="あ",
+                duration_sec=0.4,
+                start_sec=0.8,
+                end_sec=1.2,
+            )
+        ]
+
+        frames = _build_interval_morph_frames(
+            points,
+            observations=[
+                SimpleNamespace(
+                    event_index=0,
+                    is_bridgeable_micro_gap_candidate=False,
+                    is_bridgeable_same_vowel_micro_gap_candidate=False,
+                    is_same_vowel_burst_candidate=False,
+                    is_bridgeable_cross_vowel_transition_candidate=False,
+                    is_cross_vowel_zero_run_continuity_floor_candidate=False,
+                    local_peak=1.0,
+                    previous_non_zero_event_index=None,
+                    next_non_zero_event_index=None,
+                    span_start_index=None,
+                    span_end_index=None,
+                    rms_window_times_sec=(1.09, 1.1, 1.2),
+                    rms_window_values=(1.0, 0.8, 0.4),
+                )
+            ],
+        )
+        self.assertEqual(
+            frames,
+            [
+                (24, "あ", 0.0),
+                (27, "あ", 0.5),
+                (33, "あ", 0.35),
+                (36, "あ", 0.0),
+            ],
+        )
+
+    def test_trapezoid_top_end_drop_is_softened_when_following_rms_recovers(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="あ",
+                duration_sec=0.4,
+                start_sec=0.8,
+                end_sec=1.2,
+            )
+        ]
+
+        frames = _build_interval_morph_frames(
+            points,
+            observations=[
+                SimpleNamespace(
+                    event_index=0,
+                    is_bridgeable_micro_gap_candidate=False,
+                    is_bridgeable_same_vowel_micro_gap_candidate=False,
+                    is_same_vowel_burst_candidate=False,
+                    is_bridgeable_cross_vowel_transition_candidate=False,
+                    is_cross_vowel_zero_run_continuity_floor_candidate=False,
+                    local_peak=1.0,
+                    previous_non_zero_event_index=None,
+                    next_non_zero_event_index=None,
+                    span_start_index=None,
+                    span_end_index=None,
+                    rms_window_times_sec=(1.09, 1.1, 1.2),
+                    rms_window_values=(1.0, 0.1, 0.5),
+                )
+            ],
+        )
+        self.assertEqual(
+            frames,
+            [
+                (24, "あ", 0.0),
+                (27, "あ", 0.5),
+                (33, "あ", 0.1),
+                (36, "あ", 0.0),
+            ],
+        )
+
     def test_zero_peak_cross_vowel_candidate_uses_continuity_floor(self) -> None:
         points = [
             VowelTimelinePoint(
@@ -257,8 +339,8 @@ class VmdWriterIntervalTests(unittest.TestCase):
             [
                 (28, "あ", 0.0),
                 (30, "あ", 0.5),
-                (31, "あ", 0.35),
-                (34, "あ", 0.0),
+                (34, "あ", 0.35),
+                (35, "あ", 0.0),
             ],
         )
 
@@ -280,8 +362,8 @@ class VmdWriterIntervalTests(unittest.TestCase):
             [
                 (28, "あ", 0.0),
                 (30, "あ", 0.5),
-                (33, "あ", 0.5),
-                (34, "あ", 0.0),
+                (34, "あ", 0.5),
+                (35, "あ", 0.0),
             ],
         )
 
@@ -307,13 +389,13 @@ class VmdWriterIntervalTests(unittest.TestCase):
             [
                 (28, "あ", 0.0),
                 (30, "あ", 0.5),
-                (33, "あ", 0.5),
-                (34, "あ", 0.35),
-                (36, "あ", 0.0),
+                (34, "あ", 0.5),
+                (36, "あ", 0.35),
+                (37, "あ", 0.0),
             ],
         )
 
-    def test_peak_fallback_closing_softness_clamps_before_following_shape_start(self) -> None:
+    def test_peak_fallback_closing_softness_uses_available_extension_before_following_shape(self) -> None:
         points = [
             VowelTimelinePoint(
                 time_sec=1.0,
@@ -338,12 +420,12 @@ class VmdWriterIntervalTests(unittest.TestCase):
             [
                 (28, "あ", 0.0),
                 (30, "あ", 0.5),
-                (31, "あ", 0.35),
+                (32, "あ", 0.35),
                 (32, "あ", 0.0),
                 (33, "あ", 0.0),
                 (34, "あ", 0.5),
-                (35, "あ", 0.35),
-                (45, "あ", 0.0),
+                (45, "あ", 0.35),
+                (46, "あ", 0.0),
             ],
         )
 
@@ -366,8 +448,8 @@ class VmdWriterIntervalTests(unittest.TestCase):
                 (24, "あ", 0.0),
                 (27, "あ", 0.5),
                 (33, "あ", 0.5),
-                (34, "あ", 0.35),
-                (37, "あ", 0.0),
+                (38, "あ", 0.35),
+                (39, "あ", 0.0),
             ],
         )
 
@@ -389,8 +471,93 @@ class VmdWriterIntervalTests(unittest.TestCase):
             [
                 (24, "あ", 0.0),
                 (27, "あ", 0.5),
-                (36, "あ", 0.5),
-                (37, "あ", 0.0),
+                (33, "あ", 0.5),
+                (38, "あ", 0.5),
+                (39, "あ", 0.0),
+            ],
+        )
+
+    def test_ms11_2_closing_hold_preserves_decayed_peak_end_value(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="あ",
+                duration_sec=0.4,
+                start_sec=0.8,
+                end_sec=1.2,
+            )
+        ]
+
+        frames = _build_interval_morph_frames(
+            points,
+            observations=[
+                SimpleNamespace(
+                    event_index=0,
+                    is_bridgeable_micro_gap_candidate=False,
+                    is_bridgeable_same_vowel_micro_gap_candidate=False,
+                    is_bridgeable_cross_vowel_transition_candidate=False,
+                    local_peak=1.0,
+                    previous_non_zero_event_index=None,
+                    next_non_zero_event_index=None,
+                    span_start_index=None,
+                    span_end_index=None,
+                    rms_window_times_sec=(1.09, 1.2),
+                    rms_window_values=(1.0, 0.3),
+                )
+            ],
+            closing_hold_frames=3,
+        )
+
+        self.assertEqual(
+            frames,
+            [
+                (24, "あ", 0.0),
+                (27, "あ", 0.5),
+                (33, "あ", 0.15),
+                (38, "あ", 0.15),
+                (39, "あ", 0.0),
+            ],
+        )
+
+    def test_ms11_2_closing_softness_uses_decayed_peak_end_value_for_midpoint(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="あ",
+                duration_sec=0.4,
+                start_sec=0.8,
+                end_sec=1.2,
+            )
+        ]
+
+        frames = _build_interval_morph_frames(
+            points,
+            observations=[
+                SimpleNamespace(
+                    event_index=0,
+                    is_bridgeable_micro_gap_candidate=False,
+                    is_bridgeable_same_vowel_micro_gap_candidate=False,
+                    is_bridgeable_cross_vowel_transition_candidate=False,
+                    local_peak=1.0,
+                    previous_non_zero_event_index=None,
+                    next_non_zero_event_index=None,
+                    span_start_index=None,
+                    span_end_index=None,
+                    rms_window_times_sec=(1.09, 1.2),
+                    rms_window_values=(1.0, 0.3),
+                )
+            ],
+            closing_softness_frames=3,
+        )
+
+        self.assertEqual(
+            frames,
+            [
+                (24, "あ", 0.0),
+                (27, "あ", 0.5),
+                (33, "あ", 0.15),
+                (38, "あ", 0.105),
+                (39, "あ", 0.0),
             ],
         )
 
@@ -412,7 +579,7 @@ class VmdWriterIntervalTests(unittest.TestCase):
             [
                 (28, "あ", 0.0),
                 (30, "あ", 0.5),
-                (31, "あ", 0.35),
+                (33, "あ", 0.35),
                 (34, "あ", 0.0),
             ],
         )
@@ -459,12 +626,12 @@ class VmdWriterIntervalTests(unittest.TestCase):
                 (30, "あ", 0.0),
                 (31, "あ", 0.5),
                 (32, "あ", 0.5),
-                (33, "あ", 0.35),
-                (36, "あ", 0.0),
+                (36, "あ", 0.35),
+                (37, "あ", 0.0),
             ],
         )
 
-    def test_closing_softness_clamps_before_following_shape_start(self) -> None:
+    def test_closing_softness_does_not_shorten_when_following_shape_leaves_no_room(self) -> None:
         points = [
             VowelTimelinePoint(
                 time_sec=1.0,
@@ -490,12 +657,43 @@ class VmdWriterIntervalTests(unittest.TestCase):
                 (24, "あ", 0.0),
                 (27, "あ", 0.5),
                 (33, "あ", 0.5),
-                (34, "あ", 0.35),
                 (36, "あ", 0.0),
                 (37, "あ", 0.0),
                 (38, "あ", 0.5),
-                (39, "あ", 0.35),
-                (42, "あ", 0.0),
+                (42, "あ", 0.35),
+                (43, "あ", 0.0),
+            ],
+        )
+
+    def test_closing_hold_does_not_change_non_final_interval_width(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="あ",
+                duration_sec=0.4,
+                start_sec=0.8,
+                end_sec=1.2,
+            ),
+            VowelTimelinePoint(
+                time_sec=1.5,
+                vowel="あ",
+                duration_sec=0.4,
+                start_sec=1.3,
+                end_sec=1.7,
+            ),
+        ]
+
+        frames = _build_interval_morph_frames(points, closing_hold_frames=3)
+
+        self.assertEqual(
+            frames,
+            [
+                (24, "あ", 0.0),
+                (30, "あ", 0.5),
+                (37, "あ", 0.175),
+                (45, "あ", 0.5),
+                (53, "あ", 0.5),
+                (54, "あ", 0.0),
             ],
         )
 
@@ -541,14 +739,14 @@ class VmdWriterIntervalTests(unittest.TestCase):
             [
                 (28, "あ", 0.0),
                 (30, "あ", 0.5),
-                (33, "あ", 0.5),
-                (34, "あ", 0.35),
-                (38, "あ", 0.0),
+                (34, "あ", 0.5),
+                (38, "あ", 0.35),
+                (39, "あ", 0.0),
                 (48, "い", 0.0),
                 (50, "い", 0.5),
-                (53, "い", 0.5),
-                (54, "い", 0.35),
-                (58, "い", 0.0),
+                (54, "い", 0.5),
+                (58, "い", 0.35),
+                (59, "い", 0.0),
             ],
         )
 
@@ -610,8 +808,12 @@ class VmdWriterIntervalTests(unittest.TestCase):
             [
                 (24, "あ", 0.0),
                 (30, "あ", 0.4),
-                (34, "あ", 0.105),
-                (39, "あ", 0.3),
+                (32, "あ", 0.0),
+                (33, "あ", 0.06824999999999999),
+                (36, "あ", 0.3),
+                (37, "あ", 0.195),
+                (39, "あ", 0.0),
+                (42, "あ", 0.3),
                 (45, "あ", 0.0),
             ],
         )
@@ -774,11 +976,108 @@ class VmdWriterIntervalTests(unittest.TestCase):
             [
                 (24, "あ", 0.0),
                 (30, "あ", 0.4),
-                (34, "あ", 0.08399999999999999),
-                (38, "あ", 0.24),
-                (40, "あ", 0.08399999999999999),
+                (34, "あ", 0.06824999999999999),
+                (38, "あ", 0.195),
+                (40, "あ", 0.06824999999999999),
                 (42, "あ", 0.3),
                 (48, "あ", 0.0),
+            ],
+        )
+
+    def test_same_vowel_low_positive_and_zero_span_is_smoothed_as_sub_peak(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="う",
+                duration_sec=13 / 30,
+                start_sec=24 / 30,
+                end_sec=37 / 30,
+                peak_value=0.4,
+                value=0.4,
+            ),
+            VowelTimelinePoint(
+                time_sec=37 / 30,
+                vowel="う",
+                duration_sec=1 / 30,
+                start_sec=37 / 30,
+                end_sec=38 / 30,
+                peak_value=0.12,
+                value=0.12,
+            ),
+            VowelTimelinePoint(
+                time_sec=38 / 30,
+                vowel="う",
+                duration_sec=1 / 30,
+                start_sec=38 / 30,
+                end_sec=39 / 30,
+                peak_value=0.0,
+                value=0.0,
+            ),
+            VowelTimelinePoint(
+                time_sec=42 / 30,
+                vowel="う",
+                duration_sec=9 / 30,
+                start_sec=39 / 30,
+                end_sec=48 / 30,
+                peak_value=0.3,
+                value=0.3,
+            ),
+        ]
+        observations = [
+            SimpleNamespace(
+                event_index=0,
+                is_bridgeable_micro_gap_candidate=False,
+                is_bridgeable_same_vowel_micro_gap_candidate=False,
+                is_same_vowel_burst_candidate=False,
+                is_bridgeable_cross_vowel_transition_candidate=False,
+                previous_non_zero_event_index=None,
+                next_non_zero_event_index=3,
+            ),
+            SimpleNamespace(
+                event_index=1,
+                is_bridgeable_micro_gap_candidate=False,
+                is_bridgeable_same_vowel_micro_gap_candidate=False,
+                is_same_vowel_burst_candidate=True,
+                is_bridgeable_cross_vowel_transition_candidate=False,
+                previous_non_zero_event_index=0,
+                next_non_zero_event_index=3,
+                span_start_index=1,
+                span_end_index=2,
+            ),
+            SimpleNamespace(
+                event_index=2,
+                is_bridgeable_micro_gap_candidate=False,
+                is_bridgeable_same_vowel_micro_gap_candidate=False,
+                is_same_vowel_burst_candidate=True,
+                is_bridgeable_cross_vowel_transition_candidate=False,
+                previous_non_zero_event_index=0,
+                next_non_zero_event_index=3,
+                span_start_index=1,
+                span_end_index=2,
+            ),
+            SimpleNamespace(
+                event_index=3,
+                is_bridgeable_micro_gap_candidate=False,
+                is_bridgeable_same_vowel_micro_gap_candidate=False,
+                is_same_vowel_burst_candidate=False,
+                is_bridgeable_cross_vowel_transition_candidate=False,
+                previous_non_zero_event_index=0,
+                next_non_zero_event_index=None,
+            ),
+        ]
+
+        frames = _build_interval_morph_frames(points, observations=observations)
+
+        self.assertEqual(
+            frames,
+            [
+                (24, "う", 0.0),
+                (30, "う", 0.4),
+                (33, "う", 0.05),
+                (37, "う", 0.12),
+                (39, "う", 0.05),
+                (42, "う", 0.3),
+                (48, "う", 0.0),
             ],
         )
 
@@ -851,9 +1150,90 @@ class VmdWriterIntervalTests(unittest.TestCase):
             [
                 (24, "う", 0.0),
                 (30, "う", 0.4),
-                (34, "う", 0.105),
-                (39, "う", 0.3),
+                (32, "う", 0.0),
+                (33, "う", 0.05),
+                (36, "う", 0.3),
+                (37, "う", 0.12),
+                (39, "う", 0.0),
+                (42, "う", 0.3),
                 (45, "う", 0.0),
+            ],
+        )
+
+    def test_same_vowel_single_zero_span_adds_bridge_point(self) -> None:
+        points = [
+            VowelTimelinePoint(
+                time_sec=1.0,
+                vowel="あ",
+                duration_sec=13 / 30,
+                start_sec=24 / 30,
+                end_sec=37 / 30,
+                peak_value=0.4,
+                value=0.4,
+            ),
+            VowelTimelinePoint(
+                time_sec=37 / 30,
+                vowel="あ",
+                duration_sec=8 / 30,
+                start_sec=30 / 30,
+                end_sec=38 / 30,
+                peak_value=0.0,
+                value=0.0,
+            ),
+            VowelTimelinePoint(
+                time_sec=42 / 30,
+                vowel="あ",
+                duration_sec=9 / 30,
+                start_sec=39 / 30,
+                end_sec=48 / 30,
+                peak_value=0.3,
+                value=0.3,
+            ),
+        ]
+        observations = [
+            SimpleNamespace(
+                event_index=0,
+                is_bridgeable_micro_gap_candidate=False,
+                is_bridgeable_same_vowel_micro_gap_candidate=False,
+                is_same_vowel_burst_candidate=False,
+                is_bridgeable_cross_vowel_transition_candidate=False,
+                previous_non_zero_event_index=None,
+                next_non_zero_event_index=2,
+            ),
+            SimpleNamespace(
+                event_index=1,
+                is_bridgeable_micro_gap_candidate=True,
+                is_bridgeable_same_vowel_micro_gap_candidate=True,
+                is_same_vowel_burst_candidate=True,
+                is_bridgeable_cross_vowel_transition_candidate=False,
+                previous_non_zero_event_index=0,
+                next_non_zero_event_index=2,
+                span_start_index=1,
+                span_end_index=1,
+            ),
+            SimpleNamespace(
+                event_index=2,
+                is_bridgeable_micro_gap_candidate=False,
+                is_bridgeable_same_vowel_micro_gap_candidate=False,
+                is_same_vowel_burst_candidate=False,
+                is_bridgeable_cross_vowel_transition_candidate=False,
+                previous_non_zero_event_index=0,
+                next_non_zero_event_index=None,
+            ),
+        ]
+
+        frames = _build_interval_morph_frames(points, observations=observations)
+
+        self.assertEqual(
+            frames,
+            [
+                (24, "あ", 0.0),
+                (30, "あ", 0.4),
+                (33, "あ", 0.06824999999999999),
+                (37, "あ", 0.195),
+                (39, "あ", 0.06824999999999999),
+                (42, "あ", 0.3),
+                (48, "あ", 0.0),
             ],
         )
 
