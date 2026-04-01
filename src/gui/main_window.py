@@ -1,6 +1,7 @@
 import os
 import math
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 
@@ -9,7 +10,7 @@ try:
 except ImportError:  # pragma: no cover - non-Windows fallback
     winsound = None
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
 from core import (
     PipelineError,
     TextProcessingError,
@@ -81,6 +82,40 @@ _UI_SETTING_KEY_CLOSING_SOFTNESS_FRAMES = "closing_softness_frames"
 _UI_SETTING_KEY_RECENT_TEXT_FILES = "recent_text_files"
 _UI_SETTING_KEY_RECENT_WAV_FILES = "recent_wav_files"
 _UI_SETTING_KEY_LAST_VMD_OUTPUT_DIR = "last_vmd_output_dir"
+
+
+@dataclass(frozen=True)
+class _TimingPlanBuildRequest:
+    text_content: str
+    wav_path: str
+    wav_analysis: WavAnalysisResult
+    upper_limit: float
+
+
+class _TimingPlanBuildWorker(QObject):
+    succeeded = Signal(object)
+    failed = Signal(object)
+    finished = Signal()
+
+    def __init__(self, request: _TimingPlanBuildRequest) -> None:
+        super().__init__()
+        self._request = request
+
+    def run(self) -> None:
+        try:
+            timing_plan = build_vowel_timing_plan(
+                text_content=self._request.text_content,
+                wav_path=self._request.wav_path,
+                wav_analysis=self._request.wav_analysis,
+                whisper_model_name="small",
+                upper_limit=self._request.upper_limit,
+            )
+        except Exception as error:
+            self.failed.emit(error)
+        else:
+            self.succeeded.emit(timing_plan)
+        finally:
+            self.finished.emit()
 
 
 class MainWindow(QWidget):
@@ -165,6 +200,8 @@ class MainWindow(QWidget):
         self.last_vmd_output_dir: str | None = None
         self._is_processing = False
         self._processing_dialog: QProgressDialog | None = None
+        self._processing_worker_thread: QThread | None = None
+        self._processing_worker: _TimingPlanBuildWorker | None = None
         self._recent_file_limit = 10
         self.recent_text_files: list[str] = []
         self.recent_wav_files: list[str] = []
@@ -2765,18 +2802,101 @@ QSplitter#CenterSplitter::handle {{
 
         self._begin_processing_session()
         try:
-            self._refresh_waveform_morph_labels()
-            self._request_waveform_bounds_sync()
-            if self.current_timing_plan is None:
-                self._show_warning(
-                    title=self._warning_text("PROCESSING_ERROR_TITLE"),
-                    message=self._main_window_text("PROCESSING_FAILED"),
-                    status=self._status_text("FAILURE"),
+            request = self._build_timing_plan_build_request()
+            if request is None:
+                self._handle_processing_failure(
+                    ValueError(self._main_window_text("PROCESSING_FAILED"))
                 )
                 return
-            self._set_ready_status()
-        finally:
+            self._start_processing_worker(request)
+        except Exception as error:
+            self._handle_processing_failure(error)
             self._end_processing_session()
+
+    def _build_timing_plan_build_request(self) -> _TimingPlanBuildRequest | None:
+        if (
+            not self.selected_wav_analysis
+            or not self.selected_text_content
+            or not self.selected_wav_path
+        ):
+            return None
+        if not self.selected_wav_analysis.has_speech:
+            return None
+        return _TimingPlanBuildRequest(
+            text_content=self.selected_text_content,
+            wav_path=self.selected_wav_path,
+            wav_analysis=self.selected_wav_analysis,
+            upper_limit=self._current_upper_limit(),
+        )
+
+    def _start_processing_worker(self, request: _TimingPlanBuildRequest) -> None:
+        if self._processing_worker_thread is not None or self._processing_worker is not None:
+            raise RuntimeError("Processing worker is already active.")
+
+        thread = QThread(self)
+        worker = _TimingPlanBuildWorker(request)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.succeeded.connect(self._on_processing_worker_succeeded)
+        worker.failed.connect(self._on_processing_worker_failed)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        self._processing_worker_thread = thread
+        self._processing_worker = worker
+        thread.start()
+
+    def _clear_processing_worker_refs(self) -> None:
+        self._processing_worker = None
+        self._processing_worker_thread = None
+
+    def _apply_timing_plan_to_views(self, timing_plan: VowelTimingPlan) -> None:
+        self.current_timing_plan = timing_plan
+        self.wav_waveform_view.set_morph_events(timing_plan.timeline)
+        self._update_preview_from_current_timing_plan()
+        self._request_waveform_bounds_sync()
+
+    def _reset_processing_views_after_failure(self) -> None:
+        self._invalidate_current_timing_plan()
+        self.wav_waveform_view.clear_morph_labels()
+
+    def _handle_processing_failure(self, error: BaseException) -> None:
+        self._clear_processing_worker_refs()
+        self._reset_processing_views_after_failure()
+        if isinstance(error, ValueError):
+            self._show_warning(
+                title=self._warning_text("PROCESSING_ERROR_TITLE"),
+                message=self._main_window_text("PROCESSING_FAILED"),
+                status=self._status_text("FAILURE"),
+            )
+            return
+        self._show_warning(
+            title=self._warning_text("UNEXPECTED_ERROR_TITLE"),
+            message=self._main_window_text("UNEXPECTED_ERROR_MESSAGE").format(
+                error=error
+            ),
+            status=self._status_text("FAILURE"),
+        )
+
+    def _on_processing_worker_succeeded(self, timing_plan: object) -> None:
+        if not isinstance(timing_plan, VowelTimingPlan):
+            self._on_processing_worker_failed(
+                TypeError("Invalid timing plan result returned by worker.")
+            )
+            return
+        self._clear_processing_worker_refs()
+        self._apply_timing_plan_to_views(timing_plan)
+        self._set_ready_status()
+        self._end_processing_session()
+
+    def _on_processing_worker_failed(self, error: object) -> None:
+        resolved_error = error if isinstance(error, BaseException) else RuntimeError(
+            str(error)
+        )
+        self._handle_processing_failure(resolved_error)
+        self._end_processing_session()
 
     def _has_required_inputs(self) -> bool:
         return bool(self.selected_text_path and self.selected_wav_path)
@@ -2827,38 +2947,6 @@ QSplitter#CenterSplitter::handle {{
             self.vowel_preview.setPlainText(self.selected_vowel_content)
         else:
             self.vowel_preview.setPlainText(self._main_window_text("TEXT_PREVIEW_NO_VOWELS"))
-
-    def _refresh_waveform_morph_labels(self) -> None:
-        if (
-            not self.selected_wav_analysis
-            or not self.selected_text_content
-            or not self.selected_wav_path
-        ):
-            self._invalidate_current_timing_plan()
-            self.wav_waveform_view.clear_morph_labels()
-            return
-
-        if not self.selected_wav_analysis.has_speech:
-            self._invalidate_current_timing_plan()
-            self.wav_waveform_view.clear_morph_labels()
-            return
-
-        try:
-            timing_plan = build_vowel_timing_plan(
-                text_content=self.selected_text_content,
-                wav_path=self.selected_wav_path,
-                wav_analysis=self.selected_wav_analysis,
-                whisper_model_name="small",
-                upper_limit=self._current_upper_limit(),
-            )
-        except ValueError:
-            self._invalidate_current_timing_plan()
-            self.wav_waveform_view.clear_morph_labels()
-            return
-
-        self.current_timing_plan = timing_plan
-        self.wav_waveform_view.set_morph_events(timing_plan.timeline)
-        self._update_preview_from_current_timing_plan()
 
     def _show_warning(self, title: str, message: str, status: str | None = None) -> None:
         QMessageBox.warning(self, title, message)
