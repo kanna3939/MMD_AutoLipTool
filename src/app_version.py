@@ -17,26 +17,38 @@ def resolve_installed_version(package_names: Sequence[str]) -> str | None:
     return None
 
 
+def _candidate_pyproject_paths(pyproject_path: Path | None = None) -> tuple[Path, ...]:
+    if pyproject_path is not None:
+        return (pyproject_path,)
+
+    module_path = Path(__file__).resolve()
+    return (
+        module_path.parents[1] / "pyproject.toml",
+        module_path.parent / "pyproject.toml",
+        module_path.parents[2] / "pyproject.toml",
+    )
+
+
 def resolve_pyproject_version(pyproject_path: Path | None = None) -> str | None:
-    target_path = pyproject_path or Path(__file__).resolve().parents[1] / "pyproject.toml"
-    try:
-        with target_path.open("rb") as fh:
-            parsed = tomllib.load(fh)
-    except (OSError, tomllib.TOMLDecodeError):
-        return None
+    for target_path in _candidate_pyproject_paths(pyproject_path):
+        try:
+            with target_path.open("rb") as fh:
+                parsed = tomllib.load(fh)
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
 
-    project = parsed.get("project")
-    if not isinstance(project, dict):
-        return None
+        project = parsed.get("project")
+        if not isinstance(project, dict):
+            continue
 
-    version = project.get("version")
-    if not isinstance(version, str):
-        return None
+        version = project.get("version")
+        if not isinstance(version, str):
+            continue
 
-    stripped = version.strip()
-    if not stripped:
-        return None
-    return stripped
+        stripped = version.strip()
+        if stripped:
+            return stripped
+    return None
 
 
 def resolve_app_version() -> str | None:

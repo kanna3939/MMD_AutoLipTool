@@ -6,6 +6,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from app_version import (
+    _candidate_pyproject_paths,
     format_app_version_display,
     resolve_app_version,
     resolve_pyproject_version,
@@ -33,6 +34,10 @@ class AppVersionTests(unittest.TestCase):
     def test_resolve_pyproject_version_reads_project_version(self) -> None:
         version = resolve_pyproject_version(Path(__file__).resolve().parents[1] / "pyproject.toml")
         self.assertEqual(version, "0.3.8.0")
+
+    def test_candidate_pyproject_paths_prioritize_explicit_path(self) -> None:
+        explicit = Path("custom_pyproject.toml")
+        self.assertEqual(_candidate_pyproject_paths(explicit), (explicit,))
 
     def test_format_app_version_display_uses_ver_prefix(self) -> None:
         self.assertEqual(

@@ -14,7 +14,8 @@ hiddenimports += collect_submodules("matplotlib.backends")
 hiddenimports += collect_submodules("whisper")
 hiddenimports += collect_submodules("tiktoken_ext")
 
-project_root = Path(__file__).resolve().parent
+spec_path = Path(globals().get("__file__", "MMD_AutoLipTool.spec")).resolve()
+project_root = spec_path.parent
 ffmpeg_bin_dir = project_root / "FFmpeg" / "bin"
 
 datas = []
@@ -23,10 +24,16 @@ datas += collect_data_files("pyopenjtalk")
 datas += collect_data_files("tiktoken")
 datas += collect_data_files("tiktoken_ext")
 datas += [("assets/icons/MMD_AutoLipTool.ico", "assets/icons")]
+datas += [
+    (str(path), "assets/icons/toolbar")
+    for path in sorted((project_root / "assets" / "icons" / "toolbar").iterdir())
+    if path.is_file()
+]
 datas += [("assets/MMD_AutoLipTool_splash.png", "assets")]
 datas += [("LICENSE", ".")]
 datas += [("NOTICE", ".")]
 datas += [("THIRD_PARTY_LICENSES.md", ".")]
+datas += [("pyproject.toml", ".")]
 
 binaries = []
 binaries += collect_dynamic_libs("pyopenjtalk")
