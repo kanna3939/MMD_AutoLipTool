@@ -1,4 +1,34 @@
 ﻿# MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
+## 2026-04-02 / MS12-1 実装メモ
+
+- 対象: MS12-1
+- 実装反映:
+  - `src/gui/settings_store.py` に `last_vmd_output_dir` を追加し、settings の save / load / normalize 対象へ組み込んだ
+  - `src/gui/main_window.py` で VMD 保存ダイアログの初期フォルダに remembered dir を使い、保存成功時のみ親フォルダを更新するようにした
+  - `tests/test_settings_store.py` と `tests/test_main_window_vmd_output_dir.py` に round-trip / success / cancel / failure の最小回帰を追加した
+- 確認状態:
+  - `tests/test_settings_store.py tests/test_main_window_vmd_output_dir.py` は通過
+- 現在地:
+  - VMD 保存先フォルダの記憶と永続化が、MS12-1 の最小契約として実装済みになった
+  - 次段は MS12-2 の responsiveness 改修へ進める状態
+
+---
+
+## 2026-04-02 / MS12-1 実装 plan 整理メモ
+
+- 対象: MS12-1
+- 追加文書:
+  - `docs/MS12-1_Implementation_Plan.md` を追加
+- 整理内容:
+  - VMD 保存先フォルダの記憶と永続化について、対象 / 非対象 / 壊さない前提 / 想定実装ステップ / テスト方針 / 保留課題を単独文書化
+  - 保存成功時のみ記憶更新し、次回 save dialog 初期フォルダと再起動後復元へつなぐ方針を固定
+  - 未確定事項は問い合わせず、settings key 配置、保存タイミング、invalid dir 扱いなどを保留課題として明記
+- 現在地:
+  - MS12 の親ロードマップに続き、MS12-1 単体で着手できる plan が揃った
+  - まだ実装・テスト追加には入っていない
+
+---
+
 ## 2026-04-02 / MS12 要件整理メモ
 
 - 対象: MS12 roadmap / 仕様整理

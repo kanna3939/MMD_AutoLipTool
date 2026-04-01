@@ -1,5 +1,46 @@
 # Version Control Log
 
+## Entry 2026-04-02 / Session: ms12-1-implement-vmd-output-dir-memory
+
+- Date: 2026-04-02
+- Session: ms12-1-implement-vmd-output-dir-memory
+- Summary:
+  - `MS12-1: VMD保存先フォルダの記憶と永続化` を実装した。
+  - settings に `last_vmd_output_dir` を追加し、VMD 保存ダイアログの初期フォルダと保存成功時の更新を接続した。
+  - cancel / export failure では remembered dir を更新しない最小回帰テストを追加した。
+- Modified Files:
+  - `src/gui/main_window.py`: VMD 保存先 remembered dir の読込、初期フォルダ反映、成功時更新と保存を追加。
+  - `src/gui/settings_store.py`: `last_vmd_output_dir` の default / normalize / save / load を追加。
+  - `tests/test_settings_store.py`: 新 settings key の round-trip / invalid fallback を追加。
+  - `docs/repo_milestone.md`: MS12-1 実装メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - `tests/test_main_window_vmd_output_dir.py`
+- Notes:
+  - 保存対象はフォルダのみで、保存ファイル名や VMD recent history はまだ扱っていない。
+  - settings save failure 時の warning 契約は既存実装に従っている。
+- Verification:
+  - `.\\.venv\\Scripts\\python.exe -m pytest tests/test_settings_store.py tests/test_main_window_vmd_output_dir.py`
+
+## Entry 2026-04-02 / Session: ms12-1-plan-doc
+
+- Date: 2026-04-02
+- Session: ms12-1-plan-doc
+- Summary:
+  - `MS12-1: VMD保存先フォルダの記憶と永続化` の個別実装 plan を追加した。
+  - 親ロードマップより一段具体化し、対象 / 非対象 / 壊さない前提 / 想定実装ステップ / テスト方針 / 保留課題を整理した。
+  - 未確定事項は今回も問い合わせず、実装時判断が必要な論点として文書へ残した。
+- Modified Files:
+  - `docs/repo_milestone.md`: MS12-1 実装 plan 整理メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - `docs/MS12-1_Implementation_Plan.md`
+- Notes:
+  - 今回は実装 plan 文書化のみで、コード変更やテスト追加は行っていない。
+  - 次段は、この plan を基準に MS12-1 実装へ入る前提とする。
+- Verification:
+  - `rg -n "MS12-1|保存成功時のみ|保留課題|last_vmd_output_dir|save dialog" docs/MS12-1_Implementation_Plan.md docs/repo_milestone.md docs/Version_Control.md`
+
 ## Entry 2026-04-02 / Session: ms12-roadmap-doc
 
 - Date: 2026-04-02

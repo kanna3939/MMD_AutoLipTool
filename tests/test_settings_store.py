@@ -9,6 +9,29 @@ from tests.helpers import workspace_tempdir
 
 
 class SettingsStoreClosingSoftnessTests(unittest.TestCase):
+    def test_last_vmd_output_dir_round_trips_through_save_and_load(self) -> None:
+        with workspace_tempdir("settings_store_vmd_output_dir") as tmp_dir:
+            settings_path = tmp_dir / "MMD_AutoLipTool.ini"
+            store = SettingsStore(settings_path)
+
+            settings = SettingsStore.default_settings()
+            settings["last_vmd_output_dir"] = str(tmp_dir)
+
+            save_result = store.save(settings)
+            self.assertTrue(save_result.succeeded)
+
+            load_result = store.load()
+            self.assertEqual(load_result.settings["last_vmd_output_dir"], str(tmp_dir))
+
+    def test_non_string_last_vmd_output_dir_falls_back_to_default(self) -> None:
+        normalized, invalid_keys, used_default_keys = SettingsStore.normalize_settings(
+            {"last_vmd_output_dir": 123}
+        )
+
+        self.assertEqual(normalized["last_vmd_output_dir"], "")
+        self.assertIn("last_vmd_output_dir", invalid_keys)
+        self.assertIn("last_vmd_output_dir", used_default_keys)
+
     def test_closing_hold_frames_round_trips_through_save_and_load(self) -> None:
         with workspace_tempdir("settings_store_closing_hold") as tmp_dir:
             settings_path = tmp_dir / "MMD_AutoLipTool.ini"

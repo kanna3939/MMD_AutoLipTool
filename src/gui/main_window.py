@@ -80,6 +80,7 @@ _UI_SETTING_KEY_CLOSING_HOLD_FRAMES = "closing_hold_frames"
 _UI_SETTING_KEY_CLOSING_SOFTNESS_FRAMES = "closing_softness_frames"
 _UI_SETTING_KEY_RECENT_TEXT_FILES = "recent_text_files"
 _UI_SETTING_KEY_RECENT_WAV_FILES = "recent_wav_files"
+_UI_SETTING_KEY_LAST_VMD_OUTPUT_DIR = "last_vmd_output_dir"
 
 
 class MainWindow(QWidget):
@@ -140,6 +141,9 @@ class MainWindow(QWidget):
         self._pending_recent_wav_files = self._resolve_startup_recent_files(
             self._startup_settings.get(_UI_SETTING_KEY_RECENT_WAV_FILES)
         )
+        self._pending_last_vmd_output_dir = self._resolve_startup_dialog_dir(
+            self._startup_settings.get(_UI_SETTING_KEY_LAST_VMD_OUTPUT_DIR)
+        )
         startup_window_width, startup_window_height = self._resolve_startup_window_size(
             self._startup_settings
         )
@@ -158,6 +162,7 @@ class MainWindow(QWidget):
         self.current_timing_plan: VowelTimingPlan | None = None
         self.last_text_dialog_dir: str | None = None
         self.last_wav_dialog_dir: str | None = None
+        self.last_vmd_output_dir: str | None = None
         self._is_processing = False
         self._processing_dialog: QProgressDialog | None = None
         self._recent_file_limit = 10
@@ -1009,6 +1014,14 @@ class MainWindow(QWidget):
             return [item for item in value if isinstance(item, str)]
         return []
 
+    def _resolve_startup_dialog_dir(self, value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        stripped = value.strip()
+        if not stripped:
+            return None
+        return stripped
+
     def _resolve_startup_window_size(
         self,
         startup_settings: Mapping[str, object],
@@ -1068,6 +1081,7 @@ class MainWindow(QWidget):
                 self._pending_startup_closing_softness_frames
             )
             self._restore_startup_recent_files()
+            self.last_vmd_output_dir = self._pending_last_vmd_output_dir
         finally:
             self._is_restoring_startup_settings = False
 
@@ -1362,6 +1376,9 @@ class MainWindow(QWidget):
             _UI_SETTING_KEY_RECENT_WAV_FILES: list(
                 defaults[_UI_SETTING_KEY_RECENT_WAV_FILES]
             ),
+            _UI_SETTING_KEY_LAST_VMD_OUTPUT_DIR: defaults[
+                _UI_SETTING_KEY_LAST_VMD_OUTPUT_DIR
+            ],
         }
 
     def current_ui_settings(self) -> dict[str, object]:
@@ -1381,6 +1398,7 @@ class MainWindow(QWidget):
             _UI_SETTING_KEY_CLOSING_SOFTNESS_FRAMES: self._current_closing_softness_frames(),
             _UI_SETTING_KEY_RECENT_TEXT_FILES: list(self.recent_text_files),
             _UI_SETTING_KEY_RECENT_WAV_FILES: list(self.recent_wav_files),
+            _UI_SETTING_KEY_LAST_VMD_OUTPUT_DIR: self.last_vmd_output_dir or "",
         }
 
     def apply_ui_settings(self, settings: Mapping[str, object] | None) -> None:
@@ -1425,6 +1443,9 @@ class MainWindow(QWidget):
             self._apply_recent_file_state(
                 recent_text_files=resolved_settings.get(_UI_SETTING_KEY_RECENT_TEXT_FILES),
                 recent_wav_files=resolved_settings.get(_UI_SETTING_KEY_RECENT_WAV_FILES),
+            )
+            self.last_vmd_output_dir = self._resolve_startup_dialog_dir(
+                resolved_settings.get(_UI_SETTING_KEY_LAST_VMD_OUTPUT_DIR)
             )
         finally:
             self._suspend_settings_persistence = previous_suspended
@@ -1941,6 +1962,9 @@ QSplitter#CenterSplitter::handle {{
 
     def _resolve_wav_dialog_initial_dir(self) -> str:
         return self._resolve_dialog_initial_dir(self.last_wav_dialog_dir)
+
+    def _resolve_vmd_dialog_initial_dir(self) -> str:
+        return self._resolve_dialog_initial_dir(self.last_vmd_output_dir)
 
     def _resolve_dialog_initial_dir(self, remembered_dir: str | None) -> str:
         fallback_dir = ""
@@ -2627,7 +2651,7 @@ QSplitter#CenterSplitter::handle {{
         output_path, _ = QFileDialog.getSaveFileName(
             self,
             self._file_dialog_text("SAVE_VMD_TITLE"),
-            "",
+            self._resolve_vmd_dialog_initial_dir(),
             self._file_dialog_text("VMD_FILTER"),
         )
         if not output_path:
@@ -2698,6 +2722,8 @@ QSplitter#CenterSplitter::handle {{
             self._main_window_text("OUTPUT_COMPLETE_TITLE"),
             self._main_window_text("OUTPUT_COMPLETE_MESSAGE").format(output_path=result.output_path),
         )
+        self.last_vmd_output_dir = str(result.output_path.parent)
+        self._handle_settings_save_result(self.request_ui_settings_save())
         timing_label = self._main_window_text("TIMING_LABEL_OUTPUT_WHISPER")
         if not result.timing_source.startswith("whisper_"):
             timing_label = self._main_window_text("TIMING_LABEL_FALLBACK")

@@ -27,6 +27,7 @@ _KEY_CLOSING_HOLD_FRAMES = "closing_hold_frames"
 _KEY_CLOSING_SOFTNESS_FRAMES = "closing_softness_frames"
 _KEY_RECENT_TEXT_FILES = "recent_text_files"
 _KEY_RECENT_WAV_FILES = "recent_wav_files"
+_KEY_LAST_VMD_OUTPUT_DIR = "last_vmd_output_dir"
 
 _ALLOWED_LANGUAGES = ("ja", "en")
 _DEFAULT_THEME = ThemeStrings.DARK
@@ -108,6 +109,7 @@ class SettingsStore:
             _KEY_CLOSING_SOFTNESS_FRAMES: _DEFAULT_CLOSING_SOFTNESS_FRAMES,
             _KEY_RECENT_TEXT_FILES: [],
             _KEY_RECENT_WAV_FILES: [],
+            _KEY_LAST_VMD_OUTPUT_DIR: "",
         }
 
     @classmethod
@@ -274,6 +276,7 @@ class SettingsStore:
                 settings[_KEY_RECENT_WAV_FILES],
                 ensure_ascii=False,
             ),
+            _KEY_LAST_VMD_OUTPUT_DIR: str(settings[_KEY_LAST_VMD_OUTPUT_DIR]),
         }
         return parser
 
@@ -300,6 +303,8 @@ class SettingsStore:
             for key in (_KEY_RECENT_TEXT_FILES, _KEY_RECENT_WAV_FILES):
                 if key in section:
                     raw[key] = cls._parse_recent_files_value(section.get(key))
+            if _KEY_LAST_VMD_OUTPUT_DIR in section:
+                raw[_KEY_LAST_VMD_OUTPUT_DIR] = section.get(_KEY_LAST_VMD_OUTPUT_DIR)
 
         return raw
 
@@ -346,6 +351,8 @@ class SettingsStore:
             return cls._normalize_recent_files(value)
         if key == _KEY_RECENT_WAV_FILES:
             return cls._normalize_recent_files(value)
+        if key == _KEY_LAST_VMD_OUTPUT_DIR:
+            return cls._normalize_optional_path_string(value)
         raise KeyError(f"Unsupported settings key: {key}")
 
     @classmethod
@@ -460,6 +467,17 @@ class SettingsStore:
         if len(raw_items) > len(normalized_items):
             had_invalid = True
         return (normalized_items, had_invalid)
+
+    @classmethod
+    def _normalize_optional_path_string(cls, value: Any) -> tuple[str, bool]:
+        if value is None:
+            return ("", False)
+        if not isinstance(value, str):
+            return ("", True)
+        stripped = value.strip()
+        if not stripped:
+            return ("", False)
+        return (stripped, False)
 
     @classmethod
     def _format_ratio(cls, value: Any) -> str:
