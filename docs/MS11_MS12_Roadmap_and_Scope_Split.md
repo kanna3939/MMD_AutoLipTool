@@ -70,10 +70,11 @@ Interpretation:
 
 The following user-requested items are treated as part of MS12:
 
-1. Prevent the UI from appearing frozen during processing; allow periodic UI refresh / animation while heavy processing runs.
-2. Fix the splash screen so that it appears earlier during application startup.
-3. Show the current version number on the splash screen.
-4. Bundle FFmpeg with the distributed application if bundling is adopted as the release policy.
+1. Remember and persist the VMD save destination folder so the next save starts from the last used output folder.
+2. Prevent the UI from appearing frozen during processing; allow periodic UI refresh / animation while heavy processing runs.
+3. Fix the splash screen so that it appears earlier during application startup.
+4. Show the current version number on the splash screen.
+5. Bundle FFmpeg with the distributed application if bundling is adopted as the release policy.
 
 Interpretation:
 
@@ -599,6 +600,32 @@ They should be treated as:
 
 ## MS12-1
 ### Name
+VMD save destination folder memory and persistence
+
+### Goal
+Remember the last successfully used VMD output folder and reuse it as the default save destination across sessions.
+
+### Main target
+- `src/gui/main_window.py`
+- `src/gui/settings_store.py`
+- only the minimum required save-dialog related strings or tests
+
+### Main work
+- Keep the current VMD output filename flow unchanged
+- Remember the parent folder of the last successful VMD save
+- Use that folder as the initial directory of the next VMD save dialog
+- Persist the folder through existing settings storage
+- Keep failure / cancel paths from incorrectly overwriting the remembered folder
+
+### Completion image
+- VMD save dialog opens in the last successfully used output folder
+- The remembered folder survives app restart
+- Existing save validation and overwrite-confirm behavior remain intact
+
+---
+
+## MS12-2
+### Name
 processing-time UI responsiveness improvement
 
 ### Goal
@@ -621,7 +648,7 @@ Reduce the perception that the UI is frozen during heavy processing.
 
 ---
 
-## MS12-2
+## MS12-3
 ### Name
 splash timing improvement
 
@@ -644,7 +671,7 @@ Make the splash screen appear earlier during startup.
 
 ---
 
-## MS12-3
+## MS12-4
 ### Name
 splash version display
 
@@ -666,7 +693,7 @@ Show the current application version on the splash screen.
 
 ---
 
-## MS12-4
+## MS12-5
 ### Name
 distribution dependency bundling cleanup
 
@@ -697,7 +724,7 @@ This is a **distribution / packaging** task, not an MS11 task.
 
 ## 6. Bundled File Minimization Policy
 
-This policy applies especially to MS12-4, but should also be respected in other packaging-related work.
+This policy applies especially to MS12-5, but should also be respected in other packaging-related work.
 
 ### 6.1 Core rule
 
@@ -746,6 +773,7 @@ The recommended order after `Ver 0.3.7.1` is:
 6. MS12-2
 7. MS12-3
 8. MS12-4
+9. MS12-5
 
 Reasoning:
 
@@ -754,7 +782,8 @@ Reasoning:
 - Then extend writer-side shape behavior.
 - Then align Preview-side representation with that shape behavior.
 - Then perform final MS11 sync.
-- After MS11 is stable, address GUI responsiveness and startup UX.
+- After MS11 is stable, first address output-save convenience that fits existing settings persistence boundaries.
+- Then address GUI responsiveness and startup UX.
 - Put dependency bundling cleanup, including FFmpeg bundling, at the end of MS12 so it reflects the final agreed release behavior and avoids rework.
 
 ---

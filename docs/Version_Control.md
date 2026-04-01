@@ -1,5 +1,45 @@
 # Version Control Log
 
+## Entry 2026-04-02 / Session: ms12-roadmap-doc
+
+- Date: 2026-04-02
+- Session: ms12-roadmap-doc
+- Summary:
+  - MS12 全体の進め方を固定するため、`docs/MS12_Implementation_Roadmap.md` を追加した。
+  - `保存先記憶 -> responsiveness -> splash timing -> splash version -> packaging` の順で、主対象ファイル、非対象、完了条件、リスク、未確定事項を整理した。
+  - ユーザー判断が必要になりうる項目は、今回は問い合わせず保留課題として文書へ残した。
+- Modified Files:
+  - `docs/repo_milestone.md`: MS12 実装ロードマップ整理メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - `docs/MS12_Implementation_Roadmap.md`
+- Notes:
+  - 今回はロードマップ文書化のみで、コード実装は行っていない。
+  - 個別の実装 plan は、次段で MS12-1 から順に切り出す前提とする。
+- Verification:
+  - `rg -n "MS12-1|MS12-2|MS12-3|MS12-4|MS12-5|未確定事項|保留課題|最初の自然な最小単位" docs/MS12_Implementation_Roadmap.md docs/repo_milestone.md docs/Version_Control.md`
+
+## Entry 2026-04-02 / Session: ms12-output-folder-requirement-sync
+
+- Date: 2026-04-02
+- Session: ms12-output-folder-requirement-sync
+- Summary:
+  - MS12 の先頭要件として、`VMD保存先フォルダの記憶と永続化` を追加した。
+  - 既存の MS12-1 だった processing-time responsiveness は 1 段後ろへ移し、MS12 の推奨順を `保存先記憶 -> responsiveness -> splash timing -> splash version -> packaging` に更新した。
+  - 仕様書側にも、VMD 保存ダイアログ初期フォルダの再利用と永続化を後続対象として追記した。
+- Modified Files:
+  - `docs/MS11_MS12_Roadmap_and_Scope_Split.md`: MS12-1 を新設し、後続番号と実行順を更新。
+  - `docs/Specification_Prompt_v3.md`: 出力仕様とテスト方針へ VMD 保存先フォルダ記憶の後続要件を追記。
+  - `docs/repo_milestone.md`: MS12 要件整理メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - なし
+- Notes:
+  - 今回は要件整理のみで、コード実装は行っていない。
+  - 既存の save validation / overwrite confirm / output semantics は変更していない。
+- Verification:
+  - `rg -n "MS12-1|MS12-2|MS12-3|MS12-4|MS12-5|save destination folder|VMD保存先フォルダ" docs/MS11_MS12_Roadmap_and_Scope_Split.md docs/Specification_Prompt_v3.md docs/repo_milestone.md docs/Version_Control.md`
+
 ## Entry 2026-04-02 / Session: ms11-10-doc-sync-v0371
 
 - Date: 2026-04-02

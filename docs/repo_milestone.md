@@ -1,4 +1,32 @@
 ﻿# MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
+## 2026-04-02 / MS12 要件整理メモ
+
+- 対象: MS12 roadmap / 仕様整理
+- 追加方針:
+  - MS12 の最初の着手候補として、`VMD保存先フォルダの記憶と永続化` を追加
+  - 既存の processing responsiveness は 1 段後ろへ送り、順序を `保存先記憶 -> responsiveness -> splash timing -> splash version -> packaging` とする
+- 現在地:
+  - 現行コードには TEXT / WAV 読込用の直前ディレクトリ保持はある
+  - ただし、VMD 保存先フォルダを設定保存して次回起動へ復元する契約は未導入
+  - このため、MS12 の最初の自然単位として GUI 利便性と settings 永続化境界の整理対象に追加する
+
+---
+
+## 2026-04-02 / MS12 実装ロードマップ整理メモ
+
+- 対象: MS12 全体
+- 追加文書:
+  - `docs/MS12_Implementation_Roadmap.md` を追加
+- 整理内容:
+  - MS12 を `保存先記憶 -> responsiveness -> splash timing -> splash version -> packaging` の 5 段に固定
+  - 各段の主対象ファイル、非対象、完了条件、リスクを整理
+  - 現時点では問い合わせず、未確定事項とユーザー判断項目を保留課題として文書化
+- 現在地:
+  - MS12 着手前の親ロードマップができ、次段の個別 plan を切る入口が整った
+  - 最初の自然な最小単位は引き続き MS12-1 とする
+
+---
+
 ## 2026-04-02 / MS11-9FIX7 closing smoothing 契約整理メモ
 
 - 対象: MS11-9FIX7

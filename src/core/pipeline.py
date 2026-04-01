@@ -78,6 +78,7 @@ class PeakValueEvaluation:
 
 @dataclass(frozen=True)
 class PeakValueObservation:
+    """pipeline が確定した observation 契約の正本。"""
     event_index: int
     vowel: str
     time_sec: float
@@ -112,6 +113,21 @@ class PeakValueObservation:
 class _ObservedTimelineBuildResult:
     timeline: list[VowelTimelinePoint]
     observations: list[PeakValueObservation] | None = None
+
+
+@dataclass(frozen=True)
+class _ObservationCandidateContract:
+    """downstream へ handoff する candidate 判定の読み取り専用 view."""
+
+    previous_non_zero_event_index: int | None
+    next_non_zero_event_index: int | None
+    span_start_index: int | None
+    span_end_index: int | None
+    is_bridgeable_same_vowel_candidate: bool
+    is_same_vowel_burst_candidate: bool
+    is_bridgeable_cross_vowel_candidate: bool
+    is_cross_vowel_zero_run_floor_candidate: bool
+    resolved_bridge_candidate_reason: str | None
 
 
 def build_even_vowel_timeline(
@@ -854,6 +870,9 @@ def _build_peak_value_observations(
 def _annotate_micro_gap_bridge_candidates(
     observations: Sequence[PeakValueObservation],
 ) -> list[PeakValueObservation]:
+    # MS11-11:
+    # ここでは shape を決めず、writer / preview が解釈する candidate family と
+    # span 境界だけを observation 契約へ固定する。
     if not observations:
         return []
 
@@ -861,47 +880,12 @@ def _annotate_micro_gap_bridge_candidates(
     same_vowel_burst_candidates = _build_same_vowel_burst_span_candidates(observations)
     annotated: list[PeakValueObservation] = []
     for index, observation in enumerate(observations):
-        previous_non_zero_event_index = _previous_non_zero_event_index(
-            observations,
-            index,
+        contract = _resolve_observation_candidate_contract(
+            observations=observations,
+            index=index,
+            span_candidates=span_candidates,
+            same_vowel_burst_candidates=same_vowel_burst_candidates,
         )
-        next_non_zero_event_index = _next_non_zero_event_index(
-            observations,
-            index,
-        )
-        bridge_candidate_reason = _resolve_bridge_candidate_reason(observation)
-        span_candidate = span_candidates.get(index)
-        same_vowel_burst_span = same_vowel_burst_candidates.get(index)
-        is_bridgeable_same_vowel_candidate = span_candidate == "same_vowel"
-        is_same_vowel_burst_candidate = same_vowel_burst_span is not None
-        is_bridgeable_cross_vowel_candidate = span_candidate == "cross_vowel_transition"
-        is_cross_vowel_zero_run_floor_candidate = span_candidate == "cross_vowel_floor"
-        if span_candidate is not None:
-            span_start_index = _resolve_span_boundary_index(
-                observations,
-                index=index,
-                direction=-1,
-            )
-            span_end_index = _resolve_span_boundary_index(
-                observations,
-                index=index,
-                direction=1,
-            )
-        elif same_vowel_burst_span is not None:
-            span_start_index, span_end_index = same_vowel_burst_span
-        else:
-            span_start_index = None
-            span_end_index = None
-        if bridge_candidate_reason is None and same_vowel_burst_span is not None:
-            resolved_bridge_candidate_reason = "same_vowel_burst"
-        elif (
-            is_bridgeable_same_vowel_candidate
-            or is_bridgeable_cross_vowel_candidate
-            or is_cross_vowel_zero_run_floor_candidate
-        ):
-            resolved_bridge_candidate_reason = bridge_candidate_reason
-        else:
-            resolved_bridge_candidate_reason = None
         annotated.append(
             PeakValueObservation(
                 event_index=observation.event_index,
@@ -922,19 +906,75 @@ def _annotate_micro_gap_bridge_candidates(
                 evaluation=observation.evaluation,
                 rms_window_times_sec=observation.rms_window_times_sec,
                 rms_window_values=observation.rms_window_values,
-                is_bridgeable_same_vowel_micro_gap_candidate=is_bridgeable_same_vowel_candidate,
-                is_same_vowel_burst_candidate=is_same_vowel_burst_candidate,
-                is_bridgeable_cross_vowel_transition_candidate=is_bridgeable_cross_vowel_candidate,
-                is_cross_vowel_zero_run_continuity_floor_candidate=is_cross_vowel_zero_run_floor_candidate,
-                is_bridgeable_micro_gap_candidate=is_bridgeable_same_vowel_candidate,
-                bridge_candidate_reason=resolved_bridge_candidate_reason,
-                previous_non_zero_event_index=previous_non_zero_event_index,
-                next_non_zero_event_index=next_non_zero_event_index,
-                span_start_index=span_start_index,
-                span_end_index=span_end_index,
+                is_bridgeable_same_vowel_micro_gap_candidate=contract.is_bridgeable_same_vowel_candidate,
+                is_same_vowel_burst_candidate=contract.is_same_vowel_burst_candidate,
+                is_bridgeable_cross_vowel_transition_candidate=contract.is_bridgeable_cross_vowel_candidate,
+                is_cross_vowel_zero_run_continuity_floor_candidate=contract.is_cross_vowel_zero_run_floor_candidate,
+                is_bridgeable_micro_gap_candidate=contract.is_bridgeable_same_vowel_candidate,
+                bridge_candidate_reason=contract.resolved_bridge_candidate_reason,
+                previous_non_zero_event_index=contract.previous_non_zero_event_index,
+                next_non_zero_event_index=contract.next_non_zero_event_index,
+                span_start_index=contract.span_start_index,
+                span_end_index=contract.span_end_index,
             )
         )
     return annotated
+
+
+def _resolve_observation_candidate_contract(
+    *,
+    observations: Sequence[PeakValueObservation],
+    index: int,
+    span_candidates: dict[int, str],
+    same_vowel_burst_candidates: dict[int, tuple[int, int]],
+) -> _ObservationCandidateContract:
+    previous_non_zero_event_index = _previous_non_zero_event_index(observations, index)
+    next_non_zero_event_index = _next_non_zero_event_index(observations, index)
+    observation = observations[index]
+    bridge_candidate_reason = _resolve_bridge_candidate_reason(observation)
+    span_candidate = span_candidates.get(index)
+    same_vowel_burst_span = same_vowel_burst_candidates.get(index)
+    is_bridgeable_same_vowel_candidate = span_candidate == "same_vowel"
+    is_same_vowel_burst_candidate = same_vowel_burst_span is not None
+    is_bridgeable_cross_vowel_candidate = span_candidate == "cross_vowel_transition"
+    is_cross_vowel_zero_run_floor_candidate = span_candidate == "cross_vowel_floor"
+    if span_candidate is not None:
+        span_start_index = _resolve_span_boundary_index(
+            observations,
+            index=index,
+            direction=-1,
+        )
+        span_end_index = _resolve_span_boundary_index(
+            observations,
+            index=index,
+            direction=1,
+        )
+    elif same_vowel_burst_span is not None:
+        span_start_index, span_end_index = same_vowel_burst_span
+    else:
+        span_start_index = None
+        span_end_index = None
+    if bridge_candidate_reason is None and same_vowel_burst_span is not None:
+        resolved_bridge_candidate_reason = "same_vowel_burst"
+    elif (
+        is_bridgeable_same_vowel_candidate
+        or is_bridgeable_cross_vowel_candidate
+        or is_cross_vowel_zero_run_floor_candidate
+    ):
+        resolved_bridge_candidate_reason = bridge_candidate_reason
+    else:
+        resolved_bridge_candidate_reason = None
+    return _ObservationCandidateContract(
+        previous_non_zero_event_index=previous_non_zero_event_index,
+        next_non_zero_event_index=next_non_zero_event_index,
+        span_start_index=span_start_index,
+        span_end_index=span_end_index,
+        is_bridgeable_same_vowel_candidate=is_bridgeable_same_vowel_candidate,
+        is_same_vowel_burst_candidate=is_same_vowel_burst_candidate,
+        is_bridgeable_cross_vowel_candidate=is_bridgeable_cross_vowel_candidate,
+        is_cross_vowel_zero_run_floor_candidate=is_cross_vowel_zero_run_floor_candidate,
+        resolved_bridge_candidate_reason=resolved_bridge_candidate_reason,
+    )
 
 
 def _build_same_vowel_burst_span_candidates(

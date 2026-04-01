@@ -101,6 +101,7 @@ def build_preview_data(
     closing_hold_frames: int = 0,
     closing_softness_frames: int = 0,
 ) -> PreviewData:
+    """writer と同じ shape semantics を Preview 用に再構成する。"""
     if not timeline:
         return empty_preview_data()
 
@@ -527,6 +528,8 @@ def _build_preview_points_for_grouping(
     *,
     observations: Sequence[ObservationLike] | None = None,
 ) -> tuple[list[VowelTimelinePoint], tuple[int, ...]]:
+    # Preview 側も writer と同じ observation family を使い、
+    # export と同じ grouping 入力 semantics を再利用する。
     if not normalized_points:
         return [], ()
     adjusted_points = _apply_cross_vowel_transition_candidates_to_points(
