@@ -3,11 +3,18 @@ from __future__ import annotations
 import math
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPen
+from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPainterPath, QPen
 from PySide6.QtWidgets import QWidget
 
 from gui.i18n_strings import ThemeStrings, localized_vowel_label, normalize_language
-from gui.preview_transform import PREVIEW_ROW_VOWELS, PreviewData, PreviewRow, empty_preview_data
+from gui.preview_transform import (
+    PREVIEW_ROW_VOWELS,
+    PreviewControlPoint,
+    PreviewData,
+    PreviewRow,
+    PreviewSegment,
+    empty_preview_data,
+)
 
 _FRAME_RATE = 30.0
 _OUTER_MARGIN = 8
@@ -404,24 +411,66 @@ class PreviewArea(QWidget):
 
         base_color = _ROW_COLORS.get(row.vowel, QColor("#2e86ab"))
         for segment in row.segments:
-            clipped_start = min(max(segment.start_sec, visible_start_sec), visible_end_sec)
-            clipped_end = min(max(segment.end_sec, visible_start_sec), visible_end_sec)
-            if clipped_end <= clipped_start:
+            clipped_points = self._clip_segment_control_points(
+                segment,
+                visible_start_sec,
+                visible_end_sec,
+            )
+            if len(clipped_points) < 2:
                 continue
 
-            start_ratio = (clipped_start - visible_start_sec) / visible_span_sec
-            end_ratio = (clipped_end - visible_start_sec) / visible_span_sec
-
-            left = row_rect.left() + (row_rect.width() * start_ratio)
-            right = row_rect.left() + (row_rect.width() * end_ratio)
-            width = max(1.0, right - left)
-            height = max(2.0, row_rect.height() - 6.0)
-            top = row_rect.top() + 3.0
+            baseline_y = row_rect.bottom() - 3.0
+            path = QPainterPath()
+            first_x = self._seconds_to_x(
+                clipped_points[0].time_sec,
+                row_rect,
+                visible_start_sec,
+                visible_end_sec,
+            )
+            path.moveTo(first_x, baseline_y)
+            for point in clipped_points:
+                path.lineTo(
+                    self._seconds_to_x(
+                        point.time_sec,
+                        row_rect,
+                        visible_start_sec,
+                        visible_end_sec,
+                    ),
+                    self._value_to_y(point.value, row_rect),
+                )
+            last_x = self._seconds_to_x(
+                clipped_points[-1].time_sec,
+                row_rect,
+                visible_start_sec,
+                visible_end_sec,
+            )
+            path.lineTo(last_x, baseline_y)
+            path.closeSubpath()
 
             fill = QColor(base_color)
-            alpha = 60 + int(max(0.0, min(segment.intensity, 1.0)) * 160)
+            alpha = 64 + int(max(0.0, min(segment.intensity, 1.0)) * 144)
             fill.setAlpha(alpha)
-            painter.fillRect(QRectF(left, top, width, height), fill)
+            outline = QColor(base_color)
+            outline.setAlpha(min(255, alpha + 36))
+            painter.fillPath(path, fill)
+            painter.setPen(QPen(outline, 1.2))
+            for left_point, right_point in zip(clipped_points, clipped_points[1:]):
+                painter.drawLine(
+                    self._seconds_to_x(
+                        left_point.time_sec,
+                        row_rect,
+                        visible_start_sec,
+                        visible_end_sec,
+                    ),
+                    self._value_to_y(left_point.value, row_rect),
+                    self._seconds_to_x(
+                        right_point.time_sec,
+                        row_rect,
+                        visible_start_sec,
+                        visible_end_sec,
+                    ),
+                    self._value_to_y(right_point.value, row_rect),
+                )
 
     def _max_end_sec(self, rows: list[PreviewRow]) -> float:
         max_end_sec = 0.0
@@ -543,6 +592,90 @@ class PreviewArea(QWidget):
         ratio = (seconds - visible_start_sec) / span_sec
         clamped_ratio = min(max(ratio, 0.0), 1.0)
         return timeline_rect.left() + (timeline_rect.width() * clamped_ratio)
+
+    def _value_to_y(self, value: float, row_rect: QRectF) -> float:
+        normalized_value = min(max(float(value), 0.0), 1.0)
+        top_y = row_rect.top() + 3.0
+        bottom_y = row_rect.bottom() - 3.0
+        usable_height = max(bottom_y - top_y, 1.0)
+        return bottom_y - (usable_height * normalized_value)
+
+    def _clip_segment_control_points(
+        self,
+        segment: PreviewSegment,
+        visible_start_sec: float,
+        visible_end_sec: float,
+    ) -> list[PreviewControlPoint]:
+        if not segment.control_points:
+            return []
+        if segment.end_sec <= visible_start_sec or segment.start_sec >= visible_end_sec:
+            return []
+
+        clipped_start = max(segment.start_sec, visible_start_sec)
+        clipped_end = min(segment.end_sec, visible_end_sec)
+        if clipped_end <= clipped_start:
+            return []
+
+        candidate_times = {
+            point.time_sec
+            for point in segment.control_points
+            if clipped_start <= point.time_sec <= clipped_end
+        }
+        candidate_times.add(clipped_start)
+        candidate_times.add(clipped_end)
+
+        clipped_points: list[PreviewControlPoint] = []
+        for time_sec in sorted(candidate_times):
+            clipped_points.append(
+                PreviewControlPoint(
+                    time_sec=time_sec,
+                    value=self._segment_value_at(segment.control_points, time_sec),
+                    point_kind=self._point_kind_at(segment.control_points, time_sec),
+                    frame_no=None,
+                )
+            )
+        return self._deduplicate_control_points(clipped_points)
+
+    def _segment_value_at(
+        self,
+        control_points: tuple[PreviewControlPoint, ...],
+        time_sec: float,
+    ) -> float:
+        if time_sec <= control_points[0].time_sec:
+            return control_points[0].value
+        if time_sec >= control_points[-1].time_sec:
+            return control_points[-1].value
+
+        for left_point, right_point in zip(control_points, control_points[1:]):
+            if left_point.time_sec <= time_sec <= right_point.time_sec:
+                span = right_point.time_sec - left_point.time_sec
+                if abs(span) <= 1e-12:
+                    return right_point.value
+                ratio = (time_sec - left_point.time_sec) / span
+                return left_point.value + ((right_point.value - left_point.value) * ratio)
+        return control_points[-1].value
+
+    def _point_kind_at(
+        self,
+        control_points: tuple[PreviewControlPoint, ...],
+        time_sec: float,
+    ) -> str:
+        for point in control_points:
+            if abs(point.time_sec - time_sec) <= 1e-9:
+                return point.point_kind
+        return "control"
+
+    def _deduplicate_control_points(
+        self,
+        control_points: list[PreviewControlPoint],
+    ) -> list[PreviewControlPoint]:
+        deduplicated: list[PreviewControlPoint] = []
+        for point in control_points:
+            if deduplicated and abs(deduplicated[-1].time_sec - point.time_sec) <= 1e-9:
+                deduplicated[-1] = point
+                continue
+            deduplicated.append(point)
+        return deduplicated
 
     def _theme_colors(self) -> dict[str, str]:
         return _THEME_COLORS[self._theme_name]

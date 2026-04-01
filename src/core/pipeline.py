@@ -22,6 +22,7 @@ _RMS_MAX_ADJACENT_OVERLAP_SEC = 0.02
 _PEAK_WINDOW_HALO_SEC = 0.03
 _RMS_UNAVAILABLE_FALLBACK_RATIO = 0.25
 _DEFAULT_MORPH_UPPER_LIMIT = 0.5
+_SAME_VOWEL_BURST_LOW_POSITIVE_MAX = 0.2
 
 
 class PipelineError(ValueError):
@@ -81,6 +82,18 @@ class PeakValueObservation:
     fallback_reason: str | None
     window_sample_count: int
     evaluation: PeakValueEvaluation
+    rms_window_times_sec: tuple[float, ...] = ()
+    rms_window_values: tuple[float, ...] = ()
+    is_bridgeable_same_vowel_micro_gap_candidate: bool = False
+    is_same_vowel_burst_candidate: bool = False
+    is_bridgeable_cross_vowel_transition_candidate: bool = False
+    is_cross_vowel_zero_run_continuity_floor_candidate: bool = False
+    is_bridgeable_micro_gap_candidate: bool = False
+    bridge_candidate_reason: str | None = None
+    previous_non_zero_event_index: int | None = None
+    next_non_zero_event_index: int | None = None
+    span_start_index: int | None = None
+    span_end_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -266,6 +279,7 @@ def generate_vmd_from_text_wav(
     model_name: str = "AutoLipTool",
     timing_plan: VowelTimingPlan | None = None,
     upper_limit: float = _DEFAULT_MORPH_UPPER_LIMIT,
+    closing_hold_frames: int = 0,
     closing_softness_frames: int = 0,
 ) -> PipelineResult:
     text_file = Path(text_path)
@@ -322,6 +336,8 @@ def generate_vmd_from_text_wav(
             output_path=out_file,
             timeline=resolved_timing_plan.timeline,
             model_name=model_name,
+            observations=resolved_timing_plan.observations,
+            closing_hold_frames=closing_hold_frames,
             closing_softness_frames=closing_softness_frames,
         )
     except OSError as error:
@@ -792,6 +808,12 @@ def _build_peak_value_observations(
             start_sec=evaluation.peak_window_start_sec,
             end_sec=evaluation.peak_window_end_sec,
         )
+        window_sample_pairs = _rms_sample_pairs_in_window(
+            times_sec=() if rms_series is None else rms_series.times_sec,
+            values=() if rms_series is None else rms_series.values,
+            start_sec=evaluation.peak_window_start_sec,
+            end_sec=evaluation.peak_window_end_sec,
+        )
         observations.append(
             PeakValueObservation(
                 event_index=index,
@@ -810,9 +832,412 @@ def _build_peak_value_observations(
                 fallback_reason=fallback_reason,
                 window_sample_count=len(window_samples),
                 evaluation=evaluation,
+                rms_window_times_sec=tuple(time_sec for time_sec, _ in window_sample_pairs),
+                rms_window_values=tuple(value for _, value in window_sample_pairs),
             )
         )
-    return observations
+    return _annotate_micro_gap_bridge_candidates(observations)
+
+
+def _annotate_micro_gap_bridge_candidates(
+    observations: Sequence[PeakValueObservation],
+) -> list[PeakValueObservation]:
+    if not observations:
+        return []
+
+    span_candidates = _build_bridgeable_zero_run_span_candidates(observations)
+    same_vowel_burst_candidates = _build_same_vowel_burst_span_candidates(observations)
+    annotated: list[PeakValueObservation] = []
+    for index, observation in enumerate(observations):
+        previous_non_zero_event_index = _previous_non_zero_event_index(
+            observations,
+            index,
+        )
+        next_non_zero_event_index = _next_non_zero_event_index(
+            observations,
+            index,
+        )
+        bridge_candidate_reason = _resolve_bridge_candidate_reason(observation)
+        span_candidate = span_candidates.get(index)
+        same_vowel_burst_span = same_vowel_burst_candidates.get(index)
+        is_bridgeable_same_vowel_candidate = span_candidate == "same_vowel"
+        is_same_vowel_burst_candidate = same_vowel_burst_span is not None
+        is_bridgeable_cross_vowel_candidate = span_candidate == "cross_vowel_transition"
+        is_cross_vowel_zero_run_floor_candidate = span_candidate == "cross_vowel_floor"
+        if span_candidate is not None:
+            span_start_index = _resolve_span_boundary_index(
+                observations,
+                index=index,
+                direction=-1,
+            )
+            span_end_index = _resolve_span_boundary_index(
+                observations,
+                index=index,
+                direction=1,
+            )
+        elif same_vowel_burst_span is not None:
+            span_start_index, span_end_index = same_vowel_burst_span
+        else:
+            span_start_index = None
+            span_end_index = None
+        if bridge_candidate_reason is None and same_vowel_burst_span is not None:
+            resolved_bridge_candidate_reason = "same_vowel_burst"
+        elif (
+            is_bridgeable_same_vowel_candidate
+            or is_bridgeable_cross_vowel_candidate
+            or is_cross_vowel_zero_run_floor_candidate
+        ):
+            resolved_bridge_candidate_reason = bridge_candidate_reason
+        else:
+            resolved_bridge_candidate_reason = None
+        annotated.append(
+            PeakValueObservation(
+                event_index=observation.event_index,
+                vowel=observation.vowel,
+                time_sec=observation.time_sec,
+                initial_interval_start_sec=observation.initial_interval_start_sec,
+                initial_interval_end_sec=observation.initial_interval_end_sec,
+                refined_interval_start_sec=observation.refined_interval_start_sec,
+                refined_interval_end_sec=observation.refined_interval_end_sec,
+                peak_window_start_sec=observation.peak_window_start_sec,
+                peak_window_end_sec=observation.peak_window_end_sec,
+                local_peak=observation.local_peak,
+                global_peak=observation.global_peak,
+                peak_value=observation.peak_value,
+                reason=observation.reason,
+                fallback_reason=observation.fallback_reason,
+                window_sample_count=observation.window_sample_count,
+                evaluation=observation.evaluation,
+                rms_window_times_sec=observation.rms_window_times_sec,
+                rms_window_values=observation.rms_window_values,
+                is_bridgeable_same_vowel_micro_gap_candidate=is_bridgeable_same_vowel_candidate,
+                is_same_vowel_burst_candidate=is_same_vowel_burst_candidate,
+                is_bridgeable_cross_vowel_transition_candidate=is_bridgeable_cross_vowel_candidate,
+                is_cross_vowel_zero_run_continuity_floor_candidate=is_cross_vowel_zero_run_floor_candidate,
+                is_bridgeable_micro_gap_candidate=is_bridgeable_same_vowel_candidate,
+                bridge_candidate_reason=resolved_bridge_candidate_reason,
+                previous_non_zero_event_index=previous_non_zero_event_index,
+                next_non_zero_event_index=next_non_zero_event_index,
+                span_start_index=span_start_index,
+                span_end_index=span_end_index,
+            )
+        )
+    return annotated
+
+
+def _build_same_vowel_burst_span_candidates(
+    observations: Sequence[PeakValueObservation],
+) -> dict[int, tuple[int, int]]:
+    candidates: dict[int, tuple[int, int]] = {}
+    index = 0
+    while index < len(observations):
+        if not _is_same_vowel_burst_segment_candidate(observations[index]):
+            index += 1
+            continue
+
+        span_start_index = index
+        span_end_index = index
+        while (
+            span_end_index + 1 < len(observations)
+            and _is_same_vowel_burst_segment_candidate(observations[span_end_index + 1])
+        ):
+            span_end_index += 1
+
+        if _is_same_vowel_burst_span(
+            observations=observations,
+            span_start_index=span_start_index,
+            span_end_index=span_end_index,
+        ):
+            for span_index in range(span_start_index, span_end_index + 1):
+                candidates[span_index] = (span_start_index, span_end_index)
+
+        index = span_end_index + 1
+
+    return candidates
+
+
+def _build_bridgeable_zero_run_span_candidates(
+    observations: Sequence[PeakValueObservation],
+) -> dict[int, str]:
+    candidate_kinds_by_index: dict[int, str] = {}
+    index = 0
+    while index < len(observations):
+        if _resolve_bridge_candidate_reason(observations[index]) is None:
+            index += 1
+            continue
+
+        span_start_index = index
+        span_end_index = index
+        while (
+            span_end_index + 1 < len(observations)
+            and _resolve_bridge_candidate_reason(observations[span_end_index + 1]) is not None
+        ):
+            span_end_index += 1
+
+        span_kind = _classify_bridgeable_zero_run_span(
+            observations=observations,
+            span_start_index=span_start_index,
+            span_end_index=span_end_index,
+        )
+        if span_kind is not None:
+            for span_index in range(span_start_index, span_end_index + 1):
+                candidate_kinds_by_index[span_index] = span_kind
+
+        index = span_end_index + 1
+
+    return candidate_kinds_by_index
+
+
+def _resolve_span_boundary_index(
+    observations: Sequence[PeakValueObservation],
+    *,
+    index: int,
+    direction: int,
+) -> int:
+    boundary_index = index
+    current_reason = _resolve_bridge_candidate_reason(observations[index])
+    while 0 <= boundary_index + direction < len(observations):
+        next_index = boundary_index + direction
+        if _resolve_bridge_candidate_reason(observations[next_index]) is None:
+            break
+        boundary_index = next_index
+    return boundary_index
+
+
+def _classify_bridgeable_zero_run_span(
+    *,
+    observations: Sequence[PeakValueObservation],
+    span_start_index: int,
+    span_end_index: int,
+) -> str | None:
+    span_count = (span_end_index - span_start_index) + 1
+    if span_count <= 0 or span_count > 2:
+        return None
+
+    previous_non_zero_event_index = _previous_non_zero_event_index(
+        observations,
+        span_start_index,
+    )
+    next_non_zero_event_index = _next_non_zero_event_index(
+        observations,
+        span_end_index,
+    )
+    if previous_non_zero_event_index is None or next_non_zero_event_index is None:
+        return None
+    if previous_non_zero_event_index >= span_start_index:
+        return None
+    if next_non_zero_event_index <= span_end_index:
+        return None
+
+    previous_observation = observations[previous_non_zero_event_index]
+    next_observation = observations[next_non_zero_event_index]
+    span_start_observation = observations[span_start_index]
+    span_end_observation = observations[span_end_index]
+
+    previous_start_frame = _seconds_to_frame(previous_observation.refined_interval_start_sec)
+    previous_end_frame = _seconds_to_frame(previous_observation.refined_interval_end_sec)
+    next_start_frame = _seconds_to_frame(next_observation.refined_interval_start_sec)
+    next_end_frame = _seconds_to_frame(next_observation.refined_interval_end_sec)
+    span_start_frame = _seconds_to_frame(span_start_observation.refined_interval_start_sec)
+    span_end_frame = _seconds_to_frame(span_end_observation.refined_interval_end_sec)
+
+    if span_start_frame < previous_end_frame:
+        return None
+    if next_start_frame < span_end_frame:
+        return None
+    if (next_start_frame - previous_end_frame) > 2:
+        return None
+
+    if (previous_end_frame - previous_start_frame) < 2:
+        return None
+    if (next_end_frame - next_start_frame) < 2:
+        return None
+
+    if previous_observation.vowel == next_observation.vowel:
+        return "same_vowel"
+    if span_count == 1:
+        return "cross_vowel_transition"
+    return "cross_vowel_floor"
+
+
+def _resolve_bridge_candidate_reason(
+    observation: PeakValueObservation,
+) -> str | None:
+    if observation.peak_value > 0.0:
+        return None
+    if observation.reason in {"no_peak_in_window", "below_rel_threshold"}:
+        return observation.reason
+    return None
+
+
+def _is_same_vowel_burst_segment_candidate(observation: PeakValueObservation) -> bool:
+    if observation.peak_value < 0.0:
+        return False
+    if observation.peak_value <= 0.0:
+        return _resolve_bridge_candidate_reason(observation) is not None
+    return observation.peak_value <= _SAME_VOWEL_BURST_LOW_POSITIVE_MAX
+
+
+def _is_same_vowel_burst_span(
+    *,
+    observations: Sequence[PeakValueObservation],
+    span_start_index: int,
+    span_end_index: int,
+) -> bool:
+    span_count = (span_end_index - span_start_index) + 1
+    if span_count <= 0 or span_count > 2:
+        return False
+
+    previous_non_zero_event_index = _previous_non_zero_event_index(observations, span_start_index)
+    next_non_zero_event_index = _next_non_zero_event_index(observations, span_end_index)
+    if previous_non_zero_event_index is None or next_non_zero_event_index is None:
+        return False
+    if previous_non_zero_event_index >= span_start_index:
+        return False
+    if next_non_zero_event_index <= span_end_index:
+        return False
+
+    previous_observation = observations[previous_non_zero_event_index]
+    next_observation = observations[next_non_zero_event_index]
+    if previous_observation.vowel != next_observation.vowel:
+        return False
+
+    span_start_observation = observations[span_start_index]
+    span_end_observation = observations[span_end_index]
+    previous_end_frame = _seconds_to_frame(previous_observation.refined_interval_end_sec)
+    next_start_frame = _seconds_to_frame(next_observation.refined_interval_start_sec)
+    span_start_frame = _seconds_to_frame(span_start_observation.refined_interval_start_sec)
+    span_end_frame = _seconds_to_frame(span_end_observation.refined_interval_end_sec)
+
+    if span_start_frame < previous_end_frame:
+        return False
+    if next_start_frame < span_end_frame:
+        return False
+    if (span_end_frame - span_start_frame) > 2:
+        return False
+    if (next_start_frame - previous_end_frame) > 2:
+        return False
+    return True
+
+
+def _previous_non_zero_event_index(
+    observations: Sequence[PeakValueObservation],
+    index: int,
+) -> int | None:
+    for previous_index in range(index - 1, -1, -1):
+        if observations[previous_index].peak_value > 0.0:
+            return previous_index
+    return None
+
+
+def _next_non_zero_event_index(
+    observations: Sequence[PeakValueObservation],
+    index: int,
+) -> int | None:
+    for next_index in range(index + 1, len(observations)):
+        if observations[next_index].peak_value > 0.0:
+            return next_index
+    return None
+
+
+def _is_bridgeable_same_vowel_micro_gap_candidate(
+    *,
+    observations: Sequence[PeakValueObservation],
+    index: int,
+    bridge_candidate_reason: str | None,
+    previous_non_zero_event_index: int | None,
+    next_non_zero_event_index: int | None,
+) -> bool:
+    if bridge_candidate_reason is None:
+        return False
+    if previous_non_zero_event_index is None or next_non_zero_event_index is None:
+        return False
+    if previous_non_zero_event_index != index - 1:
+        return False
+    if next_non_zero_event_index != index + 1:
+        return False
+
+    current_observation = observations[index]
+    previous_observation = observations[previous_non_zero_event_index]
+    next_observation = observations[next_non_zero_event_index]
+
+    if previous_observation.vowel != current_observation.vowel:
+        return False
+    if next_observation.vowel != current_observation.vowel:
+        return False
+
+    current_start_frame = _seconds_to_frame(current_observation.refined_interval_start_sec)
+    current_end_frame = _seconds_to_frame(current_observation.refined_interval_end_sec)
+    current_span_frames = max(0, current_end_frame - current_start_frame)
+    if current_span_frames > 1:
+        return False
+
+    previous_end_frame = _seconds_to_frame(previous_observation.refined_interval_end_sec)
+    next_start_frame = _seconds_to_frame(next_observation.refined_interval_start_sec)
+    if current_start_frame < previous_end_frame:
+        return False
+    if next_start_frame < current_end_frame:
+        return False
+
+    return (
+        (current_start_frame - previous_end_frame) <= 1
+        and (next_start_frame - current_end_frame) <= 1
+    )
+
+
+def _is_bridgeable_cross_vowel_transition_candidate(
+    *,
+    observations: Sequence[PeakValueObservation],
+    index: int,
+    bridge_candidate_reason: str | None,
+    previous_non_zero_event_index: int | None,
+    next_non_zero_event_index: int | None,
+) -> bool:
+    if bridge_candidate_reason is None:
+        return False
+    if previous_non_zero_event_index is None or next_non_zero_event_index is None:
+        return False
+    if previous_non_zero_event_index != index - 1:
+        return False
+    if next_non_zero_event_index != index + 1:
+        return False
+
+    current_observation = observations[index]
+    previous_observation = observations[previous_non_zero_event_index]
+    next_observation = observations[next_non_zero_event_index]
+
+    if previous_observation.vowel == next_observation.vowel:
+        return False
+
+    current_start_frame = _seconds_to_frame(current_observation.refined_interval_start_sec)
+    current_end_frame = _seconds_to_frame(current_observation.refined_interval_end_sec)
+    current_span_frames = max(0, current_end_frame - current_start_frame)
+    if current_span_frames > 1:
+        return False
+
+    previous_start_frame = _seconds_to_frame(previous_observation.refined_interval_start_sec)
+    previous_end_frame = _seconds_to_frame(previous_observation.refined_interval_end_sec)
+    next_start_frame = _seconds_to_frame(next_observation.refined_interval_start_sec)
+    next_end_frame = _seconds_to_frame(next_observation.refined_interval_end_sec)
+
+    if (previous_end_frame - previous_start_frame) < 2:
+        return False
+    if (next_end_frame - next_start_frame) < 2:
+        return False
+
+    if current_start_frame < previous_end_frame:
+        return False
+    if next_start_frame < current_end_frame:
+        return False
+
+    return (
+        (current_start_frame - previous_end_frame) <= 1
+        and (next_start_frame - current_end_frame) <= 1
+    )
+
+
+def _seconds_to_frame(time_sec: float) -> int:
+    return int(round(float(time_sec) * 30.0))
 
 
 def _observation_global_peak(
@@ -999,6 +1424,22 @@ def _rms_samples_in_window(
         return []
     return [
         value
+        for time_sec, value in zip(times_sec, values)
+        if start_sec <= time_sec <= end_sec
+    ]
+
+
+def _rms_sample_pairs_in_window(
+    *,
+    times_sec: Sequence[float],
+    values: Sequence[float],
+    start_sec: float,
+    end_sec: float,
+) -> list[tuple[float, float]]:
+    if end_sec < start_sec:
+        return []
+    return [
+        (float(time_sec), float(value))
         for time_sec, value in zip(times_sec, values)
         if start_sec <= time_sec <= end_sec
     ]

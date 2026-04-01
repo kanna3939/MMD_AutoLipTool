@@ -169,6 +169,56 @@ class MorphUpperLimitStrings(_LocalizedStrings):
     }
 
 
+class ClosingSoftnessStrings(_LocalizedStrings):
+    LABEL = "閉口スムース"
+    UNIT = "フレーム"
+    INPUT_TOOLTIP = "閉口スムースをフレーム数で調整します。"
+    DECREMENT_TOOLTIP = "閉口スムースを下げます。"
+    INCREMENT_TOOLTIP = "閉口スムースを上げます。"
+
+    _TRANSLATIONS = {
+        "ja": {
+            "LABEL": LABEL,
+            "UNIT": UNIT,
+            "INPUT_TOOLTIP": INPUT_TOOLTIP,
+            "DECREMENT_TOOLTIP": DECREMENT_TOOLTIP,
+            "INCREMENT_TOOLTIP": INCREMENT_TOOLTIP,
+        },
+        "en": {
+            "LABEL": "Closing Smooth",
+            "UNIT": "Frame",
+            "INPUT_TOOLTIP": "Adjust closing smooth in frames.",
+            "DECREMENT_TOOLTIP": "Decrease closing smooth.",
+            "INCREMENT_TOOLTIP": "Increase closing smooth.",
+        },
+    }
+
+
+class LipHoldStrings(_LocalizedStrings):
+    LABEL = "開口保持"
+    UNIT = "フレーム"
+    INPUT_TOOLTIP = "開口保持をフレーム数で調整します。"
+    DECREMENT_TOOLTIP = "開口保持を下げます。"
+    INCREMENT_TOOLTIP = "開口保持を上げます。"
+
+    _TRANSLATIONS = {
+        "ja": {
+            "LABEL": LABEL,
+            "UNIT": UNIT,
+            "INPUT_TOOLTIP": INPUT_TOOLTIP,
+            "DECREMENT_TOOLTIP": DECREMENT_TOOLTIP,
+            "INCREMENT_TOOLTIP": INCREMENT_TOOLTIP,
+        },
+        "en": {
+            "LABEL": "Lip Hold",
+            "UNIT": "Frame",
+            "INPUT_TOOLTIP": "Adjust lip hold in frames.",
+            "DECREMENT_TOOLTIP": "Decrease lip hold.",
+            "INCREMENT_TOOLTIP": "Increase lip hold.",
+        },
+    }
+
+
 class OperationPanelStrings:
     BUTTON_TEXTS = {
         "text": "TXT\n読込",

@@ -76,6 +76,8 @@ _UI_SETTING_KEY_WINDOW_WIDTH = "window_width"
 _UI_SETTING_KEY_WINDOW_HEIGHT = "window_height"
 _UI_SETTING_KEY_LANGUAGE = "language"
 _UI_SETTING_KEY_MORPH_UPPER_LIMIT = "morph_upper_limit"
+_UI_SETTING_KEY_CLOSING_HOLD_FRAMES = "closing_hold_frames"
+_UI_SETTING_KEY_CLOSING_SOFTNESS_FRAMES = "closing_softness_frames"
 _UI_SETTING_KEY_RECENT_TEXT_FILES = "recent_text_files"
 _UI_SETTING_KEY_RECENT_WAV_FILES = "recent_wav_files"
 
@@ -121,6 +123,16 @@ class MainWindow(QWidget):
         )
         self._pending_startup_morph_upper_limit = self._resolve_startup_morph_upper_limit(
             self._startup_settings.get(_UI_SETTING_KEY_MORPH_UPPER_LIMIT)
+        )
+        self._pending_startup_closing_hold_frames = (
+            self._resolve_startup_closing_hold_frames(
+                self._startup_settings.get(_UI_SETTING_KEY_CLOSING_HOLD_FRAMES)
+            )
+        )
+        self._pending_startup_closing_softness_frames = (
+            self._resolve_startup_closing_softness_frames(
+                self._startup_settings.get(_UI_SETTING_KEY_CLOSING_SOFTNESS_FRAMES)
+            )
         )
         self._pending_recent_text_files = self._resolve_startup_recent_files(
             self._startup_settings.get(_UI_SETTING_KEY_RECENT_TEXT_FILES)
@@ -181,6 +193,14 @@ class MainWindow(QWidget):
         self.morph_upper_limit_row = MorphUpperLimitRow(self)
         self.morph_upper_limit_label = self.morph_upper_limit_row.label
         self.morph_upper_limit_input = self.morph_upper_limit_row.input
+        self.lip_hold_label = self.morph_upper_limit_row.lip_hold_label
+        self.lip_hold_input = self.morph_upper_limit_row.lip_hold_input
+        self.lip_hold_unit_label = self.morph_upper_limit_row.lip_hold_unit_label
+        self.closing_softness_label = self.morph_upper_limit_row.closing_softness_label
+        self.closing_softness_input = self.morph_upper_limit_row.closing_softness_input
+        self.closing_softness_unit_label = (
+            self.morph_upper_limit_row.closing_softness_unit_label
+        )
 
         self.left_info_panel = LeftInfoPanel(self)
         self.text_path_label = self.left_info_panel.text_path_label
@@ -207,6 +227,10 @@ class MainWindow(QWidget):
         self._sync_view_action_checks()
 
         self.morph_upper_limit_input.valueChanged.connect(self._on_morph_upper_limit_changed)
+        self.lip_hold_input.valueChanged.connect(self._on_closing_hold_frames_changed)
+        self.closing_softness_input.valueChanged.connect(
+            self._on_closing_softness_frames_changed
+        )
 
         self._connect_operation_panel()
         self._connect_playback_layer()
@@ -966,6 +990,20 @@ class MainWindow(QWidget):
             return 0.5
         return min(max(resolved, 0.0), 10.0)
 
+    def _resolve_startup_closing_hold_frames(self, value: object) -> int:
+        try:
+            resolved = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return max(resolved, 0)
+
+    def _resolve_startup_closing_softness_frames(self, value: object) -> int:
+        try:
+            resolved = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return max(resolved, 0)
+
     def _resolve_startup_recent_files(self, value: object) -> list[str]:
         if isinstance(value, list):
             return [item for item in value if isinstance(item, str)]
@@ -1023,6 +1061,12 @@ class MainWindow(QWidget):
             )
             self.apply_theme(self._pending_startup_theme)
             self._apply_startup_morph_upper_limit(self._pending_startup_morph_upper_limit)
+            self._apply_startup_closing_hold_frames(
+                self._pending_startup_closing_hold_frames
+            )
+            self._apply_startup_closing_softness_frames(
+                self._pending_startup_closing_softness_frames
+            )
             self._restore_startup_recent_files()
         finally:
             self._is_restoring_startup_settings = False
@@ -1082,6 +1126,20 @@ class MainWindow(QWidget):
             self.morph_upper_limit_input.setValue(morph_upper_limit)
         finally:
             self.morph_upper_limit_input.blockSignals(previous_blocked)
+
+    def _apply_startup_closing_hold_frames(self, closing_hold_frames: int) -> None:
+        previous_blocked = self.lip_hold_input.blockSignals(True)
+        try:
+            self.lip_hold_input.setValue(closing_hold_frames)
+        finally:
+            self.lip_hold_input.blockSignals(previous_blocked)
+
+    def _apply_startup_closing_softness_frames(self, closing_softness_frames: int) -> None:
+        previous_blocked = self.closing_softness_input.blockSignals(True)
+        try:
+            self.closing_softness_input.setValue(closing_softness_frames)
+        finally:
+            self.closing_softness_input.blockSignals(previous_blocked)
 
     def _restore_startup_recent_files(self) -> None:
         self._apply_recent_file_state(
@@ -1292,6 +1350,12 @@ class MainWindow(QWidget):
             _UI_SETTING_KEY_MORPH_UPPER_LIMIT: float(
                 defaults[_UI_SETTING_KEY_MORPH_UPPER_LIMIT]
             ),
+            _UI_SETTING_KEY_CLOSING_HOLD_FRAMES: int(
+                defaults[_UI_SETTING_KEY_CLOSING_HOLD_FRAMES]
+            ),
+            _UI_SETTING_KEY_CLOSING_SOFTNESS_FRAMES: int(
+                defaults[_UI_SETTING_KEY_CLOSING_SOFTNESS_FRAMES]
+            ),
             _UI_SETTING_KEY_RECENT_TEXT_FILES: list(
                 defaults[_UI_SETTING_KEY_RECENT_TEXT_FILES]
             ),
@@ -1313,6 +1377,8 @@ class MainWindow(QWidget):
             ),
             _UI_SETTING_KEY_LANGUAGE: normalize_language(self._current_language),
             _UI_SETTING_KEY_MORPH_UPPER_LIMIT: self._current_upper_limit(),
+            _UI_SETTING_KEY_CLOSING_HOLD_FRAMES: self._current_closing_hold_frames(),
+            _UI_SETTING_KEY_CLOSING_SOFTNESS_FRAMES: self._current_closing_softness_frames(),
             _UI_SETTING_KEY_RECENT_TEXT_FILES: list(self.recent_text_files),
             _UI_SETTING_KEY_RECENT_WAV_FILES: list(self.recent_wav_files),
         }
@@ -1344,6 +1410,16 @@ class MainWindow(QWidget):
             self._apply_startup_morph_upper_limit(
                 self._resolve_startup_morph_upper_limit(
                     resolved_settings.get(_UI_SETTING_KEY_MORPH_UPPER_LIMIT)
+                )
+            )
+            self._apply_startup_closing_hold_frames(
+                self._resolve_startup_closing_hold_frames(
+                    resolved_settings.get(_UI_SETTING_KEY_CLOSING_HOLD_FRAMES)
+                )
+            )
+            self._apply_startup_closing_softness_frames(
+                self._resolve_startup_closing_softness_frames(
+                    resolved_settings.get(_UI_SETTING_KEY_CLOSING_SOFTNESS_FRAMES)
                 )
             )
             self._apply_recent_file_state(
@@ -2584,6 +2660,8 @@ QSplitter#CenterSplitter::handle {{
                 output_path=out_path,
                 timing_plan=timing_plan,
                 upper_limit=self._current_upper_limit(),
+                closing_hold_frames=self._current_closing_hold_frames(),
+                closing_softness_frames=self._current_closing_softness_frames(),
             )
             self.current_timing_plan = timing_plan
         except ValueError as error:
@@ -2702,7 +2780,12 @@ QSplitter#CenterSplitter::handle {{
         if self.current_timing_plan is None:
             self._clear_preview_display()
             return
-        preview_data = build_preview_data(self.current_timing_plan.timeline)
+        preview_data = build_preview_data(
+            self.current_timing_plan.timeline,
+            observations=self.current_timing_plan.observations,
+            closing_hold_frames=self._current_closing_hold_frames(),
+            closing_softness_frames=self._current_closing_softness_frames(),
+        )
         preview_area.set_preview_data(preview_data)
 
     def _refresh_text_processing_views(self) -> None:
@@ -2775,6 +2858,28 @@ QSplitter#CenterSplitter::handle {{
 
     def _current_upper_limit(self) -> float:
         return float(self.morph_upper_limit_input.value())
+
+    def _current_closing_hold_frames(self) -> int:
+        return int(self.lip_hold_input.value())
+
+    def _current_closing_softness_frames(self) -> int:
+        return int(self.closing_softness_input.value())
+
+    def _on_closing_hold_frames_changed(self, _: int) -> None:
+        if self._is_restoring_startup_settings:
+            return
+        if self.current_timing_plan is not None:
+            self._update_preview_from_current_timing_plan()
+        if self._should_persist_settings():
+            self._handle_settings_save_result(self.request_ui_settings_save())
+
+    def _on_closing_softness_frames_changed(self, _: int) -> None:
+        if self._is_restoring_startup_settings:
+            return
+        if self.current_timing_plan is not None:
+            self._update_preview_from_current_timing_plan()
+        if self._should_persist_settings():
+            self._handle_settings_save_result(self.request_ui_settings_save())
 
     def _set_ready_status(self) -> None:
         text_loaded = bool(self.selected_text_path)
@@ -2850,6 +2955,8 @@ QSplitter#CenterSplitter::handle {{
             "can_open_recent_text": True,
             "can_open_recent_wav": True,
             "can_adjust_morph_upper_limit": True,
+            "can_adjust_lip_hold": True,
+            "can_adjust_closing_softness": True,
             "can_run": can_run,
             "can_save": can_save,
             "can_play": can_play,
@@ -2867,6 +2974,8 @@ QSplitter#CenterSplitter::handle {{
         locked_states["can_open_recent_text"] = False
         locked_states["can_open_recent_wav"] = False
         locked_states["can_adjust_morph_upper_limit"] = False
+        locked_states["can_adjust_lip_hold"] = False
+        locked_states["can_adjust_closing_softness"] = False
         locked_states["can_run"] = False
         locked_states["can_save"] = False
         locked_states["can_play"] = False
@@ -2881,6 +2990,8 @@ QSplitter#CenterSplitter::handle {{
         can_open_recent_text = action_states["can_open_recent_text"]
         can_open_recent_wav = action_states["can_open_recent_wav"]
         can_adjust_morph_upper_limit = action_states["can_adjust_morph_upper_limit"]
+        can_adjust_lip_hold = action_states["can_adjust_lip_hold"]
+        can_adjust_closing_softness = action_states["can_adjust_closing_softness"]
         can_run = action_states["can_run"]
         can_save = action_states["can_save"]
         can_play = action_states["can_play"]
@@ -2913,7 +3024,11 @@ QSplitter#CenterSplitter::handle {{
             self.menu_recent_wav,
             enabled=can_open_recent_wav,
         )
-        self.morph_upper_limit_input.setEnabled(can_adjust_morph_upper_limit)
+        self.morph_upper_limit_row.set_morph_controls_enabled(can_adjust_morph_upper_limit)
+        self.morph_upper_limit_row.set_lip_hold_controls_enabled(can_adjust_lip_hold)
+        self.morph_upper_limit_row.set_closing_softness_controls_enabled(
+            can_adjust_closing_softness
+        )
 
         self.action_zoom_in.setEnabled(can_zoom_in)
         self.action_zoom_out.setEnabled(can_zoom_out)

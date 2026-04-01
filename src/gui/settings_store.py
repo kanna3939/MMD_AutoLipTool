@@ -23,6 +23,8 @@ _KEY_WINDOW_WIDTH = "window_width"
 _KEY_WINDOW_HEIGHT = "window_height"
 _KEY_LANGUAGE = "language"
 _KEY_MORPH_UPPER_LIMIT = "morph_upper_limit"
+_KEY_CLOSING_HOLD_FRAMES = "closing_hold_frames"
+_KEY_CLOSING_SOFTNESS_FRAMES = "closing_softness_frames"
 _KEY_RECENT_TEXT_FILES = "recent_text_files"
 _KEY_RECENT_WAV_FILES = "recent_wav_files"
 
@@ -33,6 +35,8 @@ _DEFAULT_WINDOW_WIDTH = 1280
 _DEFAULT_WINDOW_HEIGHT = 740
 _DEFAULT_LANGUAGE = "ja"
 _DEFAULT_MORPH_UPPER_LIMIT = 0.5
+_DEFAULT_CLOSING_HOLD_FRAMES = 0
+_DEFAULT_CLOSING_SOFTNESS_FRAMES = 0
 _MIN_MORPH_UPPER_LIMIT = 0.0
 _MAX_MORPH_UPPER_LIMIT = 10.0
 _RECENT_FILE_LIMIT = 10
@@ -100,6 +104,8 @@ class SettingsStore:
             _KEY_WINDOW_HEIGHT: _DEFAULT_WINDOW_HEIGHT,
             _KEY_LANGUAGE: _DEFAULT_LANGUAGE,
             _KEY_MORPH_UPPER_LIMIT: _DEFAULT_MORPH_UPPER_LIMIT,
+            _KEY_CLOSING_HOLD_FRAMES: _DEFAULT_CLOSING_HOLD_FRAMES,
+            _KEY_CLOSING_SOFTNESS_FRAMES: _DEFAULT_CLOSING_SOFTNESS_FRAMES,
             _KEY_RECENT_TEXT_FILES: [],
             _KEY_RECENT_WAV_FILES: [],
         }
@@ -252,6 +258,12 @@ class SettingsStore:
             _KEY_MORPH_UPPER_LIMIT: cls._format_morph_upper_limit(
                 settings[_KEY_MORPH_UPPER_LIMIT]
             ),
+            _KEY_CLOSING_HOLD_FRAMES: cls._format_non_negative_int(
+                settings[_KEY_CLOSING_HOLD_FRAMES]
+            ),
+            _KEY_CLOSING_SOFTNESS_FRAMES: cls._format_non_negative_int(
+                settings[_KEY_CLOSING_SOFTNESS_FRAMES]
+            ),
         }
         parser[_SECTION_RECENT] = {
             _KEY_RECENT_TEXT_FILES: json.dumps(
@@ -277,6 +289,8 @@ class SettingsStore:
                 _KEY_WINDOW_HEIGHT,
                 _KEY_LANGUAGE,
                 _KEY_MORPH_UPPER_LIMIT,
+                _KEY_CLOSING_HOLD_FRAMES,
+                _KEY_CLOSING_SOFTNESS_FRAMES,
             ):
                 if key in section:
                     raw[key] = section.get(key)
@@ -318,6 +332,16 @@ class SettingsStore:
             return cls._normalize_language(value)
         if key == _KEY_MORPH_UPPER_LIMIT:
             return cls._normalize_morph_upper_limit(value)
+        if key == _KEY_CLOSING_HOLD_FRAMES:
+            return cls._normalize_non_negative_int(
+                value,
+                _DEFAULT_CLOSING_HOLD_FRAMES,
+            )
+        if key == _KEY_CLOSING_SOFTNESS_FRAMES:
+            return cls._normalize_non_negative_int(
+                value,
+                _DEFAULT_CLOSING_SOFTNESS_FRAMES,
+            )
         if key == _KEY_RECENT_TEXT_FILES:
             return cls._normalize_recent_files(value)
         if key == _KEY_RECENT_WAV_FILES:
@@ -368,6 +392,16 @@ class SettingsStore:
         except (TypeError, ValueError):
             return (default, True)
         if resolved <= 0:
+            return (default, True)
+        return (resolved, False)
+
+    @classmethod
+    def _normalize_non_negative_int(cls, value: Any, default: int) -> tuple[int, bool]:
+        try:
+            resolved = int(value)
+        except (TypeError, ValueError):
+            return (default, True)
+        if resolved < 0:
             return (default, True)
         return (resolved, False)
 
@@ -436,6 +470,14 @@ class SettingsStore:
     def _format_morph_upper_limit(cls, value: Any) -> str:
         normalized, _ = cls._normalize_morph_upper_limit(value)
         return f"{normalized:.4f}"
+
+    @classmethod
+    def _format_non_negative_int(cls, value: Any) -> str:
+        normalized, _ = cls._normalize_non_negative_int(
+            value,
+            _DEFAULT_CLOSING_SOFTNESS_FRAMES,
+        )
+        return str(normalized)
 
     @staticmethod
     def _summarize_exception(error: BaseException) -> str:

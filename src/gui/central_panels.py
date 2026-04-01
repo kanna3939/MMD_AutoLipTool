@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QScrollBar,
     QSizePolicy,
+    QSpinBox,
     QSplitter,
     QToolButton,
     QVBoxLayout,
@@ -18,7 +19,9 @@ from PySide6.QtWidgets import (
 )
 
 from gui.i18n_strings import (
+    ClosingSoftnessStrings,
     LeftInfoPanelStrings,
+    LipHoldStrings,
     MorphUpperLimitStrings,
     RightDisplayStrings,
 )
@@ -29,6 +32,8 @@ _PANEL_SECTION_SPACING = 6
 _PANEL_STACK_SPACING = 6
 _MORPH_ROW_SPACING = 6
 _NUMERIC_INPUT_DISPLAY_WIDTH = 96
+_LIP_HOLD_INPUT_DISPLAY_WIDTH = 56
+_CLOSING_SOFTNESS_INPUT_DISPLAY_WIDTH = 56
 _MORPH_STEP_BUTTON_WIDTH = 24
 
 
@@ -317,7 +322,7 @@ class CenterContentContainer(QWidget):
 
 
 class MorphUpperLimitRow(QWidget):
-    """Thin display-only row for the morph upper limit controls."""
+    """Thin display-only row for morph max, lip hold, and closing softness controls."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -353,6 +358,88 @@ class MorphUpperLimitRow(QWidget):
         self.increment_button.setFixedWidth(_MORPH_STEP_BUTTON_WIDTH)
         self.increment_button.clicked.connect(self.input.stepUp)
 
+        self.lip_hold_label = QLabel(LipHoldStrings.LABEL, self)
+        self.lip_hold_input = QSpinBox(self)
+        self.lip_hold_input.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.lip_hold_input.setRange(0, 999999)
+        self.lip_hold_input.setSingleStep(1)
+        self.lip_hold_input.setValue(0)
+        self.lip_hold_input.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.lip_hold_input.setMinimumWidth(_LIP_HOLD_INPUT_DISPLAY_WIDTH)
+        self.lip_hold_input.setMaximumWidth(_LIP_HOLD_INPUT_DISPLAY_WIDTH)
+        self.lip_hold_input.setToolTip(LipHoldStrings.INPUT_TOOLTIP)
+
+        self.lip_hold_decrement_button = QToolButton(self)
+        self.lip_hold_decrement_button.setObjectName("MorphStepButton")
+        self.lip_hold_decrement_button.setText("-")
+        self.lip_hold_decrement_button.setToolTip(LipHoldStrings.DECREMENT_TOOLTIP)
+        self.lip_hold_decrement_button.setAutoRaise(False)
+        self.lip_hold_decrement_button.setSizePolicy(
+            QSizePolicy.Fixed,
+            QSizePolicy.Fixed,
+        )
+        self.lip_hold_decrement_button.setFixedWidth(_MORPH_STEP_BUTTON_WIDTH)
+        self.lip_hold_decrement_button.clicked.connect(self.lip_hold_input.stepDown)
+
+        self.lip_hold_increment_button = QToolButton(self)
+        self.lip_hold_increment_button.setObjectName("MorphStepButton")
+        self.lip_hold_increment_button.setText("+")
+        self.lip_hold_increment_button.setToolTip(LipHoldStrings.INCREMENT_TOOLTIP)
+        self.lip_hold_increment_button.setAutoRaise(False)
+        self.lip_hold_increment_button.setSizePolicy(
+            QSizePolicy.Fixed,
+            QSizePolicy.Fixed,
+        )
+        self.lip_hold_increment_button.setFixedWidth(_MORPH_STEP_BUTTON_WIDTH)
+        self.lip_hold_increment_button.clicked.connect(self.lip_hold_input.stepUp)
+
+        self.lip_hold_unit_label = QLabel(LipHoldStrings.UNIT, self)
+
+        self.closing_softness_label = QLabel(ClosingSoftnessStrings.LABEL, self)
+        self.closing_softness_input = QSpinBox(self)
+        self.closing_softness_input.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.closing_softness_input.setRange(0, 999999)
+        self.closing_softness_input.setSingleStep(1)
+        self.closing_softness_input.setValue(0)
+        self.closing_softness_input.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.closing_softness_input.setMinimumWidth(_CLOSING_SOFTNESS_INPUT_DISPLAY_WIDTH)
+        self.closing_softness_input.setMaximumWidth(_CLOSING_SOFTNESS_INPUT_DISPLAY_WIDTH)
+        self.closing_softness_input.setToolTip(ClosingSoftnessStrings.INPUT_TOOLTIP)
+
+        self.closing_softness_decrement_button = QToolButton(self)
+        self.closing_softness_decrement_button.setObjectName("MorphStepButton")
+        self.closing_softness_decrement_button.setText("-")
+        self.closing_softness_decrement_button.setToolTip(
+            ClosingSoftnessStrings.DECREMENT_TOOLTIP
+        )
+        self.closing_softness_decrement_button.setAutoRaise(False)
+        self.closing_softness_decrement_button.setSizePolicy(
+            QSizePolicy.Fixed,
+            QSizePolicy.Fixed,
+        )
+        self.closing_softness_decrement_button.setFixedWidth(_MORPH_STEP_BUTTON_WIDTH)
+        self.closing_softness_decrement_button.clicked.connect(
+            self.closing_softness_input.stepDown
+        )
+
+        self.closing_softness_increment_button = QToolButton(self)
+        self.closing_softness_increment_button.setObjectName("MorphStepButton")
+        self.closing_softness_increment_button.setText("+")
+        self.closing_softness_increment_button.setToolTip(
+            ClosingSoftnessStrings.INCREMENT_TOOLTIP
+        )
+        self.closing_softness_increment_button.setAutoRaise(False)
+        self.closing_softness_increment_button.setSizePolicy(
+            QSizePolicy.Fixed,
+            QSizePolicy.Fixed,
+        )
+        self.closing_softness_increment_button.setFixedWidth(_MORPH_STEP_BUTTON_WIDTH)
+        self.closing_softness_increment_button.clicked.connect(
+            self.closing_softness_input.stepUp
+        )
+
+        self.closing_softness_unit_label = QLabel(ClosingSoftnessStrings.UNIT, self)
+
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(_MORPH_ROW_SPACING)
@@ -360,15 +447,66 @@ class MorphUpperLimitRow(QWidget):
         layout.addWidget(self.input)
         layout.addWidget(self.decrement_button)
         layout.addWidget(self.increment_button)
+        layout.addSpacing(_MORPH_ROW_SPACING * 2)
+        layout.addWidget(self.lip_hold_label)
+        layout.addWidget(self.lip_hold_input)
+        layout.addWidget(self.lip_hold_decrement_button)
+        layout.addWidget(self.lip_hold_increment_button)
+        layout.addWidget(self.lip_hold_unit_label)
+        layout.addSpacing(_MORPH_ROW_SPACING * 2)
+        layout.addWidget(self.closing_softness_label)
+        layout.addWidget(self.closing_softness_input)
+        layout.addWidget(self.closing_softness_decrement_button)
+        layout.addWidget(self.closing_softness_increment_button)
+        layout.addWidget(self.closing_softness_unit_label)
         layout.addStretch(1)
         self.setLayout(layout)
 
     def apply_language(self, language: str) -> None:
-        strings = MorphUpperLimitStrings.for_language(language)
-        self.label.setText(strings["LABEL"])
-        self.input.setToolTip(strings["INPUT_TOOLTIP"])
-        self.decrement_button.setToolTip(strings["DECREMENT_TOOLTIP"])
-        self.increment_button.setToolTip(strings["INCREMENT_TOOLTIP"])
+        morph_strings = MorphUpperLimitStrings.for_language(language)
+        self.label.setText(morph_strings["LABEL"])
+        self.input.setToolTip(morph_strings["INPUT_TOOLTIP"])
+        self.decrement_button.setToolTip(morph_strings["DECREMENT_TOOLTIP"])
+        self.increment_button.setToolTip(morph_strings["INCREMENT_TOOLTIP"])
+
+        lip_hold_strings = LipHoldStrings.for_language(language)
+        self.lip_hold_label.setText(lip_hold_strings["LABEL"])
+        self.lip_hold_input.setToolTip(lip_hold_strings["INPUT_TOOLTIP"])
+        self.lip_hold_decrement_button.setToolTip(
+            lip_hold_strings["DECREMENT_TOOLTIP"]
+        )
+        self.lip_hold_increment_button.setToolTip(
+            lip_hold_strings["INCREMENT_TOOLTIP"]
+        )
+        self.lip_hold_unit_label.setText(lip_hold_strings["UNIT"])
+
+        closing_softness_strings = ClosingSoftnessStrings.for_language(language)
+        self.closing_softness_label.setText(closing_softness_strings["LABEL"])
+        self.closing_softness_input.setToolTip(closing_softness_strings["INPUT_TOOLTIP"])
+        self.closing_softness_decrement_button.setToolTip(
+            closing_softness_strings["DECREMENT_TOOLTIP"]
+        )
+        self.closing_softness_increment_button.setToolTip(
+            closing_softness_strings["INCREMENT_TOOLTIP"]
+        )
+        self.closing_softness_unit_label.setText(closing_softness_strings["UNIT"])
+
+    def set_morph_controls_enabled(self, enabled: bool) -> None:
+        self.input.setEnabled(enabled)
+        self.decrement_button.setEnabled(enabled)
+        self.increment_button.setEnabled(enabled)
+
+    def set_lip_hold_controls_enabled(self, enabled: bool) -> None:
+        self.lip_hold_input.setEnabled(enabled)
+        self.lip_hold_decrement_button.setEnabled(enabled)
+        self.lip_hold_increment_button.setEnabled(enabled)
+        self.lip_hold_unit_label.setEnabled(enabled)
+
+    def set_closing_softness_controls_enabled(self, enabled: bool) -> None:
+        self.closing_softness_input.setEnabled(enabled)
+        self.closing_softness_decrement_button.setEnabled(enabled)
+        self.closing_softness_increment_button.setEnabled(enabled)
+        self.closing_softness_unit_label.setEnabled(enabled)
 
     def retranslate_ui(self, language: str) -> None:
         self.apply_language(language)
