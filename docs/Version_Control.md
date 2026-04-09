@@ -1,5 +1,24 @@
 # Version Control Log
 
+## Entry 2026-04-09 / Session: ms13-b2-wx-mainframe-skeleton
+
+- Date: 2026-04-09
+- Session: ms13-b2-wx-mainframe-skeleton
+- Summary:
+  - `MS13-B2: メインフレーム最小骨格作成` を実装した。
+  - メインフレーム内に `root_panel` を作成し、上部操作域、中央主領域、下部ステータス域の3領域に分割した。
+  - それぞれの領域にプレースホルダとなるテキストとボーダー枠を配置し、今後の UI 要素が適切に乗る土台を形成した。
+- Modified Files:
+  - `src/gui_wx/main_frame.py`: wxPanel と wxBoxSizer を用いて3領域を初期化するようレイアウトを追加作成。
+  - `docs/MS13-B2_Implementation_Plan.md`: 実装反映注記を追記し、完了状態へ更新。
+  - `docs/repo_milestone.md`: MS13-B2 完了メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Notes:
+  - wx.SplitterWindow や wx.StatusBar は使用せず、シンプルな通常パネルで構築した。
+  - 垂直Sizerの中での `wx.ALIGN_CENTER_VERTICAL` フラグエラーを事前に排除し、エラーなしでの起動を確認した。
+- Verification:
+  - `python src/main.py` にて、クラッシュやフラグエラーがなく3領域が描画されることを確認した。
+
 ## Entry 2026-04-09 / Session: ms13-b1-wx-entrypoint
 
 - Date: 2026-04-09
