@@ -1,5 +1,24 @@
 # Version Control Log
 
+## Entry 2026-04-09 / Session: ms13-b3-wx-ui-elements-placement
+
+- Date: 2026-04-09
+- Session: ms13-b3-wx-ui-elements-placement
+- Summary:
+  - `MS13-B3: メニュー / 基本操作列 / ステータスの最小配置` を実装した。
+  - wxPython のメニューバー (`wx.MenuBar`) を作成し、主要なメニューを配置（無効状態で初期化）。
+  - B2で作成した上部操作域内に、アプリの主要操作ボタン（TEXT読込・再生等）を無効状態で配置した。
+  - 下部ステータス域に水平Sizerを適用し、ステータスラベルを追加して将来の拡張に備えた。
+- Modified Files:
+  - `src/gui_wx/main_frame.py`: メニューバー初期化メソッド `_init_menu` を追加し、各領域にボタンとラベルを実装。
+  - `docs/MS13-B3_Implementation_Plan.md`: 実装反映注記を追記し、完了状態へ更新。
+  - `docs/repo_milestone.md`: MS13-B3 の完了状態メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Notes:
+  - プレースホルダを実際のUIコンポーネント（ボタン、メニュー等）へ置き換えただけであり、ファイルダイアログ表示や設定ロードなどの動作本体（実機能実装）には踏み込んでいない。
+- Verification:
+  - `python src/main.py` にてアプリが正常に起動し、メニューバーおよび各種ボタンが表示・グレーアウト状態になっていることを確認した。
+
 ## Entry 2026-04-09 / Session: ms13-b2-wx-mainframe-skeleton
 
 - Date: 2026-04-09
