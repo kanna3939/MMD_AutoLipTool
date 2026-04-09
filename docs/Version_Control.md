@@ -1,5 +1,30 @@
 # Version Control Log
 
+## Entry 2026-04-09 / Session: ms13-b1-wx-entrypoint
+
+- Date: 2026-04-09
+- Session: ms13-b1-wx-entrypoint
+- Summary:
+  - `MS13-B1: 移行前提固定と wx 起動入口作成` を実装した。
+  - 主系となる wxPython 用パッケージ `src/gui_wx/` を新設し、アプリ初期化 (`app.py`) と最小フレーム (`main_frame.py`) を実装した。
+  - `src/main.py` を旧Qt系の起動スクリプトから wxPython 主系起動入口へ直接差し替えた。
+  - 既存のQt側（`src/gui/`）は今回の改修対象から外し、凍結領域として残した。
+- Modified Files:
+  - `src/main.py`: wx アプリ起動入口となるよう全面書き換え。旧Qt側の呼び出しを除去。
+  - `docs/MS13-B1_Implementation_Plan.md`: 実装反映注記を追記し、完了状態へ更新。
+  - `docs/repo_milestone.md`: MS13-B1 完了メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Added Files:
+  - `src/gui_wx/__init__.py`
+  - `src/gui_wx/app.py`
+  - `src/gui_wx/main_frame.py`
+- Notes:
+  - 今回は「最小起動骨格の成立」までを主眼とし、スプラッシュ画面・細部レイアウト構築・設定適用などは後続ブロックへ委譲している。
+  - `python src/main.py` で正しく wx フレームが起ち上がり、エラー終了しないことを確認した。
+- Verification:
+  - `python src/main.py` にてクラッシュなく空フレームが表示されること。
+  - `rg -n "MS13-B1|wxPython|gui_wx" docs/MS13-B1_Implementation_Plan.md docs/repo_milestone.md docs/Version_Control.md src/main.py`
+
 ## Entry 2026-04-02 / Session: release-v0380-ms12-packaging-sync
 
 - Date: 2026-04-02
