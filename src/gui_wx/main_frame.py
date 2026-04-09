@@ -15,6 +15,8 @@ class MainFrame(wx.Frame):
             
         super().__init__(*args, **kw)
         
+        self.controller = None
+        
         self._init_menu()
         self._init_ui()
         self.Bind(wx.EVT_CLOSE, self._on_close)
@@ -52,7 +54,14 @@ class MainFrame(wx.Frame):
         self.mi_help.Enable(False)
         self.mi_about.Enable(False)
         
-        # 終了アクションのみ最小受け口として繋いでおく
+        # [MS13-B5] メニューイベントのバインディング
+        # UI側イベントを検知し、分離された _on_mi_* ハンドラへルーティングする
+        self.Bind(wx.EVT_MENU, self._on_mi_text_open, self.mi_text_open)
+        self.Bind(wx.EVT_MENU, self._on_mi_wav_open, self.mi_wav_open)
+        self.Bind(wx.EVT_MENU, self._on_mi_vmd_save, self.mi_vmd_save)
+        self.Bind(wx.EVT_MENU, self._on_mi_settings, self.mi_settings)
+        self.Bind(wx.EVT_MENU, self._on_mi_help, self.mi_help)
+        self.Bind(wx.EVT_MENU, self._on_mi_about, self.mi_about)
         self.Bind(wx.EVT_MENU, self._on_close, self.mi_exit)
 
     def _init_ui(self):
@@ -123,7 +132,85 @@ class MainFrame(wx.Frame):
         
         self.root_panel.SetSizer(root_sizer)
         
+        # [MS13-B5] 実要素はDisabledのままだが、将来の拡張に備えてイベントバインドは済ませておく
+        self.Bind(wx.EVT_BUTTON, self._on_btn_open_text, self.btn_open_text)
+        self.Bind(wx.EVT_BUTTON, self._on_btn_open_wav, self.btn_open_wav)
+        self.Bind(wx.EVT_BUTTON, self._on_btn_process, self.btn_process)
+        self.Bind(wx.EVT_BUTTON, self._on_btn_save_vmd, self.btn_save_vmd)
+        self.Bind(wx.EVT_BUTTON, self._on_btn_play, self.btn_play)
+        self.Bind(wx.EVT_BUTTON, self._on_btn_stop, self.btn_stop)
+        
+    def set_controller(self, controller):
+        """[MS13-B5] アプリのコントローラーをセットし、各種操作要求を委譲する口を設ける"""
+        self.controller = controller
+
+    def update_status(self, message: str):
+        """[MS13-B5] UI上のステータス表示更新を一元化する共通入口"""
+        self.st_status_main.SetLabel(message)
+
+    def get_status_text(self) -> str:
+        """[MS13-B5] 最小限の View Accessor (将来取得が必要になった場合の整理用)"""
+        return self.st_status_main.GetLabel()
+
     def _on_close(self, event: wx.Event):
-        # 現時点では単にウィンドウを破棄するのみ。
-        # 後続ブロックにて終了確認処理などを追加します。
-        self.Destroy()
+        if self.controller:
+            self.controller.request_exit()
+        else:
+            self.Destroy()
+
+    # --- UI Event Handlers ([MS13-B5] UI イベントを Action Sink へ流す) ---
+    def _on_mi_text_open(self, event):
+        if self.controller: self.controller.request_select_text()
+
+    def _on_mi_wav_open(self, event):
+        if self.controller: self.controller.request_select_wav()
+
+    def _on_mi_vmd_save(self, event):
+        if self.controller: self.controller.request_save_vmd()
+
+    def _on_mi_settings(self, event):
+        if self.controller: self.controller.request_open_settings_dialog()
+
+    def _on_mi_help(self, event):
+        if self.controller: self.controller.request_open_help()
+
+    def _on_mi_about(self, event):
+        if self.controller: self.controller.request_show_about()
+
+    def _on_btn_open_text(self, event):
+        if self.controller: self.controller.request_select_text()
+
+    def _on_btn_open_wav(self, event):
+        if self.controller: self.controller.request_select_wav()
+
+    def _on_btn_process(self, event):
+        if self.controller: self.controller.request_run_analysis()
+
+    def _on_btn_save_vmd(self, event):
+        if self.controller: self.controller.request_save_vmd()
+
+    def _on_btn_play(self, event):
+        if self.controller: self.controller.request_playback_play()
+
+    def _on_btn_stop(self, event):
+        if self.controller: self.controller.request_playback_stop()
+
+    def apply_settings(self, settings: dict):
+        """
+        [MS13-B4] 起動時の設定反映。
+        B3の時点で存在する wx 側の UI (メインフレームのサイズ等) に対してのみ設定を反映します。
+        未配置の control (スプリッター等) への適用はスキップします。
+        """
+        # --- 1. ウィンドウ関連の設定適用 ---
+        raw_width = settings.get("window_width")
+        raw_height = settings.get("window_height")
+        
+        width = raw_width if isinstance(raw_width, int) and raw_width > 0 else 800
+        height = raw_height if isinstance(raw_height, int) and raw_height > 0 else 600
+        
+        self.SetSize(wx.Size(width, height))
+        self.Centre(wx.BOTH)
+        
+        # --- 2. B3 までの実在 UI に関する設定 ---
+        # (現在、操作ボタンなどの表示状態に直接影響する初期設定項目はないため、ここで完了とする。)
+        pass
