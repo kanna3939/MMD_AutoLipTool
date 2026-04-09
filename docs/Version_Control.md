@@ -1,5 +1,64 @@
 # Version Control Log
 
+## Entry 2026-04-10 / Session: ms13-b6-integration-and-completion
+
+- Date: 2026-04-10
+- Session: ms13-b6-integration-and-completion
+- Summary:
+  - `MS13-B6: MS13 統合整理と完了確認` を実施し、MS13の全タスクを正常に終了とした。
+  - B1 から B5 のタスクによる「wxPython 主系の構成」が一つの環境として相互に破綻なく共存できているかを検証した。
+  - 軽量な統合確認用テストとして `tests/test_wx_ms13_integration.py` を追加した。
+- Modified Files:
+  - `tests/test_wx_ms13_integration.py`: [NEW] wxアプリ初期化、UI構造の存在確認、Settingsフォールバックの安全性、ならびにController上のFuture Hooksの結合をテスト。
+  - `docs/repo_milestone.md`: MS13-B6 完了状態およびMS14以降への引継ぎメモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Notes:
+  - 意図通り、アプリの「実機能」は全て切り離された状態で「Disabled」を保っており、MS14に向けて「ガワと接続配線だけが完璧に揃ったクリーンな状態」を実現している。
+  - ここまでの工程でB1からB5の設計に対する「接着不良の修正」は必要なく、設計規約に従った安全な統合作業が行われた。
+- Verification:
+  - `python tests/test_wx_ms13_integration.py` がエラーなく `OK` を返すことを確認し、統合の堅牢性を保証した。
+
+## Entry 2026-04-10 / Session: ms13-b5-connection-points
+
+- Date: 2026-04-10
+- Session: ms13-b5-connection-points
+- Summary:
+  - `MS13-B5: 将来拡張の接続点整理` を実装した。
+  - `MainFrame` 側で直接ファイルの読み書きや実処理をさせないための Controller レイヤーのスタブとして `AppController` （およびその配下の `WorkerHooks`）を新設した。
+  - 各種メニューならびに上部ボタンのUIイベントをすべて `_on_mi_*`, `_on_btn_*` メソッドへ回し、そこから `AppController` 上の各機能対応の request 要求へと純粋なイベント通知（委譲）を行うように分離した。
+  - ステータスラベルの更新専用メソッド `update_status` を設け、GUIスレッドからの描画を一元管理する経路を用意した。
+- Modified Files:
+  - `src/gui_wx/app_controller.py`: [NEW] コントローラのスタブ機能を提供。
+  - `src/gui_wx/app.py`: `AppController` の初期化と `MainFrame` への設定を追加。
+  - `src/gui_wx/main_frame.py`: UIイベントならびにバインディングからのルーティング機能を追加し、`update_status`・`get_status_text` アクセサを実装した。
+  - `docs/repo_milestone.md`: MS13-B5の完了状態メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Notes:
+  - 目的である「接続点整理」と「配線の構築」のみに特化し、ダイアログ表示や再生などの実機能の実装、ならびに実際のスレッド処理は一切組み込んでいない。
+  - GUI項目についても「Disabled」の制約を維持している。
+- Verification:
+  - wx アプリがエラーなく起動することを確認し、B4時点での Settings の読み込み機能にもクラッシュ等の問題が出ないことを検証した。
+
+## Entry 2026-04-10 / Session: ms13-b4-settings-load
+
+- Date: 2026-04-10
+- Session: ms13-b4-settings-load
+- Summary:
+  - `MS13-B4: settings load 接続と起動時適用` を実装した。
+  - Qt 非依存の既存 `SettingsStore` モジュールに手を加えずそのまま利用し、wx 主系の起動シーケンス (`app.py`) の `OnInit` に接続。
+  - `MainFrame` へ `apply_settings` メソッドを追加し、UI 構成前（表示前）のタイミングでロードしたパラメーターから Window に関する設定（`window_width`, `window_height`）のみを反映させた。
+  - 設定欠損時でも安全にデフォルトサイズにフォールバックさせ起動する仕様とした。
+- Modified Files:
+  - `src/gui_wx/app.py`: `SettingsStore` のインポートと設定のロード処理を追加。
+  - `src/gui_wx/main_frame.py`: `apply_settings` メソッドを追加し、幅・高さ・ウィンドウの中央配置を実装。
+  - `docs/repo_milestone.md`: MS13-B4 の完了状態メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Notes:
+  - MS13-B4 のスコープを徹底し、スプリッターなどの未実装コンポーネントに対する先行適用や・設定ファイルの save ロジック、また既存 INI スキーマの再設計やマイグレーションなどは一切行なっていない。
+- Verification:
+  - `python src/main.py` からアプリが正常に起動することを確認した。
+  - `MMD_AutoLipTool.ini` 内のウィンドウサイズ変更、ならびにファイルの欠損時に正常にフォールバック可能であることを検証した。
+
 ## Entry 2026-04-09 / Session: ms13-b3-wx-ui-elements-placement
 
 - Date: 2026-04-09
