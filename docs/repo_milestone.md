@@ -1,5 +1,62 @@
 # MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
 
+## 2026-04-11 / MS14-B4 解析実行 parity 回復 メモ
+
+- 対象: MS14-B4
+- 実装反映:
+  - `src/gui_wx/analysis_worker.py` を新設し、UIをブロックせずに解析（`build_vowel_timing_plan`）を行える非同期ワーカーを導入した。
+  - `src/gui_wx/main_frame.py` の `_run_analysis` を実装し、必要なデータが揃っているかの事前検証と、二重起動防止の実装を行った。
+  - 解析中はキャンセル不可の不定進捗を示す `wx.ProgressDialog` を表示し、完了または失敗のコールバックで適切に閉じるようにした。
+  - 成功時は `UiState.current_timing_plan` へ正本結果を格納し、プレビューのプレースホルダへ結果あり表示を反映させた。失敗時は、以前の入力データを保護したまま計画だけを無効化（invalidate）し、エラーメッセージを提示するようにした。
+- 確認状態:
+  - `test_wx_ms14_b4_analysis.py` を追加し、モックを用いて非同期状態の正常遷移、二重呼び出し防止、エラー時の状態ロールバックなどを検証。計16件の統合テストが問題なくパスすることを確認した。
+- 次のステップ (MS14-B5以降への引継ぎ事項):
+  - 本ブロックでメモリ上に確定した `current_timing_plan` を使って、最終目標である VMD ファイルとしての保存処理導線を構築する。また、最近使ったファイル履歴 (`recent_files`) やディレクトリの記憶など、設定ファイルの永続化フローを MS14-B5 において整備する。
+
+---
+
+## 2026-04-10 / MS14-B3 入力導線 parity 回復 メモ
+
+- 対象: MS14-B3
+- 実装反映:
+  - `src/gui_wx/main_frame.py` に `_open_text_file` および `_open_wav_file` を実装し、TEXTとWAVの読み込み処理を開通した。
+  - テキスト読み込み時は、変換処理（`text -> hiragana -> vowel`）を実行してプレビューへ反映した。WAV読み込み時は、サンプリングレートなどの解析情報をプレビューへ反映した。
+  - 処理成功時は B2 で作成した `UiState` にデータを格納し、`invalidate_analysis()` および `update_action_states()` を通じて、後続処理（解析実行）がすぐに繋がるようにUI状態を更新した。
+  - メモリ上での Recent Files と Dialog Directory の追跡、および初回の Counterpart Auto Load（同名ファイルの静音読み込み）処理を実装した。
+- 確認状態:
+  - 自動テスト `test_wx_ms14_b3_input.py` にて、ファイルの静音読み込み時や Auto Load 時の状態整合性を確認済み。エラーなく全テスト（13件）が通ることを確認した。
+- 次のステップ (MS14-B4以降への引継ぎ事項):
+  - 本ブロックで `UiState` に入力データ（Path文字列や抽出済テキストなどのコンテンツ自体）が集まるようになった。続く MS14-B4 では、これらのデータをWorkerへ渡し、実用解析（タイミングプラン生成）を走らせる処理に着手する。
+
+---
+
+## 2026-04-10 / MS14-B2 状態管理と action state 回復 メモ
+
+- 対象: MS14-B2
+- 実装反映:
+  - `gui_wx/ui_state.py` を新設し、軽量 state holder (`UiState`) およびステータスの意味管理 (`StatusKey`) を導入した。
+  - `MainFrame` に `update_action_states()` と `update_status_display()` を実装し、手動の Enable/Disable 管理から、`UiState` を参照して UI を制御する方式へ移行した。
+  - 実データの読込や worker ロジックはまだ組み込まず、「状態契約の整備」のみを完了した。
+- 確認状態:
+  - パスや `current_timing_plan` の存在判定、および invalidation による action state の変動と、Busy 時の UI ロック要件を満たすことを `test_wx_ms14_b2_state.py` 等で確認済み。
+- 次のステップ (MS14-B3以降への引継ぎ事項):
+  - B3 以降では、イベント入力をトリガーとして `ui_state` の中身を更新し、`update_action_states()` を最後に呼び出すだけで UI 状態が安全に遷移する基盤が完成。これに則り機能導線を回復させる。
+
+---
+
+## 2026-04-10 / MS14-B1 UI 骨格拡充 メモ
+
+- 対象: MS14-B1
+- 実装反映:
+  - wxPython 主系の `MainFrame` に対し、左側情報パネル、右側 2 段 placeholder（波形・Preview用途）、上部パラメータ入力行（`morph_upper_limit`, `closing_hold_frames`, `closing_softness_frames`）を追加した。
+  - 実動作（読み込み・解析・保存等）は引き続き無効化（Disabled）のままとし、後続ブロックでデータが流し込めるよう View Helper（setter / getter）を整備した。
+- 確認状態:
+  - B1スコープ外となる「実データのハンドリング」「設定の永続化」などは排除し、最小限の骨格UIと連携口の存在の確認テスト `test_wx_ms14_b1_ui.py` を通過。
+- 次のステップ (MS14-B2以降への引継ぎ事項):
+  - Controller 側の各状態管理機能を拡張し、構築した UI と連携して動作させる。
+
+---
+
 ## 2026-04-10 / MS13-B6 MS13統合整理と完了確認 メモ
 
 - 対象: MS13-B6

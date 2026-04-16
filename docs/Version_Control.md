@@ -1,5 +1,79 @@
 # Version Control Log
 
+## Entry 2026-04-11 / Session: ms14-b4-analysis-parity
+
+- Date: 2026-04-11
+- Session: ms14-b4-analysis-parity
+- Summary:
+  - `MS14-B4: 解析実行 parity 回復` の実装を完了。
+  - 読み込まれたTEXT/WAV等のデータを元に、バックグラウンドスレッドでリップシンク解析を実行する非同期ワーカーフローをwxPython側に導入した。
+- Modified Files:
+  - `src/gui_wx/analysis_worker.py`: [NEW] 解析処理を委譲し、完了時にメインスレッドのコールバックを呼ぶ最小の実働ワーカーを追加。
+  - `src/gui_wx/main_frame.py`: 解析実行ボタンの実装、`wx.ProgressDialog` を利用したBusy状態の運用、および結果の `UiState` 等への反映を実装。
+  - `tests/test_wx_ms14_b4_analysis.py`: [NEW] ワーカーを用いた非同期テストの検証モックケースを追加。
+- Notes:
+  - 予期せぬUI操作（連打による二重起動や、解析中の設定改変）を防ぐため、ProgressDialog表示とともにB2のBusyロック制御を徹底した。
+  - エラー発生時でも抽出済みデータ（テキスト、WAV情報）は保持し、再試行性を優先する設計方針に準拠させた。
+- Verification:
+  - `python -m unittest tests.test_wx_ms14_b4_analysis tests.test_wx_ms14_b3_input tests.test_wx_ms14_b2_state tests.test_wx_ms14_b1_ui tests.test_wx_ms13_integration` (OK 16 tests)
+
+## Entry 2026-04-10 / Session: ms14-b3-input-parity
+
+- Date: 2026-04-10
+- Session: ms14-b3-input-parity
+- Summary:
+  - `MS14-B3: 入力導線 parity 回復` の実装を完了。
+  - Qt版における「ファイル選択→抽出・変換→UI/状態の更新→対になるファイルの自動読み込み(Counterpart Auto Load)」の一連の入力成立導線をwx版へ移植した。
+- Modified Files:
+  - `src/gui_wx/main_frame.py`: TEXT/WAVファイルの OpenDialog の接続と、コアロジックを呼び出して `UiState` と `InfoPanel` へ流し込む処理の実装。
+  - `src/gui_wx/ui_state.py`: Session記憶用として `recent_*_files`, `last_*_dialog_dir` を追加。
+  - `tests/test_wx_ms14_b3_input.py`: [NEW] B3の非対話入力系やAutoLoadの結合テスト。
+- Notes:
+  - 解析実行(B4)や永続化処理(B5)の前倒しを避け、あくまで「入力データの取り込みとUI・内部状態の準備完了化」に留めている。
+  - Counterpart Auto Load時などの不要なエラーメッセージ抑制（静音経路）を導入した。
+- Verification:
+  - `python -m unittest tests.test_wx_ms14_b3_input tests.test_wx_ms14_b1_ui tests.test_wx_ms14_b2_state tests.test_wx_ms13_integration` (OK 13 tests)
+
+## Entry 2026-04-10 / Session: ms14-b2-state-management
+
+- Date: 2026-04-10
+- Session: ms14-b2-state-management
+- Summary:
+  - `MS14-B2: 状態管理と action state 回復` の実装を完了。
+  - UI側での状態契約 (`UiState`, `StatusKey`) を設け、Busy時のUIロックや、入力不足・解析前などの状態に応じた主要ボタンの有効・無効管理を一元化した。
+- Modified Files:
+  - `src/gui_wx/ui_state.py`: [NEW] 軽量状態管理・ステータス列挙。
+  - `src/gui_wx/main_frame.py`: `UiState` の読み取りとUI更新ロジック (`update_action_states`, `update_status_display`) の追加。
+  - `src/gui_wx/parameter_panel.py`: 子要素一括無効用の `enable_inputs` 追加。
+  - `tests/test_wx_ms14_b2_state.py`: [NEW] B2契約確認テスト。
+  - `tests/test_wx_ms14_b1_ui.py`, `test_wx_ms13_integration.py`: B2ロジックに伴う期待値（常時無効から状態依存への移行）への更新。
+- Notes:
+  - コントローラ側の肥大化を防ぐため、UI側の Action State（Enable/Disable判定）はすべて `MainFrame` 側で行い、将来のロジック実行系は Controller と疎結合になる構成とした。
+- Verification:
+  - `python -m unittest tests.test_wx_ms14_b1_ui tests.test_wx_ms14_b2_state tests.test_wx_ms13_integration`
+
+## Entry 2026-04-10 / Session: ms14-b1-ui-skeleton
+
+- Date: 2026-04-10
+- Session: ms14-b1-ui-skeleton
+- Summary:
+  - `MS14-B1: 実用 UI 骨格拡張` を実装した。
+  - 主系の `MainFrame` の UI 構造を更新し、左パネル (`info_panel`)、右下プレースホルダ (`placeholder_panels`)、上部パラメータ行 (`parameter_panel`) を組み込んだ。
+  - B2 以降の処理が利用するためのアクセス口である View Helper を追加し、実際の機能（再描画や設定の永続化、実ファイルの読出など）は除外した状態で枠組みのみ完成させた。
+- Modified Files:
+  - `src/gui_wx/info_panel.py`: [NEW] 左側情報・テキストプレビューなどの表示域。
+  - `src/gui_wx/placeholder_panels.py`: [NEW] 波形・Preview エリア用の置き場。
+  - `src/gui_wx/parameter_panel.py`: [NEW] 各種パラメータスピナー。
+  - `src/gui_wx/main_frame.py`: 各パネルのインポートと View Helper の追加。
+  - `tests/test_wx_ms14_b1_ui.py`: [NEW] MS14-B1 の UI 表示と無効化状態、View Helper 単品の動作を検証する専用テスト。
+  - `docs/repo_milestone.md`: MS14-B1 の完了メモを追加。
+  - `docs/Version_Control.md`: 本エントリを追加。
+- Notes:
+  - 目的である「UI受け皿の作成」のみを厳格に範囲内とし、実稼働に関連する機能実装は排除している。
+  - 各種テストスクリプト（`test_wx_ms13_integration.py` および `test_wx_ms14_b1_ui.py`）により表示・アクセスにクラッシュがないことを確認した。
+- Verification:
+  - `python -m unittest tests.test_wx_ms14_b1_ui tests.test_wx_ms13_integration`
+
 ## Entry 2026-04-10 / Session: ms13-b6-integration-and-completion
 
 - Date: 2026-04-10

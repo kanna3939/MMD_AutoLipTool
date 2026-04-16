@@ -187,7 +187,7 @@ class SettingsStore:
             )
 
         normalized_settings, _, _ = self.normalize_settings(settings)
-        parser = self._build_parser(normalized_settings)
+        parser = self._build_parser_for_merge(normalized_settings)
 
         try:
             self.settings_path.parent.mkdir(parents=True, exist_ok=True)
@@ -245,39 +245,47 @@ class SettingsStore:
                     pass
             raise
 
-    @classmethod
-    def _build_parser(cls, settings: dict[str, Any]) -> configparser.ConfigParser:
+    def _build_parser_for_merge(self, settings: dict[str, Any]) -> configparser.ConfigParser:
         parser = configparser.ConfigParser()
         parser.optionxform = str
-        parser[_SECTION_UI] = {
-            _KEY_THEME: str(settings[_KEY_THEME]),
-            _KEY_CENTER_SPLITTER_RATIO: cls._format_ratio(
-                settings[_KEY_CENTER_SPLITTER_RATIO]
-            ),
-            _KEY_WINDOW_WIDTH: str(int(settings[_KEY_WINDOW_WIDTH])),
-            _KEY_WINDOW_HEIGHT: str(int(settings[_KEY_WINDOW_HEIGHT])),
-            _KEY_LANGUAGE: str(settings[_KEY_LANGUAGE]),
-            _KEY_MORPH_UPPER_LIMIT: cls._format_morph_upper_limit(
-                settings[_KEY_MORPH_UPPER_LIMIT]
-            ),
-            _KEY_CLOSING_HOLD_FRAMES: cls._format_non_negative_int(
-                settings[_KEY_CLOSING_HOLD_FRAMES]
-            ),
-            _KEY_CLOSING_SOFTNESS_FRAMES: cls._format_non_negative_int(
-                settings[_KEY_CLOSING_SOFTNESS_FRAMES]
-            ),
-        }
-        parser[_SECTION_RECENT] = {
-            _KEY_RECENT_TEXT_FILES: json.dumps(
-                settings[_KEY_RECENT_TEXT_FILES],
-                ensure_ascii=False,
-            ),
-            _KEY_RECENT_WAV_FILES: json.dumps(
-                settings[_KEY_RECENT_WAV_FILES],
-                ensure_ascii=False,
-            ),
-            _KEY_LAST_VMD_OUTPUT_DIR: str(settings[_KEY_LAST_VMD_OUTPUT_DIR]),
-        }
+        if self.settings_path.is_file():
+            try:
+                with self.settings_path.open("r", encoding="utf-8") as fh:
+                    parser.read_file(fh)
+            except Exception:
+                pass
+
+        if not parser.has_section(_SECTION_UI):
+            parser.add_section(_SECTION_UI)
+        if not parser.has_section(_SECTION_RECENT):
+            parser.add_section(_SECTION_RECENT)
+
+        parser[_SECTION_UI][_KEY_THEME] = str(settings[_KEY_THEME])
+        parser[_SECTION_UI][_KEY_CENTER_SPLITTER_RATIO] = self._format_ratio(
+            settings[_KEY_CENTER_SPLITTER_RATIO]
+        )
+        parser[_SECTION_UI][_KEY_WINDOW_WIDTH] = str(int(settings[_KEY_WINDOW_WIDTH]))
+        parser[_SECTION_UI][_KEY_WINDOW_HEIGHT] = str(int(settings[_KEY_WINDOW_HEIGHT]))
+        parser[_SECTION_UI][_KEY_LANGUAGE] = str(settings[_KEY_LANGUAGE])
+        parser[_SECTION_UI][_KEY_MORPH_UPPER_LIMIT] = self._format_morph_upper_limit(
+            settings[_KEY_MORPH_UPPER_LIMIT]
+        )
+        parser[_SECTION_UI][_KEY_CLOSING_HOLD_FRAMES] = self._format_non_negative_int(
+            settings[_KEY_CLOSING_HOLD_FRAMES]
+        )
+        parser[_SECTION_UI][_KEY_CLOSING_SOFTNESS_FRAMES] = self._format_non_negative_int(
+            settings[_KEY_CLOSING_SOFTNESS_FRAMES]
+        )
+        
+        parser[_SECTION_RECENT][_KEY_RECENT_TEXT_FILES] = json.dumps(
+            settings[_KEY_RECENT_TEXT_FILES],
+            ensure_ascii=False,
+        )
+        parser[_SECTION_RECENT][_KEY_RECENT_WAV_FILES] = json.dumps(
+            settings[_KEY_RECENT_WAV_FILES],
+            ensure_ascii=False,
+        )
+        parser[_SECTION_RECENT][_KEY_LAST_VMD_OUTPUT_DIR] = str(settings[_KEY_LAST_VMD_OUTPUT_DIR])
         return parser
 
     @classmethod
