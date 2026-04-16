@@ -241,7 +241,9 @@ def build_vowel_timing_plan(
     wav_analysis: WavAnalysisResult,
     whisper_model_name: str = "small",
     upper_limit: float = _DEFAULT_MORPH_UPPER_LIMIT,
+    phase_callback: callable | None = None,
 ) -> VowelTimingPlan:
+    if phase_callback: phase_callback("音声入力確認中")
     if upper_limit < 0.0:
         raise ValueError("upper_limit must be >= 0.0.")
 
@@ -255,6 +257,7 @@ def build_vowel_timing_plan(
     timing_source = "even_fallback"
     warning: str | None = None
 
+    if phase_callback: phase_callback("Whisper 解析中")
     try:
         whisper_result = recognize_audio_timing(
             wav_path=wav_path,
@@ -274,12 +277,15 @@ def build_vowel_timing_plan(
     except WhisperTimingError as error:
         warning = str(error)
 
+    if phase_callback: phase_callback("母音タイミング整形中")
     initial_timeline = build_anchor_based_vowel_timeline(
         vowels=vowels,
         timing_anchors=anchors,
         speech_start_sec=wav_analysis.speech_start_sec,
         speech_end_sec=wav_analysis.speech_end_sec,
     )
+    
+    if phase_callback: phase_callback("結果反映中")
     observed_timeline = _refine_timeline_intervals_with_observations(
         timeline=initial_timeline,
         wav_path=wav_path,
