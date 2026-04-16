@@ -11,6 +11,67 @@ from gui_wx.analysis_worker import AnalysisWorker
 from core.text_processing import TextProcessingError, text_to_hiragana, hiragana_to_vowel_string, _validate_and_clean_text
 from core.audio_processing import analyze_wav_file, WavAnalysisResult
 
+class AnalysisProgressDialog(wx.Dialog):
+    def __init__(self, parent, on_cancel_callback):
+        super().__init__(parent, title="解析実行中", style=wx.CAPTION)
+        self.on_cancel_callback = on_cancel_callback
+        self.cancel_requested = False
+        
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        
+        msg_text = wx.StaticText(self, label="リップシンク解析を実行しています...\nしばらくお待ちください。\n\n※ 歌唱・楽曲混在・環境ノイズ過多な音声では、\n　 解析に通常より時間がかかる場合があります。")
+        sizer.Add(msg_text, 0, wx.ALL | wx.EXPAND, 15)
+        
+        self.gauge = wx.Gauge(self, range=100, style=wx.GA_HORIZONTAL)
+        sizer.Add(self.gauge, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 15)
+        
+        self.phase_text = wx.StaticText(self, label="準備中")
+        font = self.phase_text.GetFont()
+        font.MakeBold()
+        self.phase_text.SetFont(font)
+        sizer.Add(self.phase_text, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 15)
+        
+        self.warning_text = wx.StaticText(self, label="")
+        self.warning_text.SetForegroundColour(wx.RED)
+        sizer.Add(self.warning_text, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 15)
+        
+        btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.btn_cancel = wx.Button(self, label="分析中止")
+        self.Bind(wx.EVT_BUTTON, self._on_cancel, self.btn_cancel)
+        btn_sizer.AddStretchSpacer()
+        btn_sizer.Add(self.btn_cancel, 0, wx.ALL, 10)
+        
+        sizer.Add(btn_sizer, 0, wx.EXPAND)
+        self.SetSizerAndFit(sizer)
+        self.CenterOnParent()
+        
+        self.pulse_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self._on_pulse_timer, self.pulse_timer)
+        self.pulse_timer.Start(50)
+        
+        self.Bind(wx.EVT_CLOSE, self._on_close)
+
+    def _on_pulse_timer(self, event):
+        self.gauge.Pulse()
+
+    def _on_cancel(self, event):
+        self.cancel_requested = True
+        self.pulse_timer.Stop()
+        self.btn_cancel.Disable()
+        self.phase_text.SetLabel("中止要求中。処理終了を待っています")
+        if self.on_cancel_callback:
+            self.on_cancel_callback()
+            
+    def _on_close(self, event):
+        event.Veto()
+        
+    def set_phase(self, phase):
+        if not self.cancel_requested:
+            self.phase_text.SetLabel(phase)
+            
+    def set_warning(self, msg):
+        self.warning_text.SetLabel(msg)
+
 class MainFrame(wx.Frame):
     """
     MMD_AutoLipTool のメインフレーム。
@@ -28,6 +89,11 @@ class MainFrame(wx.Frame):
         
         self.controller = None
         self.ui_state = UiState()
+        self._current_job_id = 0
+        self._cancel_requested = False
+        self._progress_dialog = None
+        self._timeout_timer = None
+        self._worker = None
         
         self._init_menu()
         self._init_ui()
@@ -344,6 +410,32 @@ class MainFrame(wx.Frame):
         self.param_panel.set_closing_softness_frames(val)
 
     def _on_close(self, event: wx.Event):
+        if getattr(self, 'ui_state', None) and self.ui_state.is_busy:
+            if getattr(self, '_cancel_requested', False):
+                res = wx.MessageBox(
+                    "中止要求中ですが、アプリケーションを終了しますか？\n(終了するとそのまま閉じます)",
+                    "終了の確認", 
+                    wx.YES_NO | wx.ICON_QUESTION, 
+                    self
+                )
+                if res == wx.NO:
+                    event.Veto()
+                    return
+            else:
+                res = wx.MessageBox(
+                    "解析実行中です。中止してアプリケーションを終了しますか？",
+                    "終了の確認",
+                    wx.YES_NO | wx.ICON_QUESTION,
+                    self
+                )
+                if res == wx.NO:
+                    event.Veto()
+                    return
+                self._cancel_requested = True
+                
+            self._current_job_id = None
+            self._cleanup_analysis_job()
+
         if self.controller:
             self.controller.request_exit()
         else:
@@ -558,25 +650,23 @@ class MainFrame(wx.Frame):
         # UIからパラメータを取得
         upper_limit = self.param_panel.get_morph_upper_limit()
 
+        self._current_job_id += 1
+        self._cancel_requested = False
+
         # Busy状態の開始
         self.ui_state.set_busy(True)
         self.update_action_states()
         self.update_status_display()
         
-        # 不要なダイアログを出さずにUI操作をブロックするため進捗表示(不定)
-        self._progress_dialog = wx.ProgressDialog(
-            "解析実行中",
-            "リップシンク解析を実行しています...\nしばらくお待ちください。",
-            maximum=100,
-            parent=self,
-            style=wx.PD_APP_MODAL | wx.PD_AUTO_HIDE
-        )
-        self._progress_dialog.Pulse()
+        self._progress_dialog = AnalysisProgressDialog(self, on_cancel_callback=self._on_analysis_cancel)
+        self._progress_dialog.Show()
 
         # worker起動
         self._worker = AnalysisWorker(
+            job_id=self._current_job_id,
             callback=self._on_analysis_success,
             error_callback=self._on_analysis_error,
+            phase_callback=self._on_analysis_phase,
             text_content=self.ui_state.selected_text_content,
             wav_path=self.ui_state.selected_wav_path,
             wav_analysis=self.ui_state.selected_wav_analysis,
@@ -584,34 +674,79 @@ class MainFrame(wx.Frame):
         )
         self._worker.start()
 
-    def _on_analysis_success(self, plan):
-        """ [MS14-B4] 解析成功時のコールバック """
-        if hasattr(self, '_progress_dialog') and self._progress_dialog:
+        if self._timeout_timer:
+            self._timeout_timer.Destroy()
+        self._timeout_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self._on_timeout_warning, self._timeout_timer)
+        self._timeout_timer.Start(150000, wx.TIMER_ONE_SHOT)
+
+    def _on_analysis_cancel(self):
+        self._cancel_requested = True
+        if self._timeout_timer:
+            self._timeout_timer.Stop()
+
+    def _on_analysis_phase(self, job_id, phase_name):
+        if not self: return
+        if job_id != self._current_job_id: return
+        if self._progress_dialog:
+            self._progress_dialog.set_phase(phase_name)
+
+    def _on_timeout_warning(self, event):
+        if not self: return
+        if self._cancel_requested: return
+        if self._progress_dialog:
+            self._progress_dialog.set_warning("※ 処理が長時間続いています。中止が必要な場合は [分析中止] を押してください。")
+
+    def _cleanup_analysis_job(self):
+        if self._progress_dialog:
             self._progress_dialog.Destroy()
             self._progress_dialog = None
+        if self._timeout_timer:
+            self._timeout_timer.Stop()
+            self._timeout_timer.Destroy()
+            self._timeout_timer = None
+        self._worker = None
+
+    def _on_analysis_success(self, job_id, plan):
+        """ [MS14-B4] 解析成功時のコールバック """
+        if not self: return
+        if job_id != self._current_job_id: return
             
+        self._cleanup_analysis_job()
+            
+        if self._cancel_requested:
+            self.ui_state.set_busy(False)
+            self.update_action_states()
+            self.update_status_display()
+            return
+
         self.ui_state.mark_analysis_success(plan)
         basename = os.path.basename(self.ui_state.selected_wav_path) if self.ui_state.selected_wav_path else ""
         self.placeholder_container.set_preview_placeholder_text(f"[解析結果あり]\n(MS15でPreview描画予定)")
         self.ui_state.set_busy(False)
         self.update_action_states()
         self.update_status_display()
-        self._worker = None
         if self.controller:
             self.controller.flush_pending_save()
         
-    def _on_analysis_error(self, error):
+    def _on_analysis_error(self, job_id, error):
         """ [MS14-B4] 解析失敗時のコールバック """
-        if hasattr(self, '_progress_dialog') and self._progress_dialog:
-            self._progress_dialog.Destroy()
-            self._progress_dialog = None
+        if not self: return
+        if job_id != self._current_job_id: return
             
+        self._cleanup_analysis_job()
+            
+        if self._cancel_requested:
+            self.ui_state.set_busy(False)
+            self.update_action_states()
+            self.update_status_display()
+            return
+
         self.ui_state.invalidate_analysis()
         self.placeholder_container.set_preview_placeholder_text("[Placeholder] Preview エリア")
         self.ui_state.set_busy(False)
         self.update_action_states()
         self.update_status_display()
-        self._worker = None
         if self.controller:
             self.controller.flush_pending_save()
         wx.MessageBox(f"解析中にエラーが発生しました。\n{error}", "エラー", wx.OK | wx.ICON_ERROR)

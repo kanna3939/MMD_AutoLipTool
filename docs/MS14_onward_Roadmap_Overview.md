@@ -1,4 +1,4 @@
-﻿# MS14_onward_Roadmap_Overview
+# MS14_onward_Roadmap_Overview
 
 ## 1. 文書情報
 
@@ -290,6 +290,16 @@ MS14 は、以下の block 構成を基本形とする。
 - last output dir 記憶
 - wx 側利用設定の save
 - merge-save による既存 key 保全
+
+### MS14-B5B
+* **Whisper 解析可用性 hardening と処理中 UI 補強**
+
+- 分析中止導線 (soft cancel)
+- soft timeout warning (150秒)
+- フェーズ表示と warning 領域の確保
+- 遅延 callback の UI 破壊防止
+- busy 中 close の安全確保
+- wx UI の main thread 更新契約
 
 ### MS14-B6
 * **統合整理と parity closeout**

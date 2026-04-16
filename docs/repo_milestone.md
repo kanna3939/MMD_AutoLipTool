@@ -1,5 +1,21 @@
 # MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
 
+## 2026-04-17 / MS14-B5B Whisper 解析可用性 hardening と処理中 UI 補強 メモ
+
+- 対象: MS14-B5B
+- 実装反映:
+  - `src/gui_wx/main_frame.py` 内の `AnalysisProgressDialog` を実装して、解析中ダイアログにプログレスアニメーション (`wx.Gauge`)、フェーズ文字列更新、Warning表示領域、分析中止ボタンを追加した。
+  - 解析中に `wx.Timer` で150秒経過後のSoft Timeout Warning をダイアログに出す導線を追加した。
+  - `AnalysisWorker` と `MainFrame` 間でJob IDによるタスク管理を実施。キャンセル（中止要求）後は遅れて返る結果を安全破棄し、破棄済みUIへのアクセスを防止した。
+  - Busy中Close時には「中止して終了 / 継続」の安全な脱出確認導線を整備した。
+  - `src/core/pipeline.py` に進行フェーズ（準備、Whisper解析、結果反映など）通知用の `phase_callback` 呼び出しを追加した。
+- 確認状態:
+  - プログレスバーの修繕、中止押下時のアニメーション即時停止、`wx.CallAfter` 制約の順守、daemon thread状態の維持など、スレッドとモーダル周辺の制御が堅牢であることを確認済み。
+- 次のステップ (MS14-B6 への引継ぎ事項):
+  - 本ブロックの完了により、時間がかかるWhisper解析を含めた実用導線の操作可用性が確保された。次段の MS14-B6（統合整理と parity closeout）にて MS14 全体の状態を結合・確認する。
+
+---
+
 ## 2026-04-11 / MS14-B4 解析実行 parity 回復 メモ
 
 - 対象: MS14-B4
