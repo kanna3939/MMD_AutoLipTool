@@ -43,13 +43,14 @@ class TestWXMS14B3Input(unittest.TestCase):
         mock_open.return_value = mock_file
 
         # Execute
-        self.frame._open_text_file("C:/mock/path.txt")
+        test_path = "C:/mock/path.txt".replace("/", os.sep)
+        self.frame._open_text_file(test_path)
         
         # Verify
         state = self.frame.ui_state
-        self.assertEqual(state.selected_text_path, "C:/mock/path.txt")
+        self.assertEqual(state.selected_text_path, test_path)
         self.assertEqual(state.selected_text_content, "あいうえお")
-        self.assertTrue("C:/mock/path.txt" in state.recent_text_files)
+        self.assertTrue(test_path in state.recent_text_files)
         # Should not auto-load since it was a quiet load itself
         self.assertIsNone(state.selected_wav_path)
 
@@ -64,13 +65,14 @@ class TestWXMS14B3Input(unittest.TestCase):
         mock_analyze.return_value = mock_analysis
 
         # Execute
-        self.frame._open_wav_file("C:/mock/path.wav")
+        test_path = "C:/mock/path.wav".replace("/", os.sep)
+        self.frame._open_wav_file(test_path)
 
         # Verify
         state = self.frame.ui_state
-        self.assertEqual(state.selected_wav_path, "C:/mock/path.wav")
+        self.assertEqual(state.selected_wav_path, test_path)
         self.assertIsNotNone(state.selected_wav_analysis)
-        self.assertTrue("C:/mock/path.wav" in state.recent_wav_files)
+        self.assertTrue(test_path in state.recent_wav_files)
 
 if __name__ == "__main__":
     unittest.main()

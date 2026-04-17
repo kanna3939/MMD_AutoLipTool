@@ -9,9 +9,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 from gui_wx.app import AutoLipToolApp
 from gui_wx.main_frame import MainFrame
 
-class TestWXMS14B4Analysis(unittest.TestCase):
+class TestWXMS14B6Closeout(unittest.TestCase):
     """
-    [MS14-B4] 解析実行と Worker の非同期動作・二重防止のテスト
+    [MS14-B6] B5Bで追加された cancel, timeout, late callbackの動作保証(Closeout)
     """
     @classmethod
     def setUpClass(cls):
@@ -34,62 +34,67 @@ class TestWXMS14B4Analysis(unittest.TestCase):
 
     @patch('gui_wx.main_frame.wx.ProgressDialog')
     @patch('gui_wx.main_frame.AnalysisWorker')
-    def test_run_analysis_success_state(self, mock_worker_class, mock_progress_dialog):
+    def test_soft_cancel_discards_result(self, mock_worker_class, mock_progress_dialog):
         mock_worker_instance = MagicMock()
         mock_worker_class.return_value = mock_worker_instance
         
-        # Action
         self.frame._run_analysis()
-        
-        # Verify busy state applied
         self.assertTrue(self.frame.ui_state.is_busy)
-        self.assertTrue(mock_worker_instance.start.called)
         
-        # Simulate worker success
+        # Simulate soft cancel
+        self.frame._on_analysis_cancel()
+        self.assertTrue(self.frame._cancel_requested)
+        
+        # Simulate worker sending success
         mock_plan = MagicMock()
         self.frame._on_analysis_success(self.frame._current_job_id, mock_plan)
         
-        # Verify
-        self.assertFalse(self.frame.ui_state.is_busy)
-        self.assertTrue(self.frame.ui_state.analysis_result_valid)
-        self.assertEqual(self.frame.ui_state.current_timing_plan, mock_plan)
-
-    @patch('gui_wx.main_frame.wx.ProgressDialog')
-    @patch('gui_wx.main_frame.wx.MessageBox')
-    @patch('gui_wx.main_frame.AnalysisWorker')
-    def test_run_analysis_error_state(self, mock_worker_class, mock_msgbox, mock_progress_dialog):
-        mock_worker_instance = MagicMock()
-        mock_worker_class.return_value = mock_worker_instance
-        
-        # Action
-        self.frame._run_analysis()
-        
-        # Simulate worker error
-        self.frame._on_analysis_error(self.frame._current_job_id, "Mock Exception")
-        
-        # Verify state
+        # Verify busy ended but result is discarded
         self.assertFalse(self.frame.ui_state.is_busy)
         self.assertFalse(self.frame.ui_state.analysis_result_valid)
         self.assertIsNone(self.frame.ui_state.current_timing_plan)
-        # Verify input was kept
-        self.assertEqual(self.frame.ui_state.selected_text_content, "あいうえお")
-        # Verify message box for error was called
-        self.assertTrue(mock_msgbox.called)
 
     @patch('gui_wx.main_frame.wx.ProgressDialog')
     @patch('gui_wx.main_frame.AnalysisWorker')
-    def test_double_start_guard(self, mock_worker_class, mock_progress_dialog):
+    def test_late_callback_discard(self, mock_worker_class, mock_progress_dialog):
         mock_worker_instance = MagicMock()
         mock_worker_class.return_value = mock_worker_instance
         
-        # Already busy
-        self.frame.ui_state.set_busy(True)
-        
-        # Attempt run
         self.frame._run_analysis()
         
-        # Verify worker not launched
-        self.assertFalse(mock_worker_instance.start.called)
+        # Save old job id
+        old_job_id = self.frame._current_job_id
+        
+        # Simulate starting a new job somehow (e.g. state reset)
+        self.frame._current_job_id += 1
+        
+        # Simulate old job sending success
+        mock_plan = MagicMock()
+        self.frame._on_analysis_success(old_job_id, mock_plan)
+        
+        # Result should not be accepted
+        self.assertFalse(self.frame.ui_state.analysis_result_valid)
+        self.assertIsNone(self.frame.ui_state.current_timing_plan)
+
+    @patch('gui_wx.main_frame.wx.ProgressDialog')
+    @patch('gui_wx.main_frame.AnalysisWorker')
+    def test_timeout_warning_updates_ui(self, mock_worker_class, mock_progress_dialog):
+        mock_worker_instance = MagicMock()
+        mock_worker_class.return_value = mock_worker_instance
+        
+        self.frame._run_analysis()
+        
+        # Verify dialog created
+        self.assertIsNotNone(self.frame._progress_dialog)
+        self.frame._progress_dialog.set_warning = MagicMock()
+        
+        # Fire timeout warning manually (simulate dummy timer)
+        self.frame._on_timeout_warning(None)
+        
+        # Should call set_warning on dialog
+        self.frame._progress_dialog.set_warning.assert_called_once()
+        self.assertTrue(self.frame.ui_state.is_busy) # still busy
+        self.assertFalse(self.frame._cancel_requested)
 
 if __name__ == "__main__":
     unittest.main()

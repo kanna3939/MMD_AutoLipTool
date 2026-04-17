@@ -1,5 +1,22 @@
 # MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
 
+## 2026-04-17 / MS14-B6 統合整理と parity closeout メモ
+
+- 対象: MS14-B6
+- 実装反映:
+  - `requirements.txt` に欠落していた `wxPython==4.2.5` を追加し、UTF-8 形式へ統一した。
+  - `pyproject.toml` の `packages.find.include` に `"gui_wx"` を追加し、ビルド対象漏れを防いだ。
+  - `tests/test_wx_ms14_b6_closeout.py` を新規追加し、B5B で追加された安全機構（Soft Cancel, Timeout, Late Callback Discard）の動作を検証する軽量統合テストを構築した。
+  - B5B の仕様変更に合わせて、破損していた既存のテスト群（`test_wx_ms14_b3_input.py`, `test_wx_ms14_b4_analysis.py`）を更新・修復した。
+  - `README.md` を更新し、現行バージョンが「MS14 主系実装完了」時点であることを反映した。
+- 確認状態:
+  - MS14 関連の wx 統合テストが全て通過し、安全に動作することを確認済み。
+  - 配布・パッケージングの前提となる依存ファイルや文書の整合状態を構築した。
+- 次のステップ (MS15 以降への引継ぎ事項):
+  - 以上の対応をもって MS14 は全て終了し、コア機能が wxPython GUI へ完全に移行・安定化した。
+  - 次なる MS15（波形描画の実装、プレビュー表示、再生位置同期などの中核部分の UX 復元）に着手可能な段階へ到達した。
+
+---
 ## 2026-04-17 / MS14-B5B Whisper 解析可用性 hardening と処理中 UI 補強 メモ
 
 - 対象: MS14-B5B

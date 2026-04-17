@@ -1,5 +1,23 @@
 # Version Control Log
 
+## Entry 2026-04-17 / Session: ms14-b6-parity-closeout
+
+- Date: 2026-04-17
+- Session: ms14-b6-parity-closeout
+- Summary:
+  - `MS14-B6: 統合整理と parity closeout` の実装を完了し、MS14 全体のマイルストーンを完了枠として閉じた。
+  - パッケージ化・依存関係（requirements.txt/pyproject.toml）の補完と、B5Bまでに実施した安全機構追加に伴う各種テスト破損の修復および新規統合確認テストの追加を行った。
+- Modified Files:
+  - `requirements.txt`: `wxPython==4.2.5` を追加し、エンコーディングを UTF-8 に統一。
+  - `pyproject.toml`: `packages.find.include` へ `"gui_wx"` を登録しパッケージ漏れを防止。
+  - `tests/test_wx_ms14_b3_input.py`, `tests/test_wx_ms14_b4_analysis.py`: Callbackシグネチャ変更（job_idの導入）とパス関連のアサーションを修正。
+  - `tests/test_wx_ms14_b6_closeout.py`: [NEW] Soft Cancel, Timeout Warning, Late Callback Discard等の安全機構に対するテストを追加。
+  - `README.md`: バージョン表示や機能一覧を、MS14実装完了/MS15保留機能の切り分けとして同期。
+- Notes:
+  - MS14（wxPython 基盤におけるコア機能と実用性の回復）はこれで完了状態となる。残るGUI機能（波形・プレビューおよび再生位置同期等）はMS15への引継ぎ扱いとなり影響範囲の混線を防ぐ。
+- Verification:
+  - `pytest tests` において対象の MS14 検証テストが全件通過することをもって保証。
+
 ## Entry 2026-04-11 / Session: ms14-b4-analysis-parity
 
 - Date: 2026-04-11
