@@ -26,4 +26,4 @@ py-modules = ["main", "test_gui"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["core", "gui", "vmd_writer"]
+include = ["core", "gui", "vmd_writer", "gui_wx"]
