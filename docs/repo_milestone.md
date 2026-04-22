@@ -1,5 +1,21 @@
 # MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
 
+## 2026-04-22 / MS15-B1 波形表示基盤実装 メモ
+
+- 対象: MS15-B1
+- 実装反映:
+  - `src/gui_wx/waveform_panel.py` を新設し、wxPython の `wx.GraphicsContext` を使った独自の波形描画基盤を構築した。
+  - `src/gui_wx/placeholder_panels.py` を更新し、上段の波形プレースホルダを実体の `WaveformPanel` に差し替えた。
+  - `src/gui_wx/main_frame.py` に、`core.audio_processing.load_waveform_preview` を利用して波形データを取得し、プレースホルダへ流し込む処理を追加した。
+  - 波形データ取得失敗時でもアプリを落とさずフォールバック表示させる安全機構を設けた。
+- 確認状態:
+  - GUIテストとして `tests/test_wx_ms15_b1_waveform.py` を追加し、正常に初期化・フォールバック・データセットができることを確認した。
+- 次のステップ (MS15-B2 以降への引継ぎ事項):
+  - 本ブロックの完了により、WAV読み込み時の「静的な波形表示」の基盤が整った。
+  - 次段以降 (B2/B3等) にて、プレビュー表示や再生処理（Playback）、再生カーソルの更新機能などを段階的に統合していく。
+
+---
+
 ## 2026-04-17 / MS14-B6 統合整理と parity closeout メモ
 
 - 対象: MS14-B6

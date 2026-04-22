@@ -1,4 +1,5 @@
 import wx
+from gui_wx.waveform_panel import WaveformPanel
 
 class PlaceholderContainer(wx.Panel):
     """
@@ -12,11 +13,7 @@ class PlaceholderContainer(wx.Panel):
     def _init_ui(self):
         sizer = wx.BoxSizer(wx.VERTICAL)
 
-        self.pnl_waveform = wx.Panel(self, style=wx.BORDER_SIMPLE)
-        wf_sizer = wx.BoxSizer(wx.VERTICAL)
-        self.st_waveform = wx.StaticText(self.pnl_waveform, label="[Placeholder] 波形エリア")
-        wf_sizer.Add(self.st_waveform, 1, wx.ALIGN_CENTER | wx.ALL, 10)
-        self.pnl_waveform.SetSizer(wf_sizer)
+        self.pnl_waveform = WaveformPanel(self)
 
         self.pnl_preview = wx.Panel(self, style=wx.BORDER_SIMPLE)
         pv_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -30,9 +27,11 @@ class PlaceholderContainer(wx.Panel):
         self.SetSizer(sizer)
 
     # --- View Helpers ---
+    def set_waveform_data(self, samples: list[float], duration_sec: float):
+        self.pnl_waveform.set_waveform_data(samples, duration_sec)
+
     def set_waveform_placeholder_text(self, text: str):
-        self.st_waveform.SetLabel(text)
-        self.pnl_waveform.Layout()
+        self.pnl_waveform.show_placeholder(text)
 
     def set_preview_placeholder_text(self, text: str):
         self.st_preview.SetLabel(text)

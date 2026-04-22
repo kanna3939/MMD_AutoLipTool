@@ -1,5 +1,25 @@
 # Version Control Log
 
+## Entry 2026-04-22 / Session: ms15-b1-waveform-foundation
+
+- Date: 2026-04-22
+- Session: ms15-b1-waveform-foundation
+- Summary:
+  - `MS15-B1: 波形表示基盤` の実装を完了した。
+  - 旧Qt側の matplotlib に依存した実装を切り捨て、wxPython ネイティブの `wx.GraphicsContext` による軽量な波形描画基盤を新設した。
+  - プレースホルダの波形領域を実体に置き換え、既存の波形プレビューデータを用いて描画を行うようにした。
+- Modified Files:
+  - `src/gui_wx/main_frame.py`: WAV読み込み時の波形表示データ取得とUIへの引き回しを追加。
+  - `src/gui_wx/placeholder_panels.py`: WaveformPanel のインスタンス化とデータ受け渡しルートの構築。
+- Added Files:
+  - `src/gui_wx/waveform_panel.py`: [NEW] 波形描画と時間ラベル表示を担うwxパネル。
+  - `tests/test_wx_ms15_b1_waveform.py`: [NEW] MS15-B1 の初期化とフォールバックを検証するテスト。
+- Notes:
+  - B1の責務（静的波形表示と再生位置の受け口）に集中し、プレビュー実体化(B2)や再生処理(B3)のスコープ越境を防いだ。
+  - 表示用データの取得でエラーが発生してもコア機能には影響しないフォールバック仕様とした。
+- Verification:
+  - `pytest tests/test_wx_ms15_b1_waveform.py` が正常に通過し、アプリ起動後の実波形描画を確認。
+
 ## Entry 2026-04-17 / Session: ms14-b6-parity-closeout
 
 - Date: 2026-04-17
