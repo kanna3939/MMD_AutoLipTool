@@ -9,7 +9,7 @@ from gui_wx.ui_state import UiState, StatusKey
 from gui_wx.analysis_worker import AnalysisWorker
 
 from core.text_processing import TextProcessingError, text_to_hiragana, hiragana_to_vowel_string, _validate_and_clean_text
-from core.audio_processing import analyze_wav_file, WavAnalysisResult
+from core.audio_processing import analyze_wav_file, WavAnalysisResult, load_waveform_preview
 
 class AnalysisProgressDialog(wx.Dialog):
     def __init__(self, parent, on_cancel_callback):
@@ -599,6 +599,14 @@ class MainFrame(wx.Frame):
                 wx.MessageBox(f"WAVの解析に失敗しました。\n{e}", "解析エラー", wx.OK | wx.ICON_ERROR)
             return
 
+        # [MS15-B1] 表示用波形データの取得
+        waveform_data = None
+        try:
+            waveform_data = load_waveform_preview(path)
+        except Exception:
+            # 表示用データの取得失敗時はアプリを落とさず、以降を継続する
+            pass
+
         # State 更新
         self.ui_state.selected_wav_path = path
         self.ui_state.last_wav_dialog_dir = os.path.dirname(path)
@@ -618,7 +626,11 @@ class MainFrame(wx.Frame):
         self.info_panel.set_wav_path(basename)
         info_text = f"Sample Rate: {analysis.sample_rate_hz}Hz\nChannels: {analysis.channel_count}\nDuration: {analysis.duration_sec:.2f}s"
         self.info_panel.set_wav_info(info_text)
-        self.placeholder_container.set_waveform_placeholder_text(f"{basename}\n(MS15で波形描画予定)")
+        
+        if waveform_data:
+            self.placeholder_container.set_waveform_data(waveform_data.samples, waveform_data.duration_sec)
+        else:
+            self.placeholder_container.set_waveform_placeholder_text(f"{basename}\n(波形表示エラー)")
 
         if self.ui_state.selected_text_path:
             self.ui_state.mark_ready_for_analysis()
