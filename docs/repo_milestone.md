@@ -1,5 +1,21 @@
 # MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
 
+## 2026-04-22 / MS15-B2 Preview 表示基盤実装 メモ
+
+- 対象: MS15-B2
+- 実装反映:
+  - `src/gui_wx/preview_panel.py` を新設し、wxPython 上で `preview_transform.build_preview_data` を用いた「5母音固定5段レーン」のプレビュー表示基盤を構築した。
+  - `src/gui_wx/placeholder_panels.py` を更新し、下段のプレビュー用プレースホルダを実体の `PreviewPanel` に差し替えた。
+  - `src/gui_wx/main_frame.py` にて、解析成功時にプレビューデータを生成して渡し、解析結果が無効 (`analysis_result_valid == False`) になった際はプレースホルダ表示へ戻す（クリアする）連携を実装した。
+  - プレビューの右端時間軸の正本を `selected_wav_analysis.duration_sec` とし、描画要素をこの範囲へ安全に clamp する境界処理を組み込んだ。
+- 確認状態:
+  - GUIテストとして `tests/test_wx_ms15_b2_preview.py` を追加し、データセットやエラー時のフォールバック、カーソル API の正常動作を確認した。
+  - B1 (波形表示) のテスト群と合わせて実行し、既存の実装・規約と競合していないことを確認済み。
+- 次のステップ (MS15-B3 以降への引継ぎ事項):
+  - 静的な波形表示 (B1) とプレビュー表示 (B2) が成立したため、次段以降 (B3 等) で実際の音声再生ロジックや、実時間での再生位置カーソル更新処理を繋ぎこむ。
+
+---
+
 ## 2026-04-22 / MS15-B1 波形表示基盤実装 メモ
 
 - 対象: MS15-B1

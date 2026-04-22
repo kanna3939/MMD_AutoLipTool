@@ -10,6 +10,7 @@ from gui_wx.analysis_worker import AnalysisWorker
 
 from core.text_processing import TextProcessingError, text_to_hiragana, hiragana_to_vowel_string, _validate_and_clean_text
 from core.audio_processing import analyze_wav_file, WavAnalysisResult, load_waveform_preview
+from gui.preview_transform import build_preview_data
 
 class AnalysisProgressDialog(wx.Dialog):
     def __init__(self, parent, on_cancel_callback):
@@ -531,6 +532,7 @@ class MainFrame(wx.Frame):
         self.ui_state.selected_hiragana_content = hiragana
         self.ui_state.selected_vowel_content = vowel
         self.ui_state.invalidate_analysis()
+        self.placeholder_container.set_preview_placeholder_text("テキストが変更されました。\n再解析が必要です。")
 
         # RECENT更新
         if path in self.ui_state.recent_text_files:
@@ -612,6 +614,7 @@ class MainFrame(wx.Frame):
         self.ui_state.last_wav_dialog_dir = os.path.dirname(path)
         self.ui_state.selected_wav_analysis = analysis
         self.ui_state.invalidate_analysis()
+        self.placeholder_container.set_preview_placeholder_text("WAVが変更されました。\n再解析が必要です。")
 
         # RECENT更新
         if path in self.ui_state.recent_wav_files:
@@ -733,8 +736,20 @@ class MainFrame(wx.Frame):
             return
 
         self.ui_state.mark_analysis_success(plan)
-        basename = os.path.basename(self.ui_state.selected_wav_path) if self.ui_state.selected_wav_path else ""
-        self.placeholder_container.set_preview_placeholder_text(f"[解析結果あり]\n(MS15でPreview描画予定)")
+        
+        # [MS15-B2] Generate Preview Data and send to PlaceholderContainer
+        duration_sec = self.ui_state.selected_wav_analysis.duration_sec if self.ui_state.selected_wav_analysis else 0.0
+        try:
+            preview_data = build_preview_data(
+                timeline=plan.timeline if plan else None,
+                observations=None,
+                closing_hold_frames=self.get_closing_hold_frames(),
+                closing_softness_frames=self.get_closing_softness_frames()
+            )
+            self.placeholder_container.set_preview_data(preview_data, duration_sec)
+        except Exception as e:
+            self.placeholder_container.set_preview_placeholder_text(f"[解析結果あり]\n(Preview表示エラー: {e})")
+
         self.ui_state.set_busy(False)
         self.update_action_states()
         self.update_status_display()

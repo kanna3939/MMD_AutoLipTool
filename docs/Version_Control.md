@@ -1,5 +1,25 @@
 # Version Control Log
 
+## Entry 2026-04-22 / Session: ms15-b2-preview-foundation
+
+- Date: 2026-04-22
+- Session: ms15-b2-preview-foundation
+- Summary:
+  - `MS15-B2: Preview 表示基盤` の実装を完了した。
+  - `wxPython` 上で `gui.preview_transform.build_preview_data` を用いた「5母音固定5段レーン」の確認用プレビュー描画基盤を構築した。
+  - 解析結果の状態 (`analysis_result_valid`) に応じてプレビュー表示とプレースホルダ表示を動的に切り替える仕組みを導入した。
+- Modified Files:
+  - `src/gui_wx/placeholder_panels.py`: プレースホルダ下段を `PreviewPanel` に差し替え、データ連携ルートを追加。
+  - `src/gui_wx/main_frame.py`: 解析結果が無効になった際のプレビュークリア処理と、解析成功時のデータ生成・パネルへの引き渡し処理を追加。
+- Added Files:
+  - `src/gui_wx/preview_panel.py`: [NEW] Preview描画ウィジェット。責務分割のため `PreviewModel`, `PreviewRenderer`, `PreviewPanel` の3クラスで構成。
+  - `tests/test_wx_ms15_b2_preview.py`: [NEW] MS15-B2用の検証テスト。
+- Notes:
+  - プレビューの右端時間軸は `selected_wav_analysis.duration_sec` で固定し、可視範囲の境界を逸脱しないよう clamp する安全処理を施した。
+  - 再生位置の受け口 (`set_playback_position_sec`, `clear_playback_cursor`) を整備したが、実際のタイマー更新等 (B3 以降の責務) は含めていない。
+- Verification:
+  - `pytest tests/test_wx_ms15_b2_preview.py` および `tests/test_wx_ms15_b1_waveform.py` が共に正常に通過することを確認した。
+
 ## Entry 2026-04-22 / Session: ms15-b1-waveform-foundation
 
 - Date: 2026-04-22
