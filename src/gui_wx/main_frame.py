@@ -254,10 +254,11 @@ class MainFrame(wx.Frame):
         self.btn_save_vmd.Enable(state.analysis_result_valid and not busy)
         self.mi_vmd_save.Enable(state.analysis_result_valid and not busy)
 
-        # --- B2時点の未実装項目 (常時disabled) ---
-        # 将来の再生系
-        self.btn_play.Enable(False)
-        self.btn_stop.Enable(False)
+        # --- [MS15-B3] 再生系の仮開放 ---
+        # B5で状態統合するまでは、WAVがあればPlay可能とする
+        can_play = bool(state.selected_wav_path)
+        self.btn_play.Enable(can_play and not busy)
+        self.btn_stop.Enable(can_play and not busy)
         # 設定・ヘルプ
         self.mi_settings.Enable(False)
         self.mi_help.Enable(False)
@@ -318,6 +319,14 @@ class MainFrame(wx.Frame):
         
     def set_preview_placeholder_text(self, text: str):
         self.placeholder_container.set_preview_placeholder_text(text)
+        
+    def set_playback_position_sec(self, position_sec: float | None):
+        """[MS15-B3] 再生位置を waveform と Preview の両方へ通知する"""
+        self.placeholder_container.set_playback_position_sec(position_sec)
+
+    def clear_playback_cursor(self):
+        """[MS15-B3] 再生位置をクリアする"""
+        self.placeholder_container.clear_playback_cursor()
         
     def get_morph_upper_limit(self) -> float:
         return self.param_panel.get_morph_upper_limit()
@@ -593,6 +602,9 @@ class MainFrame(wx.Frame):
                 wx.MessageBox("ファイルではなくディレクトリが選択されました。", "エラー", wx.OK | wx.ICON_ERROR)
             return
 
+        if self.controller and getattr(self.ui_state, 'is_playing', False):
+            self.controller.request_playback_stop()
+
         # 解析
         try:
             analysis = analyze_wav_file(path)
@@ -667,6 +679,9 @@ class MainFrame(wx.Frame):
 
         self._current_job_id += 1
         self._cancel_requested = False
+
+        if self.controller and getattr(self.ui_state, 'is_playing', False):
+            self.controller.request_playback_stop()
 
         # Busy状態の開始
         self.ui_state.set_busy(True)

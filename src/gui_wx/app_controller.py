@@ -2,6 +2,7 @@ import wx
 import os
 from gui.settings_store import SettingsStore
 from core import generate_vmd_from_text_wav
+from gui_wx.playback_controller import PlaybackController
 
 class WorkerHooks:
     """
@@ -29,6 +30,11 @@ class AppController:
         self.view = view
         self.worker_hooks = WorkerHooks(self)
         self.settings_store = SettingsStore()
+        
+        self.playback_controller = PlaybackController(
+            update_callback=self._on_playback_update,
+            finished_callback=self._on_playback_finished
+        )
         
         self._coalesced_save_timer = wx.Timer()
         self.view.Bind(wx.EVT_TIMER, self._on_save_timer, self._coalesced_save_timer)
@@ -111,14 +117,55 @@ class AppController:
     def request_run_analysis(self):
         self.update_status("解析実行要求 (Stub)")
 
+    def _on_playback_update(self, pos_sec: float):
+        if not self.view: return
+        st = self.view.ui_state
+        st.playback_position_sec = pos_sec
+        self.view.set_playback_position_sec(pos_sec)
+
+    def _on_playback_finished(self):
+        self.request_playback_stop()
+
     def request_playback_play(self):
-        self.update_status("再生要求 (Stub)")
+        if not self.view: return
+        st = self.view.ui_state
+        if st.is_busy:
+            return
+        if st.is_playing:
+            return
+        if not st.selected_wav_path:
+            return
+            
+        st.is_playing = True
+        st.playback_position_sec = 0.0
+        st.loaded_playback_path = st.selected_wav_path
+        
+        self.view.set_playback_position_sec(0.0)
+        self.update_status("再生中...")
+        
+        success = self.playback_controller.play(st.selected_wav_path)
+        if not success:
+            st.is_playing = False
+            self.view.clear_playback_cursor()
+            self.update_status("WAVの再生に失敗しました")
+            # 最小通知のみ
+            wx.MessageBox("WAVの再生に失敗しました。\n(再生バックエンドがファイルを開けませんでした)", "再生エラー", wx.OK | wx.ICON_WARNING)
+            self.view.update_status_display()
 
     def request_playback_pause(self):
-        self.update_status("一時停止要求 (Stub)")
+        # B3ではPauseは実装しない
+        pass
 
     def request_playback_stop(self):
-        self.update_status("停止要求 (Stub)")
+        if not self.view: return
+        self.playback_controller.stop()
+        
+        st = self.view.ui_state
+        st.is_playing = False
+        st.playback_position_sec = 0.0
+        self.view.clear_playback_cursor()
+        self.view.set_playback_position_sec(0.0)
+        self.view.update_status_display()
 
     def request_open_settings_dialog(self):
         self.update_status("設定画面表示要求 (Stub)")

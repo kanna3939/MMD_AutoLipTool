@@ -2254,3 +2254,24 @@
   - アセット画像（`assets/icons/MMD_AutoLipTool.ico`, `assets/MMD_AutoLipTool_splash.png`）の存在を前提とする。
 - Verification:
   - ローカル実行およびビルド後のEXE起動にて、タスクバー・タイトルバーのアイコンとスプラッシュの表示を確認。
+
+## Entry 2026-04-23 / Session: ms15-b3-playback-foundation
+
+- Date: 2026-04-23
+- Session: ms15-b3-playback-foundation
+- Summary:
+  - MS15-B3に基づくWAVの再生基盤と再生位置同期を実装した。
+  - Windows標準のMCI (mciSendStringW) を使用する `PlaybackController` を追加し、外部依存なしで再生・停止・位置取得を実現した。
+  - wx.Timer を用いて50ms周期で再生位置を polling し、WaveformPanel と PreviewPanel の両方へ同期反映する導線を追加した。
+  - 再生中の一時停止（Pause）は扱わず、常に 0.0 sec からの再生、停止/終了時も 0.0 sec への復帰とした。
+  - 解析中(busy)や入力変更時の再生競合回避（ガード処理）を組み込んだ。
+- Modified Files:
+  - `src/gui_wx/ui_state.py`: 再生状態プロパティの追加。
+  - `src/gui_wx/placeholder_panels.py`: 再生位置同期のブリッジメソッド追加。
+  - `src/gui_wx/main_frame.py`: ボタン活性化の一部仮開放と、競合時のガード処理の追加。
+  - `src/gui_wx/app_controller.py`: `PlaybackController`の導入、再生/停止リクエストとイベントコールバックの実装。
+- Added Files:
+  - `src/gui_wx/playback_controller.py`: MCIバックエンドの最小コントローラ。
+  - `tests/test_wx_ms15_b3_playback.py`: 再生関連の状態遷移とガード処理の自動テスト。
+- Verification:
+  - pytestによる状態遷移テストを通過。

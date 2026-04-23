@@ -41,6 +41,11 @@ class UiState:
     # UI / Application Related
     is_busy: bool = False
     status_key: StatusKey = StatusKey.IDLE
+    
+    # [MS15-B3] Playback State
+    is_playing: bool = False
+    playback_position_sec: float = 0.0
+    loaded_playback_path: Optional[str] = None
 
     def invalidate_analysis(self):
         """
