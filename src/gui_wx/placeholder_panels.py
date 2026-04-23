@@ -36,3 +36,11 @@ class PlaceholderContainer(wx.Panel):
 
     def set_preview_placeholder_text(self, text: str):
         self.pnl_preview.set_placeholder(text)
+
+    def set_playback_position_sec(self, position_sec: float | None):
+        self.pnl_waveform.set_playback_position_sec(position_sec)
+        self.pnl_preview.set_playback_position_sec(position_sec)
+
+    def clear_playback_cursor(self):
+        self.pnl_waveform.set_playback_position_sec(None)
+        self.pnl_preview.clear_playback_cursor()
