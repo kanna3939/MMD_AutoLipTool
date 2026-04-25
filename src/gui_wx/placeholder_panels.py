@@ -41,6 +41,14 @@ class PlaceholderContainer(wx.Panel):
         self.pnl_waveform.set_playback_position_sec(position_sec)
         self.pnl_preview.set_playback_position_sec(position_sec)
 
+    def set_viewport_sec(self, start_sec: float, end_sec: float):
+        self.pnl_waveform.set_viewport_sec(start_sec, end_sec)
+        self.pnl_preview.set_viewport_sec(start_sec, end_sec)
+
+    def clear_viewport_sec(self):
+        self.pnl_waveform.clear_viewport_sec()
+        self.pnl_preview.clear_viewport_sec()
+
     def clear_playback_cursor(self):
         self.pnl_waveform.set_playback_position_sec(None)
         self.pnl_preview.clear_playback_cursor()
