@@ -3,6 +3,7 @@ import os
 from gui.settings_store import SettingsStore
 from core import generate_vmd_from_text_wav
 from gui_wx.playback_controller import PlaybackController
+from gui_wx.viewport_controller import ViewportController
 
 class WorkerHooks:
     """
@@ -34,6 +35,11 @@ class AppController:
         self.playback_controller = PlaybackController(
             update_callback=self._on_playback_update,
             finished_callback=self._on_playback_finished
+        )
+        
+        # [MS15-B4] Viewport Controller
+        self.viewport_controller = ViewportController(
+            on_viewport_changed=self._on_viewport_changed
         )
         
         self._coalesced_save_timer = wx.Timer()
@@ -122,6 +128,9 @@ class AppController:
         st = self.view.ui_state
         st.playback_position_sec = pos_sec
         self.view.set_playback_position_sec(pos_sec)
+        
+        # [MS15-B4] Auto-follow check
+        self.viewport_controller.update_playback_position(pos_sec)
 
     def _on_playback_finished(self):
         self.request_playback_stop()
@@ -166,6 +175,23 @@ class AppController:
         self.view.clear_playback_cursor()
         self.view.set_playback_position_sec(0.0)
         self.view.update_status_display()
+
+    # --- [MS15-B4] Zoom Control ---
+    def notify_duration_changed(self, duration_sec: float):
+        self.viewport_controller.set_duration(duration_sec)
+
+    def _on_viewport_changed(self, start_sec: float, end_sec: float):
+        if self.view:
+            self.view.placeholder_container.set_viewport_sec(start_sec, end_sec)
+
+    def request_zoom_in(self):
+        self.viewport_controller.zoom_in()
+
+    def request_zoom_out(self):
+        self.viewport_controller.zoom_out()
+
+    def request_zoom_reset(self):
+        self.viewport_controller.reset_zoom()
 
     def request_open_settings_dialog(self):
         self.update_status("設定画面表示要求 (Stub)")

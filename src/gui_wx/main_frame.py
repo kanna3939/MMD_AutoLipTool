@@ -160,6 +160,11 @@ class MainFrame(wx.Frame):
         self.btn_play = wx.Button(self.top_panel, label="Play")
         self.btn_stop = wx.Button(self.top_panel, label="Stop")
         
+        # [MS15-B4] Zoom UI
+        self.btn_zoom_in = wx.Button(self.top_panel, label="Zoom In")
+        self.btn_zoom_out = wx.Button(self.top_panel, label="Zoom Out")
+        self.btn_zoom_reset = wx.Button(self.top_panel, label="Reset Zoom")
+        
         # ※ 各ボタンのEnable/Disableは _init_ui の最後にある update_action_states() にて一括管理する
         
         # レイアウト追加
@@ -173,6 +178,12 @@ class MainFrame(wx.Frame):
         top_sizer.AddSpacer(20)
         top_sizer.Add(self.btn_play, 0, flags_btn, 5)
         top_sizer.Add(self.btn_stop, 0, flags_btn | wx.RIGHT, 5)
+        
+        # [MS15-B4] Zoom UI 置き場
+        top_sizer.AddSpacer(20)
+        top_sizer.Add(self.btn_zoom_in, 0, flags_btn, 5)
+        top_sizer.Add(self.btn_zoom_out, 0, flags_btn, 5)
+        top_sizer.Add(self.btn_zoom_reset, 0, flags_btn | wx.RIGHT, 5)
         
         self.top_panel.SetSizer(top_sizer)
         
@@ -220,6 +231,11 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self._on_btn_play, self.btn_play)
         self.Bind(wx.EVT_BUTTON, self._on_btn_stop, self.btn_stop)
         
+        # [MS15-B4] Zoom UI Events
+        self.Bind(wx.EVT_BUTTON, self._on_btn_zoom_in, self.btn_zoom_in)
+        self.Bind(wx.EVT_BUTTON, self._on_btn_zoom_out, self.btn_zoom_out)
+        self.Bind(wx.EVT_BUTTON, self._on_btn_zoom_reset, self.btn_zoom_reset)
+        
         # [MS14-B2] UI生成後に Action State と Status表示を状態に合わせて初期化
         self.update_action_states()
         self.update_status_display()
@@ -254,11 +270,16 @@ class MainFrame(wx.Frame):
         self.btn_save_vmd.Enable(state.analysis_result_valid and not busy)
         self.mi_vmd_save.Enable(state.analysis_result_valid and not busy)
 
-        # --- [MS15-B3] 再生系の仮開放 ---
+        # [MS15-B3] 再生系の仮開放 ---
         # B5で状態統合するまでは、WAVがあればPlay可能とする
         can_play = bool(state.selected_wav_path)
         self.btn_play.Enable(can_play and not busy)
         self.btn_stop.Enable(can_play and not busy)
+        
+        # [MS15-B4] Zoom UI の仮開放
+        self.btn_zoom_in.Enable(can_play and not busy)
+        self.btn_zoom_out.Enable(can_play and not busy)
+        self.btn_zoom_reset.Enable(can_play and not busy)
         # 設定・ヘルプ
         self.mi_settings.Enable(False)
         self.mi_help.Enable(False)
@@ -613,6 +634,9 @@ class MainFrame(wx.Frame):
                 wx.MessageBox(f"WAVの解析に失敗しました。\n{e}", "解析エラー", wx.OK | wx.ICON_ERROR)
             return
 
+        if self.controller:
+            self.controller.notify_duration_changed(analysis.duration_sec)
+
         # [MS15-B1] 表示用波形データの取得
         waveform_data = None
         try:
@@ -801,6 +825,15 @@ class MainFrame(wx.Frame):
 
     def _on_btn_stop(self, event):
         if self.controller: self.controller.request_playback_stop()
+        
+    def _on_btn_zoom_in(self, event):
+        if self.controller: self.controller.request_zoom_in()
+
+    def _on_btn_zoom_out(self, event):
+        if self.controller: self.controller.request_zoom_out()
+
+    def _on_btn_zoom_reset(self, event):
+        if self.controller: self.controller.request_zoom_reset()
 
     def apply_settings(self, settings: dict):
         """

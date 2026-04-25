@@ -9,20 +9,35 @@ class PreviewModel:
     duration_sec: float = 0.0
     playback_position_sec: float | None = None
     is_valid: bool = False
+    viewport_start_sec: float = 0.0
+    viewport_end_sec: float = 0.0
 
     def set_data(self, data: PreviewData, duration_sec: float):
         self.data = data
         self.duration_sec = duration_sec
         self.is_valid = True
+        if self.viewport_start_sec == 0.0 and self.viewport_end_sec == 0.0:
+            self.viewport_end_sec = duration_sec
 
     def clear(self):
         self.data = empty_preview_data()
         self.duration_sec = 0.0
         self.playback_position_sec = None
         self.is_valid = False
+        self.viewport_start_sec = 0.0
+        self.viewport_end_sec = 0.0
 
     def set_playback_position(self, position_sec: float | None):
         self.playback_position_sec = position_sec
+
+    def set_viewport_sec(self, start_sec: float, end_sec: float):
+        self.viewport_start_sec = start_sec
+        self.viewport_end_sec = end_sec
+        
+    def clear_viewport_sec(self):
+        self.viewport_start_sec = 0.0
+        self.viewport_end_sec = self.duration_sec
+
 
 class PreviewRenderer:
     """[MS15-B2] Previewの描画を担当するレンダラー"""
@@ -72,11 +87,10 @@ class PreviewRenderer:
             gc.DrawText(vowel, 5, y + 2)
 
     def _time_to_x(self, time_sec: float, rect_width: float) -> float:
-        if self.model.duration_sec <= 0.0:
+        span = self.model.viewport_end_sec - self.model.viewport_start_sec
+        if span <= 0.0:
             return 0.0
-        # clamp
-        clamped = max(0.0, min(time_sec, self.model.duration_sec))
-        return (clamped / self.model.duration_sec) * rect_width
+        return ((time_sec - self.model.viewport_start_sec) / span) * rect_width
 
     def _draw_lanes(self, gc: wx.GraphicsContext, rect: wx.Rect):
         lane_height = rect.height / 5.0
@@ -96,7 +110,7 @@ class PreviewRenderer:
             
             for segment in row_data.segments:
                 # duration_secの範囲外なら描画しない（clampの結果、可視幅が0になるものを省く）
-                if segment.end_sec < 0.0 or segment.start_sec > self.model.duration_sec:
+                if segment.end_sec < self.model.viewport_start_sec or segment.start_sec > self.model.viewport_end_sec:
                     continue
                     
                 x_start = self._time_to_x(segment.start_sec, rect.width)
@@ -116,15 +130,20 @@ class PreviewRenderer:
         if self.model.playback_position_sec is None:
             return
             
-        x = self._time_to_x(self.model.playback_position_sec, rect.width)
-        
-        path = gc.CreatePath()
-        path.MoveToPoint(x, 0)
-        path.AddLineToPoint(x, rect.height)
-        
-        pen = wx.Pen(wx.Colour(248, 113, 113), 2, wx.PENSTYLE_SOLID)
-        gc.SetPen(pen)
-        gc.StrokePath(path)
+        span = self.model.viewport_end_sec - self.model.viewport_start_sec
+        if span <= 0:
+            return
+            
+        if self.model.viewport_start_sec <= self.model.playback_position_sec <= self.model.viewport_end_sec:
+            x = self._time_to_x(self.model.playback_position_sec, rect.width)
+            
+            path = gc.CreatePath()
+            path.MoveToPoint(x, 0)
+            path.AddLineToPoint(x, rect.height)
+            
+            pen = wx.Pen(wx.Colour(248, 113, 113), 2, wx.PENSTYLE_SOLID)
+            gc.SetPen(pen)
+            gc.StrokePath(path)
 
 class PreviewPanel(wx.Panel):
     """
@@ -157,6 +176,16 @@ class PreviewPanel(wx.Panel):
     def set_playback_position_sec(self, position_sec: float | None):
         """[MS15-B2] 再生位置カーソルの受け口 API"""
         self.model.set_playback_position(position_sec)
+        self.Refresh()
+
+    def set_viewport_sec(self, start_sec: float, end_sec: float):
+        """[MS15-B4] 表示範囲の更新"""
+        self.model.set_viewport_sec(start_sec, end_sec)
+        self.Refresh()
+
+    def clear_viewport_sec(self):
+        """[MS15-B4] 表示範囲のクリア"""
+        self.model.clear_viewport_sec()
         self.Refresh()
 
     def clear_playback_cursor(self):

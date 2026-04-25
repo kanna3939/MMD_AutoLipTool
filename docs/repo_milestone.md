@@ -1,5 +1,23 @@
 # MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
 
+## 2026-04-25 / MS15-B4 オートスクロールと再生中追従 UX 実装 メモ
+
+- 対象: MS15-B4
+- 実装反映:
+  - `src/gui_wx/waveform_panel.py` および `src/gui_wx/preview_panel.py` に `set_viewport_sec` と `clear_viewport_sec` を追加し、描画を可視範囲内に制限する機構を実装した。
+  - 高倍率ズーム時（`samples_per_pixel < 1.0`）における波形描画のドット散らばり問題を解決するため、サンプル単位での折れ線（Line plot）描画と連続パス化を組み込んだ。
+  - `src/gui_wx/viewport_controller.py` を新設し、X軸のZoom（1x/2x/4x/8x）や最小幅制約（0.25秒）、再生中追従（80%到達で発火、60%へ再配置）の状態管理を一元化（canonical shared viewport）した。
+  - `src/gui_wx/main_frame.py` の上部パネルに `Zoom In`, `Zoom Out`, `Reset Zoom` ボタンを追加し、ユーザー操作への導線を用意した。
+  - `src/gui_wx/app_controller.py` の再生位置更新ループに自動追従処理を接続し、音声読み込み時の全域表示（Reset Zoom）初期化を行った。
+- 確認状態:
+  - `tests/gui_wx/test_viewport_controller.py` を追加し、Zoom倍率の変化、クランプ制約、オートスクロールの閾値や再配置ロジックが正常に振る舞うことを単体テストで検証し、すべてパスすることを確認した。
+  - アプリケーションを起動し、ズームインした際の波形描画が正常な折れ線として表示されることを目視確認した。
+- 次のステップ (MS15-B5 以降への引継ぎ事項):
+  - 本ブロックの完了により、波形とプレビューの同期した部分表示・追従機能が成立した。
+  - 次段の MS15-B5 では、これらの表示状態と実際の音声再生状態（Play/Stop/Busy等）をアプリ全体の状態（State）として統合し、各種UIの有効・無効化（Enable/Disable）ルールを整理していく。
+
+---
+
 ## 2026-04-22 / MS15-B2 Preview 表示基盤実装 メモ
 
 - 対象: MS15-B2
