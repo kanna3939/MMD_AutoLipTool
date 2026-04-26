@@ -291,12 +291,15 @@ class MainFrame(wx.Frame):
         self.btn_stop.Enable(can_stop)
         
         # [MS15-B5] Zoom UI の仮開放
-        can_zoom = state.playback_ready and not busy
-        # TODO: ZoomIn/Outは実際にはB4 viewport controllerの内部状態を参照するのが望ましいが
-        # ここでは最低限のガードとする
-        self.btn_zoom_in.Enable(can_zoom)
-        self.btn_zoom_out.Enable(can_zoom)
-        self.btn_zoom_reset.Enable(can_zoom)
+        if self.controller:
+            zoom_state = self.controller.get_zoom_action_state()
+            self.btn_zoom_in.Enable(zoom_state["zoom_in"])
+            self.btn_zoom_out.Enable(zoom_state["zoom_out"])
+            self.btn_zoom_reset.Enable(zoom_state["zoom_reset"])
+        else:
+            self.btn_zoom_in.Enable(False)
+            self.btn_zoom_out.Enable(False)
+            self.btn_zoom_reset.Enable(False)
         
         # 設定・ヘルプ
         self.mi_settings.Enable(False)

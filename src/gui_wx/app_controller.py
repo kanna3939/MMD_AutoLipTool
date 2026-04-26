@@ -186,13 +186,50 @@ class AppController:
             self.view.placeholder_container.set_viewport_sec(start_sec, end_sec)
 
     def request_zoom_in(self):
-        self.viewport_controller.zoom_in()
+        if not self.view: return
+        st = self.view.ui_state
+        self.viewport_controller.zoom_in(
+            is_playing=st.is_playing,
+            playback_position_sec=st.playback_position_sec
+        )
 
     def request_zoom_out(self):
-        self.viewport_controller.zoom_out()
+        if not self.view: return
+        st = self.view.ui_state
+        self.viewport_controller.zoom_out(
+            is_playing=st.is_playing,
+            playback_position_sec=st.playback_position_sec
+        )
 
     def request_zoom_reset(self):
         self.viewport_controller.reset_zoom()
+
+    def get_zoom_action_state(self) -> dict[str, bool]:
+        """[MS15-B5] Helper for Zoom UI action states"""
+        state = {
+            "zoom_in": False,
+            "zoom_out": False,
+            "zoom_reset": False
+        }
+        
+        if not self.view: return state
+        ui_st = self.view.ui_state
+        
+        can_zoom_common = (
+            ui_st.selected_wav_analysis is not None and 
+            ui_st.selected_wav_analysis.duration_sec > 0 and
+            self.viewport_controller is not None and
+            self.viewport_controller.duration_sec > 0 and
+            not ui_st.is_busy
+        )
+        
+        if can_zoom_common:
+            zf = self.viewport_controller.zoom_factor
+            state["zoom_in"] = (zf < 8)
+            state["zoom_out"] = (zf > 1)
+            state["zoom_reset"] = True
+            
+        return state
 
     def request_open_settings_dialog(self):
         self.update_status("設定画面表示要求 (Stub)")

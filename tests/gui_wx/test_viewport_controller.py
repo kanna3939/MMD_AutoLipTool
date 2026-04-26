@@ -104,3 +104,34 @@ def test_auto_follow_clamp():
     # Since end > duration, clamp to end = 10.0, start = 5.0
     assert abs(ctrl.viewport_end_sec - 10.0) < 1e-5
     assert abs(ctrl.viewport_start_sec - 5.0) < 1e-5
+
+def test_playback_zoom_anchor():
+    updates = []
+    ctrl = ViewportController(lambda s, e: updates.append((s, e)))
+    ctrl.set_duration(10.0)
+    
+    # 1x full range から 2x に zoom in
+    # is_playing=True, playback_position_sec=6.0
+    # 2x の span は 5.0 sec
+    # anchor ratio 0.6 なので、期待 start は 6.0 - 5.0 * 0.6 = 3.0
+    # 期待 end は 8.0
+    ctrl.zoom_in(is_playing=True, playback_position_sec=6.0)
+    
+    assert ctrl.zoom_factor == 2
+    assert abs(ctrl.viewport_start_sec - 3.0) < 1e-5
+    assert abs(ctrl.viewport_end_sec - 8.0) < 1e-5
+
+def test_playback_zoom_anchor_clamp():
+    updates = []
+    ctrl = ViewportController(lambda s, e: updates.append((s, e)))
+    ctrl.set_duration(10.0)
+    
+    # 1x full range から 2x に zoom in
+    # is_playing=True, playback_position_sec=9.5
+    # 期待 start は 9.5 - 5.0 * 0.6 = 6.5
+    # 期待 end は 11.5 -> clamped to 10.0, start to 5.0
+    ctrl.zoom_in(is_playing=True, playback_position_sec=9.5)
+    
+    assert ctrl.zoom_factor == 2
+    assert abs(ctrl.viewport_start_sec - 5.0) < 1e-5
+    assert abs(ctrl.viewport_end_sec - 10.0) < 1e-5

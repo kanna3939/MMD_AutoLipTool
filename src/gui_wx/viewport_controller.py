@@ -18,16 +18,22 @@ class ViewportController:
         self.duration_sec = max(0.0, duration_sec)
         self.reset_zoom()
 
-    def zoom_in(self):
+    def zoom_in(self, *, is_playing: bool = False, playback_position_sec: float | None = None):
         if self.duration_sec <= 0: return
         if self.zoom_factor < 8:
             self.zoom_factor *= 2
-            self._apply_zoom_from_center()
+            self._apply_zoom(is_playing, playback_position_sec)
 
-    def zoom_out(self):
+    def zoom_out(self, *, is_playing: bool = False, playback_position_sec: float | None = None):
         if self.duration_sec <= 0: return
         if self.zoom_factor > 1:
             self.zoom_factor //= 2
+            self._apply_zoom(is_playing, playback_position_sec)
+
+    def _apply_zoom(self, is_playing: bool, playback_position_sec: float | None):
+        if is_playing and playback_position_sec is not None:
+            self._resolve_viewport(playback_position_sec, anchor_ratio=0.6)
+        else:
             self._apply_zoom_from_center()
 
     def reset_zoom(self):
