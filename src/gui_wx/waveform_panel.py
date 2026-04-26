@@ -1,5 +1,5 @@
 import wx
-
+from gui_wx.theme import ThemeManager
 class WaveformPanel(wx.Panel):
     """
     [MS15-B1] 波形表示用の wx.Panel.
@@ -64,8 +64,10 @@ class WaveformPanel(wx.Panel):
         
         rect = self.GetClientRect()
         
+        palette = ThemeManager.get_palette()
+        
         # Background
-        dc.SetBackground(wx.Brush(wx.Colour(32, 38, 47)))
+        dc.SetBackground(wx.Brush(palette.preview_lane_bg))
         dc.Clear()
         
         if not self._samples or self._duration_sec <= 0.0:
@@ -78,7 +80,8 @@ class WaveformPanel(wx.Panel):
         self._draw_cursor(gc, rect)
         
     def _draw_placeholder(self, dc: wx.DC, rect: wx.Rect):
-        dc.SetTextForeground(wx.Colour(174, 182, 194))
+        palette = ThemeManager.get_palette()
+        dc.SetTextForeground(palette.muted_text)
         font = self.GetFont()
         dc.SetFont(font)
         text_w, text_h = dc.GetTextExtent(self._placeholder_msg)
@@ -90,7 +93,8 @@ class WaveformPanel(wx.Panel):
         path = gc.CreatePath()
         path.MoveToPoint(0, rect.height / 2.0)
         path.AddLineToPoint(rect.width, rect.height / 2.0)
-        pen = wx.Pen(wx.Colour(81, 96, 114), 1, wx.PENSTYLE_SOLID)
+        palette = ThemeManager.get_palette()
+        pen = wx.Pen(palette.waveform_grid, 1, wx.PENSTYLE_SOLID)
         gc.SetPen(pen)
         gc.StrokePath(path)
 
@@ -171,13 +175,15 @@ class WaveformPanel(wx.Panel):
                     path.AddLineToPoint(x, y_min)
                     path.AddLineToPoint(x, y_max)
             
-        pen = wx.Pen(wx.Colour(124, 198, 254), 1, wx.PENSTYLE_SOLID)
+        palette = ThemeManager.get_palette()
+        pen = wx.Pen(palette.waveform_line, 1, wx.PENSTYLE_SOLID)
         gc.SetPen(pen)
         gc.StrokePath(path)
 
     def _draw_labels(self, gc: wx.GraphicsContext, rect: wx.Rect):
+        palette = ThemeManager.get_palette()
         font = self.GetFont()
-        gc.SetFont(font, wx.Colour(216, 222, 233))
+        gc.SetFont(font, palette.text_fg)
         
         left_text = f"{self._viewport_start_sec:.2f} sec"
         gc.DrawText(left_text, 5, rect.height - 20)
@@ -201,6 +207,7 @@ class WaveformPanel(wx.Panel):
             path.MoveToPoint(x, 0)
             path.AddLineToPoint(x, rect.height)
             
-            pen = wx.Pen(wx.Colour(248, 113, 113), 2, wx.PENSTYLE_SOLID)
+            palette = ThemeManager.get_palette()
+            pen = wx.Pen(palette.playback_cursor, 2, wx.PENSTYLE_SOLID)
             gc.SetPen(pen)
             gc.StrokePath(path)

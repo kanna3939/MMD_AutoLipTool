@@ -1,5 +1,23 @@
 # MMD_AutoLipTool GUI整備・機能拡張 マイルストーン一覧
 
+## 2026-04-26 / MS15-B5 表示・再生状態統合とテーマカラー復元 メモ
+
+- 対象: MS15-B5
+- 実装反映:
+  - `src/gui_wx/ui_state.py` を拡張し、`theme_mode`, `resolved_theme` に加え、UI制御の基点となる `playback_ready`, `analysis_ready` プロパティを追加した。
+  - `src/gui_wx/theme.py` を新設し、ライト/ダーク対応の `ThemePalette` 定義と、ウィンドウツリーへの再帰的適用を行う `ThemeManager` を実装した。
+  - `src/gui_wx/main_frame.py` に「テーマ」メニューを追加し、`update_action_states` 内で `is_busy`, `playback_ready`, `analysis_ready` を用いたボタン制御を整理した。
+  - `src/gui_wx/app_controller.py` に `request_change_theme` を実装し、設定保存と連動してテーマが切り替わるようにした。
+  - `src/gui_wx/waveform_panel.py` および `src/gui_wx/preview_panel.py` のカスタム描画処理において、ハードコードされていた色指定を `ThemeManager.get_palette()` 経由へ修正した。
+- 確認状態:
+  - `tests/test_wx_ms15_b5_state_theme.py` を追加し、新規導入された `UiState` プロパティの挙動が正常であることをテストした。
+  - アプリケーション起動時にテーマ設定が復元され、メニューから切り替えた際に波形やプレビューを含む全体が正しく再描画されることを確認した。
+- 次のステップ (MS15-B6 への引継ぎ事項):
+  - 本ブロックの完了により、B1〜B4で実装した個別機能（表示、再生、オートスクロール等）が、ひとつの状態管理下で矛盾なく動作するようになった。
+  - 次段の MS15-B6（MS15 全体の closeout）にて、ステータス文言の整理や微細なUXのブラッシュアップ、全体を通した最終確認を行う。
+
+---
+
 ## 2026-04-25 / MS15-B4 オートスクロールと再生中追従 UX 実装 メモ
 
 - 対象: MS15-B4

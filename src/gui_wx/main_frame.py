@@ -11,6 +11,7 @@ from gui_wx.analysis_worker import AnalysisWorker
 from core.text_processing import TextProcessingError, text_to_hiragana, hiragana_to_vowel_string, _validate_and_clean_text
 from core.audio_processing import analyze_wav_file, WavAnalysisResult, load_waveform_preview
 from gui.preview_transform import build_preview_data
+from gui_wx.theme import ThemeManager, ThemeMode
 
 class AnalysisProgressDialog(wx.Dialog):
     def __init__(self, parent, on_cancel_callback):
@@ -120,6 +121,14 @@ class MainFrame(wx.Frame):
         # 2. 設定/表示メニュー
         view_menu = wx.Menu()
         self.mi_settings = view_menu.Append(wx.ID_ANY, "設定(&S)...", "各種設定を行います")
+        
+        # [MS15-B5] テーマサブメニュー
+        self.theme_menu = wx.Menu()
+        self.mi_theme_system = self.theme_menu.AppendRadioItem(wx.ID_ANY, "システムに合わせる")
+        self.mi_theme_light = self.theme_menu.AppendRadioItem(wx.ID_ANY, "ライトテーマ")
+        self.mi_theme_dark = self.theme_menu.AppendRadioItem(wx.ID_ANY, "ダークテーマ")
+        self.mi_theme = view_menu.AppendSubMenu(self.theme_menu, "テーマ(&T)")
+        
         menubar.Append(view_menu, "設定/表示(&V)")
         
         # 3. ヘルプメニュー
@@ -139,6 +148,11 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda e: self._open_wav_file(), self.mi_wav_open)
         self.Bind(wx.EVT_MENU, self._on_mi_vmd_save, self.mi_vmd_save)
         self.Bind(wx.EVT_MENU, self._on_mi_settings, self.mi_settings)
+        
+        self.Bind(wx.EVT_MENU, lambda e: self._on_change_theme(ThemeMode.SYSTEM), self.mi_theme_system)
+        self.Bind(wx.EVT_MENU, lambda e: self._on_change_theme(ThemeMode.LIGHT), self.mi_theme_light)
+        self.Bind(wx.EVT_MENU, lambda e: self._on_change_theme(ThemeMode.DARK), self.mi_theme_dark)
+        
         self.Bind(wx.EVT_MENU, self._on_mi_help, self.mi_help)
         self.Bind(wx.EVT_MENU, self._on_mi_about, self.mi_about)
         self.Bind(wx.EVT_MENU, self._on_close, self.mi_exit)
@@ -266,20 +280,24 @@ class MainFrame(wx.Frame):
         self.btn_process.Enable(can_analyze and not busy)
 
         # --- VMD 保存 ---
-        # 解析結果が有効な場合のみ有効 (かつ非busy)
-        self.btn_save_vmd.Enable(state.analysis_result_valid and not busy)
-        self.mi_vmd_save.Enable(state.analysis_result_valid and not busy)
+        # [MS15-B5] 解析結果が有効な場合のみ有効 (かつ非busy)
+        self.btn_save_vmd.Enable(state.analysis_ready and not busy)
+        self.mi_vmd_save.Enable(state.analysis_ready and not busy)
 
-        # [MS15-B3] 再生系の仮開放 ---
-        # B5で状態統合するまでは、WAVがあればPlay可能とする
-        can_play = bool(state.selected_wav_path)
-        self.btn_play.Enable(can_play and not busy)
-        self.btn_stop.Enable(can_play and not busy)
+        # [MS15-B5] 再生系の仮開放 ---
+        can_play = state.playback_ready and not busy and not state.is_playing
+        can_stop = state.is_playing # busy中もストップは可能とする
+        self.btn_play.Enable(can_play)
+        self.btn_stop.Enable(can_stop)
         
-        # [MS15-B4] Zoom UI の仮開放
-        self.btn_zoom_in.Enable(can_play and not busy)
-        self.btn_zoom_out.Enable(can_play and not busy)
-        self.btn_zoom_reset.Enable(can_play and not busy)
+        # [MS15-B5] Zoom UI の仮開放
+        can_zoom = state.playback_ready and not busy
+        # TODO: ZoomIn/Outは実際にはB4 viewport controllerの内部状態を参照するのが望ましいが
+        # ここでは最低限のガードとする
+        self.btn_zoom_in.Enable(can_zoom)
+        self.btn_zoom_out.Enable(can_zoom)
+        self.btn_zoom_reset.Enable(can_zoom)
+        
         # 設定・ヘルプ
         self.mi_settings.Enable(False)
         self.mi_help.Enable(False)
@@ -835,6 +853,25 @@ class MainFrame(wx.Frame):
     def _on_btn_zoom_reset(self, event):
         if self.controller: self.controller.request_zoom_reset()
 
+    def _on_change_theme(self, mode: str):
+        if self.controller: self.controller.request_change_theme(mode)
+        
+    def apply_theme(self, mode: str):
+        """[MS15-B5] テーマを適用し、主要コンポーネントを再描画する"""
+        ThemeManager.apply_theme(mode, self)
+        
+        # Radio Itemのチェック状態を合わせる
+        if mode == ThemeMode.SYSTEM:
+            self.mi_theme_system.Check(True)
+        elif mode == ThemeMode.LIGHT:
+            self.mi_theme_light.Check(True)
+        elif mode == ThemeMode.DARK:
+            self.mi_theme_dark.Check(True)
+            
+        # 波形やプレビューなどの再描画
+        self.placeholder_container.Refresh()
+        self.Refresh()
+
     def apply_settings(self, settings: dict):
         """
         [MS13-B4] 起動時の設定反映。
@@ -861,6 +898,10 @@ class MainFrame(wx.Frame):
         self.ui_state.last_vmd_output_dir = settings.get("last_vmd_output_dir", "")
         self.ui_state.last_text_dialog_dir = settings.get("last_text_dialog_dir", "")
         self.ui_state.last_wav_dialog_dir = settings.get("last_wav_dialog_dir", "")
+        
+        # [MS15-B5] テーマの復元
+        self.ui_state.theme_mode = settings.get("theme", ThemeMode.SYSTEM)
+        self.apply_theme(self.ui_state.theme_mode)
         
         # invalid recent除去とメニュー構築（※この時点でのpruneによるsaveは最初の安全なタイミングに任せる）
         self._build_recent_menus()

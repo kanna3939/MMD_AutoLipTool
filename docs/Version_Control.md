@@ -1,5 +1,27 @@
 # Version Control Log
 
+## Entry 2026-04-26 / Session: ms15-b5-state-and-theme
+
+- Date: 2026-04-26
+- Session: ms15-b5-state-and-theme
+- Summary:
+  - `MS15-B5: 表示・再生状態統合とテーマカラー復元` の実装を完了した。
+  - `UiState` に `playback_ready` と `analysis_ready` を追加し、これらを用いて Play/Stop/Zoom 等の UI 操作可否を統合的に制御するようにした。
+  - Qt系に存在したテーマ機能（Light / Dark / System）をwxPython主系へ復元し、波形やプレビューの描画色をテーマに追従させた。
+- Modified Files:
+  - `src/gui_wx/ui_state.py`: テーマモードと各種 Ready プロパティの追加。
+  - `src/gui_wx/main_frame.py`: テーマメニューの追加、Action State のガード条件再定義、起動時のテーマ復元。
+  - `src/gui_wx/app_controller.py`: テーマ設定の保存と UI 通知フローの実装。
+  - `src/gui_wx/waveform_panel.py`, `src/gui_wx/preview_panel.py`: 描画色の `ThemeManager` 経由での解決。
+- Added Files:
+  - `src/gui_wx/theme.py`: `ThemeMode`, `ThemePalette`, `ThemeManager` の実装。
+  - `tests/test_wx_ms15_b5_state_theme.py`: 追加した状態管理のテスト。
+- Notes:
+  - 再生系(B3)・表示系(B1,B2,B4)が統合され、設定と連動した一貫性のあるUXが成立した。
+  - UXの細かな文言調整や完全なモックアップ再現は MS15-B6 に委ねている。
+- Verification:
+  - `pytest tests/test_wx_ms15_b5_state_theme.py` および全体のGUI操作にて検証。
+
 ## Entry 2026-04-22 / Session: ms15-b2-preview-foundation
 
 - Date: 2026-04-22
