@@ -64,6 +64,7 @@ class AppController:
         self._pending_save = False
         st = self.view.ui_state
         settings_dict = {
+            "theme": st.theme_mode,
             "recent_text_files": st.recent_text_files,
             "recent_wav_files": st.recent_wav_files,
             "last_vmd_output_dir": st.last_vmd_output_dir or "",
@@ -201,6 +202,12 @@ class AppController:
 
     def request_show_about(self):
         self.update_status("About表示要求 (Stub)")
+
+    def request_change_theme(self, mode: str):
+        if not self.view: return
+        self.view.ui_state.theme_mode = mode
+        self.view.apply_theme(mode)
+        self.request_settings_save()
         
     def request_exit(self):
         if self._pending_save:

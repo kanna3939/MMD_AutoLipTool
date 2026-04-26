@@ -42,10 +42,29 @@ class UiState:
     is_busy: bool = False
     status_key: StatusKey = StatusKey.IDLE
     
+    # [MS15-B5] Theme State
+    theme_mode: str = "system"
+    resolved_theme: str = "dark"
+    
     # [MS15-B3] Playback State
     is_playing: bool = False
     playback_position_sec: float = 0.0
     loaded_playback_path: Optional[str] = None
+
+    @property
+    def playback_ready(self) -> bool:
+        """
+        [MS15-B5] Indicates if a WAV file is loaded and can be played.
+        Does NOT depend on analysis_result_valid.
+        """
+        return bool(self.selected_wav_path)
+
+    @property
+    def analysis_ready(self) -> bool:
+        """
+        [MS15-B5] Indicates if the analysis result is valid and a timing plan exists.
+        """
+        return self.analysis_result_valid and self.current_timing_plan is not None
 
     def invalidate_analysis(self):
         """

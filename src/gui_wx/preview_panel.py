@@ -1,6 +1,7 @@
 import wx
 from dataclasses import dataclass
 from gui.preview_transform import PreviewData, PREVIEW_ROW_VOWELS, empty_preview_data
+from gui_wx.theme import ThemeManager
 
 @dataclass
 class PreviewModel:
@@ -53,8 +54,9 @@ class PreviewRenderer:
         }
 
     def render(self, gc: wx.GraphicsContext, rect: wx.Rect, font: wx.Font):
+        palette = ThemeManager.get_palette()
         # 背景
-        brush = wx.Brush(wx.Colour(32, 38, 47))
+        brush = wx.Brush(palette.preview_lane_bg)
         gc.SetBrush(brush)
         gc.DrawRectangle(rect.x, rect.y, rect.width, rect.height)
 
@@ -66,13 +68,14 @@ class PreviewRenderer:
         self._draw_cursor(gc, rect)
 
     def _draw_grid_and_labels(self, gc: wx.GraphicsContext, rect: wx.Rect, font: wx.Font):
+        palette = ThemeManager.get_palette()
         # 5段レーンの枠線と母音ラベル
         lane_height = rect.height / 5.0
         
-        pen = wx.Pen(wx.Colour(81, 96, 114), 1, wx.PENSTYLE_SOLID)
+        pen = wx.Pen(palette.waveform_grid, 1, wx.PENSTYLE_SOLID)
         gc.SetPen(pen)
         
-        gc.SetFont(font, wx.Colour(216, 222, 233))
+        gc.SetFont(font, palette.text_fg)
         
         for i, vowel in enumerate(PREVIEW_ROW_VOWELS):
             y = int(i * lane_height)
@@ -141,7 +144,8 @@ class PreviewRenderer:
             path.MoveToPoint(x, 0)
             path.AddLineToPoint(x, rect.height)
             
-            pen = wx.Pen(wx.Colour(248, 113, 113), 2, wx.PENSTYLE_SOLID)
+            palette = ThemeManager.get_palette()
+            pen = wx.Pen(palette.playback_cursor, 2, wx.PENSTYLE_SOLID)
             gc.SetPen(pen)
             gc.StrokePath(path)
 
@@ -203,10 +207,11 @@ class PreviewPanel(wx.Panel):
         rect = self.GetClientRect()
         
         if not self.model.is_valid:
+            palette = ThemeManager.get_palette()
             # Placeholder描画
-            dc.SetBackground(wx.Brush(wx.SystemSettings.GetColour(wx.SYS_COLOUR_WINDOW)))
+            dc.SetBackground(wx.Brush(palette.panel_bg))
             dc.Clear()
-            dc.SetTextForeground(wx.SystemSettings.GetColour(wx.SYS_COLOUR_GRAYTEXT))
+            dc.SetTextForeground(palette.muted_text)
             font = self.GetFont()
             dc.SetFont(font)
             # Center text
