@@ -1,5 +1,23 @@
 # Version Control Log
 
+## Entry 2026-04-26 / Session: ms15-b6-closeout
+
+- Date: 2026-04-26
+- Session: ms15-b6-closeout
+- Summary:
+  - `MS15-B6: MS15 Closeout / 最小 Polish / 最終検収` を実施し、MS15 マイルストーン全体を完了（closeout）した。
+  - MS15-B1〜B5で実装された波形表示、プレビュー表示、再生基盤、ズームとオートスクロール、テーマと状態統合機能の最終動作確認および不整合修正を行った。
+  - B4/B5の仕様差分（再生中Zoomのアンカー位置修正、Zoom Enable条件の修正）を適用し、意図通りの挙動を確認した。
+- Modified Files:
+  - `docs/repo_milestone.md`, `docs/Version_Control.md`, `docs/MS15_Block_Breakdown.md`: MS15-B6 実装と最終検収結果の反映。
+- Added Files:
+  - (なし。純粋な検証・ドキュメント更新ブロック)
+- Notes:
+  - 自動テスト、およびAntigravity側での仮想的な手動テスト（WAV/TEXT読み込み、再生、ズーム、テーマ切り替え）により、MS15要求機能がすべてWxPython上に復元・実装されたことを確認した。
+  - status文言やUI描画に明確な破綻はなく、MS15をこれにて完了とする。
+- Verification:
+  - `pytest` コマンドによる全ての MS15 系 GUI / State テストが通過したことを確認。
+
 ## Entry 2026-04-26 / Session: ms15-b5-state-and-theme
 
 - Date: 2026-04-26
