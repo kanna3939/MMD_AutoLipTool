@@ -1,10 +1,18 @@
 import pytest
 import wx
 import os
+import unittest
 from unittest.mock import MagicMock, patch
 from gui_wx.app_controller import AppController
 from gui_wx.ui_state import UiState
 from gui.settings_store import SettingsStore, SettingsSaveResult
+
+@pytest.fixture(scope="module", autouse=True)
+def setup_wx_app():
+    app = wx.App.Get()
+    if not app:
+        app = wx.App(False)
+    yield app
 
 class MockView:
     def __init__(self):
@@ -25,6 +33,12 @@ class MockView:
 
     def Destroy(self):
         self.destroyed = True
+
+    def clear_playback_cursor(self): pass
+    def set_playback_position_sec(self, pos): pass
+    def update_status_display(self): pass
+    def update_action_states(self): pass
+    def Bind(self, *args, **kwargs): pass
 
 def test_vmd_export_success():
     view = MockView()
@@ -114,11 +128,16 @@ def test_closeEvent_save_failure_is_non_blocking():
         assert view.destroyed
 
 def test_dialog_dir_updated_on_load():
+    mock_analysis = MagicMock()
+    mock_analysis.duration_sec = 1.0
+    mock_analysis.sample_rate_hz = 44100
+    mock_analysis.channel_count = 2
+
     with patch("gui_wx.main_frame.wx.MessageBox"), \
          patch("gui_wx.main_frame.os.path.exists", return_value=True), \
          patch("gui_wx.main_frame.os.path.isdir", return_value=False), \
          patch("builtins.open", unittest.mock.mock_open(read_data="dummy")), \
-         patch("gui_wx.main_frame.analyze_wav_file"), \
+         patch("gui_wx.main_frame.analyze_wav_file", return_value=mock_analysis), \
          patch("gui_wx.main_frame._validate_and_clean_text", return_value="dummy"), \
          patch("gui_wx.main_frame.text_to_hiragana", return_value="dummy"), \
          patch("gui_wx.main_frame.hiragana_to_vowel_string", return_value="dummy"):
@@ -129,14 +148,14 @@ def test_dialog_dir_updated_on_load():
         except Exception:
             pass # App may already exist in tests
             
-        frame = MainFrame(None, default_settings={})
+        frame = MainFrame(None)
         
         # Test Text load
-        frame._open_text_file(quiet_path="C:/dummy/path/text.txt")
+        frame._open_text_file(quiet_path="C:/dummy/path/text.txt".replace("/", os.sep))
         assert frame.ui_state.last_text_dialog_dir == "C:/dummy/path".replace("/", os.sep)
         
         # Test Wav load
-        frame._open_wav_file(quiet_path="C:/dummy/path/audio.wav")
+        frame._open_wav_file(quiet_path="C:/dummy/path/audio.wav".replace("/", os.sep))
         assert frame.ui_state.last_wav_dialog_dir == "C:/dummy/path".replace("/", os.sep)
         
         frame.Destroy()

@@ -160,7 +160,8 @@ class AppController:
             self.update_status("WAVの再生に失敗しました")
             # 最小通知のみ
             wx.MessageBox("WAVの再生に失敗しました。\n(再生バックエンドがファイルを開けませんでした)", "再生エラー", wx.OK | wx.ICON_WARNING)
-            self.view.update_status_display()
+        if self.view:
+            self.view.sync_ui_state()
 
     def request_playback_pause(self):
         # B3ではPauseは実装しない
@@ -175,7 +176,7 @@ class AppController:
         st.playback_position_sec = 0.0
         self.view.clear_playback_cursor()
         self.view.set_playback_position_sec(0.0)
-        self.view.update_status_display()
+        self.view.sync_ui_state()
 
     # --- [MS15-B4] Zoom Control ---
     def notify_duration_changed(self, duration_sec: float):
@@ -192,6 +193,7 @@ class AppController:
             is_playing=st.is_playing,
             playback_position_sec=st.playback_position_sec
         )
+        if self.view: self.view.sync_ui_state()
 
     def request_zoom_out(self):
         if not self.view: return
@@ -200,9 +202,15 @@ class AppController:
             is_playing=st.is_playing,
             playback_position_sec=st.playback_position_sec
         )
+        if self.view: self.view.sync_ui_state()
 
     def request_zoom_reset(self):
         self.viewport_controller.reset_zoom()
+        if self.view: self.view.sync_ui_state()
+
+    def request_pan(self, delta_sec: float):
+        if not self.view: return
+        self.viewport_controller.pan(delta_sec)
 
     def get_zoom_action_state(self) -> dict[str, bool]:
         """[MS15-B5] Helper for Zoom UI action states"""

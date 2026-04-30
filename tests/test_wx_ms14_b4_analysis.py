@@ -29,6 +29,7 @@ class TestWXMS14B4Analysis(unittest.TestCase):
         self.frame.ui_state.selected_text_content = "あいうえお"
         self.frame.ui_state.selected_wav_path = "dummy.wav"
         self.frame.ui_state.selected_wav_analysis = MagicMock()
+        self.frame.ui_state.selected_wav_analysis.duration_sec = 1.0
         self.frame.ui_state.set_busy(False)
         self.frame.ui_state.invalidate_analysis()
 

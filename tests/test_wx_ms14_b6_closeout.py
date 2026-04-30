@@ -36,6 +36,8 @@ class TestWXMS14B6Closeout(unittest.TestCase):
     @patch('gui_wx.main_frame.AnalysisWorker')
     def test_soft_cancel_discards_result(self, mock_worker_class, mock_progress_dialog):
         mock_worker_instance = MagicMock()
+        self.frame.ui_state.selected_wav_analysis.duration_sec = 10.0
+        self.frame.controller.viewport_controller.duration_sec = 10.0
         mock_worker_class.return_value = mock_worker_instance
         
         self.frame._run_analysis()
@@ -58,6 +60,8 @@ class TestWXMS14B6Closeout(unittest.TestCase):
     @patch('gui_wx.main_frame.AnalysisWorker')
     def test_late_callback_discard(self, mock_worker_class, mock_progress_dialog):
         mock_worker_instance = MagicMock()
+        self.frame.ui_state.selected_wav_analysis.duration_sec = 10.0
+        self.frame.controller.viewport_controller.duration_sec = 10.0
         mock_worker_class.return_value = mock_worker_instance
         
         self.frame._run_analysis()
@@ -80,6 +84,8 @@ class TestWXMS14B6Closeout(unittest.TestCase):
     @patch('gui_wx.main_frame.AnalysisWorker')
     def test_timeout_warning_updates_ui(self, mock_worker_class, mock_progress_dialog):
         mock_worker_instance = MagicMock()
+        self.frame.ui_state.selected_wav_analysis.duration_sec = 10.0
+        self.frame.controller.viewport_controller.duration_sec = 10.0
         mock_worker_class.return_value = mock_worker_instance
         
         self.frame._run_analysis()

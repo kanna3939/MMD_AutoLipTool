@@ -42,6 +42,23 @@ class ViewportController:
         self.viewport_end_sec = self.duration_sec
         self._notify()
 
+    def pan(self, delta_sec: float):
+        if self.duration_sec <= 0 or self.zoom_factor == 1: return
+        span = self.viewport_end_sec - self.viewport_start_sec
+        new_start = self.viewport_start_sec + delta_sec
+        new_end = self.viewport_end_sec + delta_sec
+
+        if new_start < 0.0:
+            new_start = 0.0
+            new_end = span
+        elif new_end > self.duration_sec:
+            new_end = self.duration_sec
+            new_start = self.duration_sec - span
+
+        self.viewport_start_sec = new_start
+        self.viewport_end_sec = new_end
+        self._notify()
+
     def _apply_zoom_from_center(self):
         """[MS15-B4] Zoom anchor is current viewport center"""
         center_sec = (self.viewport_start_sec + self.viewport_end_sec) / 2.0

@@ -32,10 +32,11 @@ class TestWXMS14B3Input(unittest.TestCase):
         self.frame.ui_state.recent_text_files.clear()
         self.frame.ui_state.recent_wav_files.clear()
 
+    @patch('gui_wx.main_frame.os.path.isfile', return_value=True)
     @patch('gui_wx.main_frame.os.path.exists', return_value=True)
     @patch('gui_wx.main_frame.os.path.isdir', return_value=False)
     @patch('gui_wx.main_frame.open')
-    def test_open_text_file_quietly(self, mock_open, mock_isdir, mock_exists):
+    def test_open_text_file_quietly(self, mock_open, mock_isdir, mock_exists, mock_isfile):
         # Setup mock file reading
         mock_file = MagicMock()
         mock_file.read.return_value = "あいうえお"
@@ -54,10 +55,11 @@ class TestWXMS14B3Input(unittest.TestCase):
         # Should not auto-load since it was a quiet load itself
         self.assertIsNone(state.selected_wav_path)
 
+    @patch('gui_wx.main_frame.os.path.isfile', return_value=True)
     @patch('gui_wx.main_frame.analyze_wav_file')
     @patch('gui_wx.main_frame.os.path.exists', return_value=True)
     @patch('gui_wx.main_frame.os.path.isdir', return_value=False)
-    def test_open_wav_file_quietly(self, mock_isdir, mock_exists, mock_analyze):
+    def test_open_wav_file_quietly(self, mock_isdir, mock_exists, mock_analyze, mock_isfile):
         mock_analysis = MagicMock()
         mock_analysis.sample_rate = 44100
         mock_analysis.channels = 2

@@ -24,6 +24,14 @@ class PlaceholderContainer(wx.Panel):
 
         self.SetSizer(sizer)
 
+        self.on_pan_callback = None
+        self.pnl_waveform.on_pan_callback = self._on_pan
+        self.pnl_preview.on_pan_callback = self._on_pan
+
+    def _on_pan(self, delta_sec: float):
+        if self.on_pan_callback:
+            self.on_pan_callback(delta_sec)
+
     # --- View Helpers ---
     def set_waveform_data(self, samples: list[float], duration_sec: float):
         self.pnl_waveform.set_waveform_data(samples, duration_sec)

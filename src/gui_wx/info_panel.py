@@ -14,13 +14,14 @@ class InfoPanel(wx.Panel):
 
         # TEXT info
         self.st_text_path = wx.StaticText(self, label="TEXT: (未選択)")
-        self.tc_text_preview = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY)
-        self.tc_hiragana_preview = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY)
-        self.tc_vowel_preview = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY)
+        tc_style = wx.TE_MULTILINE | wx.TE_READONLY | wx.BORDER_SIMPLE
+        self.tc_text_preview = wx.TextCtrl(self, style=tc_style)
+        self.tc_hiragana_preview = wx.TextCtrl(self, style=tc_style)
+        self.tc_vowel_preview = wx.TextCtrl(self, style=tc_style)
 
         # WAV info
         self.st_wav_path = wx.StaticText(self, label="WAV: (未選択)")
-        self.tc_wav_info = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY)
+        self.tc_wav_info = wx.TextCtrl(self, style=tc_style)
 
         sizer.Add(self.st_text_path, 0, wx.ALL | wx.EXPAND, 5)
         sizer.Add(wx.StaticText(self, label="テキスト:"), 0, wx.LEFT | wx.RIGHT, 5)

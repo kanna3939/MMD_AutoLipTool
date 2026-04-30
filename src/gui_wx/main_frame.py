@@ -52,6 +52,10 @@ class AnalysisProgressDialog(wx.Dialog):
         self.pulse_timer.Start(50)
         
         self.Bind(wx.EVT_CLOSE, self._on_close)
+        
+        from gui_wx.theme import ThemeManager
+        if hasattr(parent, 'ui_state'):
+            ThemeManager.apply_theme(parent.ui_state.theme_mode, self)
 
     def _on_pulse_timer(self, event):
         self.gauge.Pulse()
@@ -97,10 +101,20 @@ class MainFrame(wx.Frame):
         self._timeout_timer = None
         self._worker = None
         
+        self._init_icon()
         self._init_menu()
         self._init_ui()
         self.Bind(wx.EVT_CLOSE, self._on_close)
         
+    def _init_icon(self):
+        from resource_utils import get_resource_path
+        icon_path = get_resource_path("assets/icons/MMD_AutoLipTool.ico")
+        if icon_path.is_file():
+            with wx.LogNull():
+                icon = wx.Icon(str(icon_path), wx.BITMAP_TYPE_ICO)
+                if icon.IsOk():
+                    self.SetIcon(icon)
+            
     def _init_menu(self):
         menubar = wx.MenuBar()
         
@@ -161,74 +175,11 @@ class MainFrame(wx.Frame):
         self.root_panel = wx.Panel(self)
         root_sizer = wx.BoxSizer(wx.VERTICAL)
         
-        # --- 1. 上部操作域 (Top Area) ---
-        self.top_panel = wx.Panel(self.root_panel, style=wx.BORDER_SIMPLE)
-        top_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self._init_top_panel()
+        self._init_param_panel()
+        self._init_center_panel()
+        self._init_bottom_panel()
         
-        # 主要操作ボタン群の配置
-        self.btn_open_text = wx.Button(self.top_panel, label="TEXT 読込")
-        self.btn_open_wav = wx.Button(self.top_panel, label="WAV 読込")
-        self.btn_process = wx.Button(self.top_panel, label="解析実行")
-        self.btn_save_vmd = wx.Button(self.top_panel, label="VMD 保存")
-        
-        self.btn_play = wx.Button(self.top_panel, label="Play")
-        self.btn_stop = wx.Button(self.top_panel, label="Stop")
-        
-        # [MS15-B4] Zoom UI
-        self.btn_zoom_in = wx.Button(self.top_panel, label="Zoom In")
-        self.btn_zoom_out = wx.Button(self.top_panel, label="Zoom Out")
-        self.btn_zoom_reset = wx.Button(self.top_panel, label="Reset Zoom")
-        
-        # ※ 各ボタンのEnable/Disableは _init_ui の最後にある update_action_states() にて一括管理する
-        
-        # レイアウト追加
-        flags_btn = wx.LEFT | wx.TOP | wx.BOTTOM | wx.ALIGN_CENTER_VERTICAL
-        top_sizer.Add(self.btn_open_text, 0, flags_btn, 5)
-        top_sizer.Add(self.btn_open_wav, 0, flags_btn, 5)
-        top_sizer.Add(self.btn_process, 0, flags_btn, 5)
-        top_sizer.Add(self.btn_save_vmd, 0, flags_btn, 5)
-        
-        # 再生ボタン群の置き場 (B3方針に基づき見せるだけ)
-        top_sizer.AddSpacer(20)
-        top_sizer.Add(self.btn_play, 0, flags_btn, 5)
-        top_sizer.Add(self.btn_stop, 0, flags_btn | wx.RIGHT, 5)
-        
-        # [MS15-B4] Zoom UI 置き場
-        top_sizer.AddSpacer(20)
-        top_sizer.Add(self.btn_zoom_in, 0, flags_btn, 5)
-        top_sizer.Add(self.btn_zoom_out, 0, flags_btn, 5)
-        top_sizer.Add(self.btn_zoom_reset, 0, flags_btn | wx.RIGHT, 5)
-        
-        self.top_panel.SetSizer(top_sizer)
-        
-        # --- 1.5. パラメータ入力行 (Parameter Area) [MS14-B1] ---
-        self.param_panel = ParameterPanel(self.root_panel)
-        
-        # --- 2. 中央主領域 (Center Area) [MS14-B1] ---
-        self.center_panel = wx.Panel(self.root_panel)
-        center_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        
-        # 左側情報パネルと右側プレースホルダコンテナを配置
-        self.info_panel = InfoPanel(self.center_panel)
-        self.placeholder_container = PlaceholderContainer(self.center_panel)
-        
-        # 1:2程度の幅比率で配置
-        center_sizer.Add(self.info_panel, 1, wx.EXPAND | wx.RIGHT, 5)
-        center_sizer.Add(self.placeholder_container, 2, wx.EXPAND | wx.LEFT, 5)
-        self.center_panel.SetSizer(center_sizer)
-        
-        # --- 3. 下部ステータス域 (Bottom Area) ---
-        self.bottom_panel = wx.Panel(self.root_panel, style=wx.BORDER_SIMPLE)
-        bottom_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        
-        self.st_status_main = wx.StaticText(self.bottom_panel, label="準備完了 (WX Mode)")
-        
-        # 左側に主要ステータス、右側に可変幅などの拡張余地を残すレイアウト設計
-        bottom_sizer.Add(self.st_status_main, 1, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
-        
-        self.bottom_panel.SetSizer(bottom_sizer)
-        
-        # --- ルートサイザーへの各領域の組み込み ---
         root_sizer.Add(self.top_panel, 0, wx.EXPAND | wx.ALL, 5)
         root_sizer.Add(self.param_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 5)
         root_sizer.Add(self.center_panel, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 5)
@@ -237,7 +188,105 @@ class MainFrame(wx.Frame):
         self.root_panel.SetSizer(root_sizer)
         self.root_panel.Layout()
         
-        # [MS13-B5] 実要素へのイベントバインド
+        self._bind_button_events()
+        
+        self.sync_ui_state()
+
+    def _set_button_icon(self, button: wx.Button, icon_filename: str, is_dark: bool):
+        from resource_utils import get_resource_path
+        icon_path = get_resource_path(f"assets/icons/toolbar/{icon_filename}")
+        if icon_path.is_file():
+            with wx.LogNull():
+                img = wx.Image(str(icon_path), wx.BITMAP_TYPE_PNG)
+            if img.IsOk():
+                if not is_dark:
+                    img.Replace(255, 255, 255, 0, 0, 0)
+                img = img.Scale(24, 24, wx.IMAGE_QUALITY_HIGH)
+                button.SetBitmap(wx.Bitmap(img))
+
+    def update_theme_icons(self, is_dark: bool):
+        if not hasattr(self, '_button_icons'):
+            return
+        for btn, filename in self._button_icons.items():
+            self._set_button_icon(btn, filename, is_dark)
+
+    def _init_top_panel(self):
+        self.top_panel = wx.Panel(self.root_panel)
+        top_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        
+        self.btn_open_text = wx.Button(self.top_panel, label="TEXT 読込")
+        self.btn_open_wav = wx.Button(self.top_panel, label="WAV 読込")
+        self.btn_process = wx.Button(self.top_panel, label="解析実行")
+        self.btn_save_vmd = wx.Button(self.top_panel, label="VMD 保存")
+        
+        self.btn_play = wx.Button(self.top_panel, label="Play")
+        self.btn_stop = wx.Button(self.top_panel, label="Stop")
+        
+        self.btn_zoom_in = wx.Button(self.top_panel, label="Zoom In")
+        self.btn_zoom_out = wx.Button(self.top_panel, label="Zoom Out")
+        self.btn_zoom_reset = wx.Button(self.top_panel, label="Reset Zoom")
+        
+        self._button_icons = {
+            self.btn_open_text: "textfileopen.png",
+            self.btn_open_wav: "wavfileopen.png",
+            self.btn_process: "execute.png",
+            self.btn_save_vmd: "vmdsave.png",
+            self.btn_play: "play.png",
+            self.btn_stop: "stop.png",
+            self.btn_zoom_in: "zoomin.png",
+            self.btn_zoom_out: "zoomout.png"
+        }
+        
+        from gui_wx.theme import ThemeManager
+        is_dark = ThemeManager.get_palette().is_dark
+        self.update_theme_icons(is_dark)
+        
+        flags_btn = wx.LEFT | wx.TOP | wx.BOTTOM | wx.ALIGN_CENTER_VERTICAL
+        top_sizer.Add(self.btn_open_text, 0, flags_btn, 5)
+        top_sizer.Add(self.btn_open_wav, 0, flags_btn, 5)
+        top_sizer.Add(self.btn_process, 0, flags_btn, 5)
+        top_sizer.Add(self.btn_save_vmd, 0, flags_btn, 5)
+        
+        top_sizer.AddSpacer(20)
+        top_sizer.Add(self.btn_play, 0, flags_btn, 5)
+        top_sizer.Add(self.btn_stop, 0, flags_btn | wx.RIGHT, 5)
+        
+        top_sizer.AddSpacer(20)
+        top_sizer.Add(self.btn_zoom_in, 0, flags_btn, 5)
+        top_sizer.Add(self.btn_zoom_out, 0, flags_btn, 5)
+        top_sizer.Add(self.btn_zoom_reset, 0, flags_btn | wx.RIGHT, 5)
+        
+        self.top_panel.SetSizer(top_sizer)
+
+    def _init_param_panel(self):
+        self.param_panel = ParameterPanel(self.root_panel)
+
+    def _init_center_panel(self):
+        self.center_panel = wx.Panel(self.root_panel)
+        center_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        
+        self.info_panel = InfoPanel(self.center_panel)
+        self.placeholder_container = PlaceholderContainer(self.center_panel)
+        self.placeholder_container.on_pan_callback = self._on_pan_request
+        
+        center_sizer.Add(self.info_panel, 1, wx.EXPAND | wx.RIGHT, 5)
+        center_sizer.Add(self.placeholder_container, 2, wx.EXPAND | wx.LEFT, 5)
+        self.center_panel.SetSizer(center_sizer)
+
+    def _on_pan_request(self, delta_sec: float):
+        if self.controller:
+            self.controller.request_pan(delta_sec)
+
+    def _init_bottom_panel(self):
+        self.bottom_panel = wx.Panel(self.root_panel)
+        bottom_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        
+        self.st_status_main = wx.StaticText(self.bottom_panel, label="準備完了 (WX Mode)")
+        bottom_sizer.Add(self.st_status_main, 1, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        
+        self.bottom_panel.SetSizer(bottom_sizer)
+
+    def _bind_button_events(self):
         self.Bind(wx.EVT_BUTTON, self._on_btn_open_text, self.btn_open_text)
         self.Bind(wx.EVT_BUTTON, self._on_btn_open_wav, self.btn_open_wav)
         self.Bind(wx.EVT_BUTTON, self._on_btn_process, self.btn_process)
@@ -245,14 +294,23 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self._on_btn_play, self.btn_play)
         self.Bind(wx.EVT_BUTTON, self._on_btn_stop, self.btn_stop)
         
-        # [MS15-B4] Zoom UI Events
         self.Bind(wx.EVT_BUTTON, self._on_btn_zoom_in, self.btn_zoom_in)
         self.Bind(wx.EVT_BUTTON, self._on_btn_zoom_out, self.btn_zoom_out)
         self.Bind(wx.EVT_BUTTON, self._on_btn_zoom_reset, self.btn_zoom_reset)
-        
-        # [MS14-B2] UI生成後に Action State と Status表示を状態に合わせて初期化
+
+    def sync_ui_state(self):
+        """[MS15-B5] 統合UI状態同期メソッド"""
         self.update_action_states()
         self.update_status_display()
+        
+        # current_timing_planが存在しない場合（未解析やファイル変更時など）はプレビューをクリア
+        if not self.ui_state.current_timing_plan:
+            pass # _update_preview_display() handles this now, or we can handle placeholder logic there
+            
+        self._update_preview_display()
+        
+        self.placeholder_container.Refresh()
+        self.param_panel.Refresh()
 
     def update_action_states(self):
         """
@@ -515,7 +573,7 @@ class MainFrame(wx.Frame):
     def _on_btn_open_wav(self, event):
         self._open_wav_file()
         
-    def _open_text_file(self, quiet_path: str = None):
+    def _open_text_file(self, quiet_path: str = None, auto_load_counterpart: bool = True):
         """ [MS14-B3] TEXTファイルを開き、処理してGUIに反映する """
         if quiet_path is None:
             dialog_dir = self.ui_state.last_text_dialog_dir or ""
@@ -604,17 +662,16 @@ class MainFrame(wx.Frame):
         # auto load 試行前に一旦更新し、GUI全体の整合性を担保
         if self.ui_state.selected_wav_path:
             self.ui_state.mark_ready_for_analysis()
-        self.update_action_states()
-        self.update_status_display()
+        self.sync_ui_state()
 
-        # Counterpart auto load (quiet_path == Noneの主導線の時のみ1回実行し、既読でないなら)
-        if quiet_path is None:
+        # Counterpart auto load
+        if auto_load_counterpart:
             stem = Path(path).stem
             wav_path = str(Path(path).with_name(stem + ".wav"))
-            if not self.ui_state.selected_wav_path:
-                self._open_wav_file(quiet_path=wav_path)
+            if os.path.exists(wav_path):
+                self._open_wav_file(quiet_path=wav_path, auto_load_counterpart=False)
 
-    def _open_wav_file(self, quiet_path: str = None):
+    def _open_wav_file(self, quiet_path: str = None, auto_load_counterpart: bool = True):
         """ [MS14-B3] WAVファイルを開き、処理してGUIに反映する """
         if quiet_path is None:
             dialog_dir = self.ui_state.last_wav_dialog_dir or ""
@@ -694,15 +751,14 @@ class MainFrame(wx.Frame):
 
         if self.ui_state.selected_text_path:
             self.ui_state.mark_ready_for_analysis()
-        self.update_action_states()
-        self.update_status_display()
+        self.sync_ui_state()
 
-        # Counterpart auto load (主導線のみ)
-        if quiet_path is None:
+        # Counterpart auto load
+        if auto_load_counterpart:
             stem = Path(path).stem
             text_path = str(Path(path).with_name(stem + ".txt"))
-            if not self.ui_state.selected_text_path:
-                self._open_text_file(quiet_path=text_path)
+            if os.path.exists(text_path):
+                self._open_text_file(quiet_path=text_path, auto_load_counterpart=False)
 
     def _on_btn_process(self, event):
         self._run_analysis()
@@ -730,8 +786,7 @@ class MainFrame(wx.Frame):
 
         # Busy状態の開始
         self.ui_state.set_busy(True)
-        self.update_action_states()
-        self.update_status_display()
+        self.sync_ui_state()
         
         self._progress_dialog = AnalysisProgressDialog(self, on_cancel_callback=self._on_analysis_cancel)
         self._progress_dialog.Show()
@@ -791,13 +846,22 @@ class MainFrame(wx.Frame):
             
         if self._cancel_requested:
             self.ui_state.set_busy(False)
-            self.update_action_states()
-            self.update_status_display()
+            self.sync_ui_state()
             return
 
         self.ui_state.mark_analysis_success(plan)
-        
-        # [MS15-B2] Generate Preview Data and send to PlaceholderContainer
+
+        self.ui_state.set_busy(False)
+        self.sync_ui_state()
+        if self.controller:
+            self.controller.flush_pending_save()
+            
+    def _update_preview_display(self):
+        plan = self.ui_state.current_timing_plan
+        if not plan:
+            self.placeholder_container.set_preview_placeholder_text("未解析（テキストまたはWavが変更されました）")
+            return
+            
         duration_sec = self.ui_state.selected_wav_analysis.duration_sec if self.ui_state.selected_wav_analysis else 0.0
         try:
             preview_data = build_preview_data(
@@ -810,12 +874,6 @@ class MainFrame(wx.Frame):
         except Exception as e:
             self.placeholder_container.set_preview_placeholder_text(f"[解析結果あり]\n(Preview表示エラー: {e})")
 
-        self.ui_state.set_busy(False)
-        self.update_action_states()
-        self.update_status_display()
-        if self.controller:
-            self.controller.flush_pending_save()
-        
     def _on_analysis_error(self, job_id, error):
         """ [MS14-B4] 解析失敗時のコールバック """
         if not self: return
@@ -825,15 +883,12 @@ class MainFrame(wx.Frame):
             
         if self._cancel_requested:
             self.ui_state.set_busy(False)
-            self.update_action_states()
-            self.update_status_display()
+            self.sync_ui_state()
             return
 
         self.ui_state.invalidate_analysis()
-        self.placeholder_container.set_preview_placeholder_text("[Placeholder] Preview エリア")
         self.ui_state.set_busy(False)
-        self.update_action_states()
-        self.update_status_display()
+        self.sync_ui_state()
         if self.controller:
             self.controller.flush_pending_save()
         wx.MessageBox(f"解析中にエラーが発生しました。\n{error}", "エラー", wx.OK | wx.ICON_ERROR)
@@ -862,6 +917,7 @@ class MainFrame(wx.Frame):
     def apply_theme(self, mode: str):
         """[MS15-B5] テーマを適用し、主要コンポーネントを再描画する"""
         ThemeManager.apply_theme(mode, self)
+        self.update_theme_icons(ThemeManager.get_palette().is_dark)
         
         # Radio Itemのチェック状態を合わせる
         if mode == ThemeMode.SYSTEM:
@@ -927,5 +983,6 @@ class MainFrame(wx.Frame):
 
     def _on_param_changed(self, event):
         event.Skip()
+        self._update_preview_display()
         if self.controller:
             self.controller.request_settings_save()

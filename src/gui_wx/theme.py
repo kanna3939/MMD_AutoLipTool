@@ -79,11 +79,15 @@ class ThemeManager:
         if isinstance(window, wx.Panel):
             window.SetBackgroundColour(palette.panel_bg)
             window.SetForegroundColour(palette.text_fg)
-        elif isinstance(window, wx.Frame):
+        elif isinstance(window, (wx.Frame, wx.Dialog)):
             window.SetBackgroundColour(palette.window_bg)
             window.SetForegroundColour(palette.text_fg)
             
         if isinstance(window, wx.StaticText):
+            window.SetForegroundColour(palette.text_fg)
+            
+        if isinstance(window, (wx.TextCtrl, wx.SpinCtrl, wx.SpinCtrlDouble, wx.Button)):
+            window.SetBackgroundColour(palette.panel_bg)
             window.SetForegroundColour(palette.text_fg)
             
         for child in window.GetChildren():

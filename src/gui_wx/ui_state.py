@@ -72,6 +72,7 @@ class UiState:
         Call this when inputs (paths or parameters) change.
         """
         self.analysis_result_valid = False
+        self.current_timing_plan = None
         self.analysis_pending_rebuild = True
         self.status_key = StatusKey.ANALYSIS_INVALIDATED
 

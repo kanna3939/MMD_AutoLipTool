@@ -12,9 +12,15 @@ from gui_wx.app import AutoLipToolApp
 def main() -> int:
     """
     アプリケーションのメインエントリポイント。
-    MS13-B1 段階として、wxPython アプリを初期化・起動する最小の責務のみを持ちます。
-    スプラッシュ画面、Windows固有のAppUserModelID設定などの付与は後続ブロックで扱います。
     """
+    import ctypes
+    if sys.platform == 'win32':
+        try:
+            myappid = 'kanna3939.MMD_AutoLipTool.app.0.4' # Arbitrary string
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        except AttributeError:
+            pass
+
     try:
         app = AutoLipToolApp(False)
         app.MainLoop()

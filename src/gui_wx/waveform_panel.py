@@ -21,6 +21,13 @@ class WaveformPanel(wx.Panel):
         
         self.Bind(wx.EVT_PAINT, self._on_paint)
         self.Bind(wx.EVT_SIZE, self._on_size)
+        
+        self.on_pan_callback = None
+        self._drag_start_x = None
+        self.Bind(wx.EVT_LEFT_DOWN, self._on_mouse_down)
+        self.Bind(wx.EVT_MOTION, self._on_mouse_motion)
+        self.Bind(wx.EVT_LEFT_UP, self._on_mouse_up)
+        self.Bind(wx.EVT_LEAVE_WINDOW, self._on_mouse_up)
 
     def set_waveform_data(self, samples: list[float], duration_sec: float):
         self._samples = samples
@@ -58,6 +65,31 @@ class WaveformPanel(wx.Panel):
         self.Refresh()
         event.Skip()
 
+    def _on_mouse_down(self, event):
+        self._drag_start_x = event.GetPosition().x
+        if not self.HasCapture():
+            self.CaptureMouse()
+        event.Skip()
+        
+    def _on_mouse_motion(self, event):
+        if event.Dragging() and event.LeftIsDown() and self._drag_start_x is not None:
+            dx = self._drag_start_x - event.GetPosition().x
+            if dx != 0 and self.on_pan_callback:
+                span = self._viewport_end_sec - self._viewport_start_sec
+                rect_width = self.GetClientRect().width
+                if rect_width > 0:
+                    delta_sec = (dx / rect_width) * span
+                    self.on_pan_callback(delta_sec)
+                    self._drag_start_x = event.GetPosition().x
+        event.Skip()
+
+    def _on_mouse_up(self, event):
+        if self._drag_start_x is not None:
+            self._drag_start_x = None
+            if self.HasCapture():
+                self.ReleaseMouse()
+        event.Skip()
+
     def _on_paint(self, event):
         dc = wx.AutoBufferedPaintDC(self)
         gc = wx.GraphicsContext.Create(dc)
@@ -67,8 +99,9 @@ class WaveformPanel(wx.Panel):
         palette = ThemeManager.get_palette()
         
         # Background
-        dc.SetBackground(wx.Brush(palette.preview_lane_bg))
-        dc.Clear()
+        dc.SetBrush(wx.Brush(palette.preview_lane_bg))
+        dc.SetPen(wx.Pen(palette.preview_lane_bg, 1, wx.PENSTYLE_TRANSPARENT))
+        dc.DrawRectangle(rect)
         
         if not self._samples or self._duration_sec <= 0.0:
             self._draw_placeholder(dc, rect)

@@ -122,12 +122,36 @@ class PreviewRenderer:
                 if w <= 0:
                     continue
                 
-                # intensityを使って高さを表現 (最大でlane_height - 4)
-                h = max(2.0, (lane_height - 4) * segment.intensity)
-                y = y_base + (lane_height - h) / 2.0
-                
-                # 角丸矩形で描画（shape_kindの詳細によらず区間として描く最小実装）
-                gc.DrawRoundedRectangle(x_start, y, w, h, 2.0)
+                if not segment.control_points:
+                    # Fallback to rectangle
+                    h = max(2.0, (lane_height - 4) * segment.intensity)
+                    y = y_base + (lane_height - h) / 2.0
+                    gc.DrawRoundedRectangle(x_start, y, w, h, 2.0)
+                else:
+                    max_h_lane = lane_height - 4
+                    center_y = y_base + lane_height / 2.0
+                    path = gc.CreatePath()
+                    
+                    first = True
+                    for cp in segment.control_points:
+                        cp_x = self._time_to_x(cp.time_sec, rect.width)
+                        cp_h = max_h_lane * cp.value
+                        cp_y_top = center_y - cp_h / 2.0
+                        if first:
+                            path.MoveToPoint(cp_x, cp_y_top)
+                            first = False
+                        else:
+                            path.AddLineToPoint(cp_x, cp_y_top)
+                            
+                    for cp in reversed(segment.control_points):
+                        cp_x = self._time_to_x(cp.time_sec, rect.width)
+                        cp_h = max_h_lane * cp.value
+                        cp_y_bottom = center_y + cp_h / 2.0
+                        path.AddLineToPoint(cp_x, cp_y_bottom)
+                        
+                    path.CloseSubpath()
+                    gc.FillPath(path, wx.WINDING_RULE)
+                    gc.StrokePath(path)
 
     def _draw_cursor(self, gc: wx.GraphicsContext, rect: wx.Rect):
         if self.model.playback_position_sec is None:
@@ -165,6 +189,13 @@ class PreviewPanel(wx.Panel):
         
         self.Bind(wx.EVT_PAINT, self._on_paint)
         self.Bind(wx.EVT_SIZE, self._on_size)
+        
+        self.on_pan_callback = None
+        self._drag_start_x = None
+        self.Bind(wx.EVT_LEFT_DOWN, self._on_mouse_down)
+        self.Bind(wx.EVT_MOTION, self._on_mouse_motion)
+        self.Bind(wx.EVT_LEFT_UP, self._on_mouse_up)
+        self.Bind(wx.EVT_LEAVE_WINDOW, self._on_mouse_up)
 
     def set_preview_data(self, data: PreviewData, duration_sec: float):
         """[MS15-B2] 解析成功時にプレビューデータをセットする"""
@@ -201,6 +232,31 @@ class PreviewPanel(wx.Panel):
         self.Refresh()
         event.Skip()
 
+    def _on_mouse_down(self, event):
+        self._drag_start_x = event.GetPosition().x
+        if not self.HasCapture():
+            self.CaptureMouse()
+        event.Skip()
+        
+    def _on_mouse_motion(self, event):
+        if event.Dragging() and event.LeftIsDown() and self._drag_start_x is not None:
+            dx = self._drag_start_x - event.GetPosition().x
+            if dx != 0 and self.on_pan_callback:
+                span = self.model.viewport_end_sec - self.model.viewport_start_sec
+                rect_width = self.GetClientRect().width
+                if rect_width > 0:
+                    delta_sec = (dx / rect_width) * span
+                    self.on_pan_callback(delta_sec)
+                    self._drag_start_x = event.GetPosition().x
+        event.Skip()
+
+    def _on_mouse_up(self, event):
+        if self._drag_start_x is not None:
+            self._drag_start_x = None
+            if self.HasCapture():
+                self.ReleaseMouse()
+        event.Skip()
+
     def _on_paint(self, event):
         dc = wx.AutoBufferedPaintDC(self)
         gc = wx.GraphicsContext.Create(dc)
@@ -209,8 +265,9 @@ class PreviewPanel(wx.Panel):
         if not self.model.is_valid:
             palette = ThemeManager.get_palette()
             # Placeholder描画
-            dc.SetBackground(wx.Brush(palette.panel_bg))
-            dc.Clear()
+            dc.SetBrush(wx.Brush(palette.panel_bg))
+            dc.SetPen(wx.Pen(palette.panel_bg, 1, wx.PENSTYLE_TRANSPARENT))
+            dc.DrawRectangle(rect)
             dc.SetTextForeground(palette.muted_text)
             font = self.GetFont()
             dc.SetFont(font)
