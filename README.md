@@ -79,7 +79,7 @@ python -m pip install -r requirements.txt
 
 ## ビルド方法
 
-PyInstaller の `onedir` 構成で Windows 実行ファイルを作成します。
+PyInstaller の `onefile` 構成で Windows 実行ファイルを作成します。
 
 ### 事前準備
 
@@ -111,7 +111,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1 -Clean -SmokeLaunch
 ### ビルド出力
 
 - ビルド定義: `MMD_AutoLipTool.spec`
-- 出力形式: `onedir`
+- 出力形式: `onefile`
 - 出力先: `dist\MMD_AutoLipTool\MMD_AutoLipTool.exe`
 - FFmpeg 配置先: `dist\MMD_AutoLipTool\FFmpeg\`
 

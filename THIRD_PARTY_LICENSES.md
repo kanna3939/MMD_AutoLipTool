@@ -1,4 +1,4 @@
-﻿# THIRD_PARTY_LICENSES.md
+# THIRD_PARTY_LICENSES.md
 
 ## 1. Purpose
 
@@ -132,7 +132,7 @@ documented implementation state.
 
 ## 4. Current Distribution Assumption
 
-Current documented build policy is based on **PyInstaller onedir** output.
+Current documented build policy is based on **PyInstaller onefile** output.
 
 Documented included areas currently mention:
 
