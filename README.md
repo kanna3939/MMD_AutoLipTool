@@ -3,18 +3,18 @@
 Windows 向けの MikuMikuDance 用リップモーション生成ツールです。  
 UTF-8 のテキストファイル 1 件と PCM WAV ファイル 1 件を読み込み、母音モーフ `あ / い / う / え / お` を使った VMD を生成します。
 
-現在、GUI を wxPython へ移行中です（MS14 B1〜B6 の移行基盤完了時点）。
-現在のバージョン: `Ver. 0.4.0.0`（MS14 主系実装完了）
+現在、GUI を wxPython へ移行しています（MS15 にて波形・プレビュー・再生基盤の統合が完了しました）。
+現在のバージョン: `Ver. 0.4.0.0`（MS15 主系実装完了）
 
 ※ このツールはAIコーディングで作成されています。AIコーディング製ツールに不安がある方の使用は推奨しません。
 
 ## できること
 
 - TEXT からひらがな列・母音列を生成
-- WAV の基本情報読み込み (波形とPreview描画は現在 Placeholder / MS15予定)
+- WAV の基本情報読み込みと波形・Preview の実描画
 - 処理実行時に音声タイミングを解析して母音イベント列を生成
 - MMD 用の VMD リップモーションを書き出し
-- 波形表示と Preview の同期表示 (MS15にて本格実装予定)
+- 波形表示と Preview の同期表示、および再生中の追従スクロール
 - 処理実行中の二重実行防止 / 分析中止 / 長時間解析警告
 - TEXT / WAV の最近使ったファイル履歴
 - VMD 保存先フォルダの記憶と設定の保存・復元
@@ -160,6 +160,6 @@ FFmpeg を含むサードパーティライブラリの概要と配布時の確�
 実装マイルストーン、詳細仕様、開発ログは `docs/` 配下の文書を参照してください。
 
 - `docs/Specification_Prompt_v3.md`
-- `docs/MS12_Implementation_Roadmap.md`
+- `docs/Ver0_4_Expansion_Roadmap_for_Antigravity.md`
 - `docs/repo_milestone.md`
 - `docs/Version_Control.md`

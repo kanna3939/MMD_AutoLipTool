@@ -39,7 +39,7 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-$exePath = "dist\MMD_AutoLipTool\MMD_AutoLipTool.exe"
+$exePath = "dist\MMD_AutoLipTool.exe"
 if (!(Test-Path -Path $exePath)) {
     throw "Build output not found: $exePath"
 }
