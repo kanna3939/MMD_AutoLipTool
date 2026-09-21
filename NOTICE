@@ -1,0 +1,97 @@
+MMD AutoLip Tool
+Copyright (c) 2026 <kanna3939@VirtualJC>
+
+This project is distributed under the MIT License.
+See the LICENSE file for details.
+
+Plain-language notice:
+
+- This software is provided free of charge.
+- This software may be distributed as donationware.
+- Donations are optional and do not grant additional rights.
+- This software is provided "AS IS", without warranty of any kind.
+- The author is not responsible for any direct, indirect, incidental, special,
+  exemplary, or consequential damages arising from the use of this software.
+- Users are responsible for verifying generated output before using it in
+  production or creative work.
+
+Third-party software:
+
+This project uses third-party libraries and frameworks.
+See THIRD_PARTY_LICENSES.md for an overview of included dependencies and
+their respective license information.
+
+MS27-B3 status (2026-09-14):
+
+- The direct runtime dependencies are wxPython 4.2.5, matplotlib 3.10.8,
+  NumPy 2.4.3, openai-whisper 20250625, and pyopenjtalk 0.4.1.
+- The local development environment passed `pip check`, but this does not
+  establish the final onefile contents or complete release notices.
+- Package-provided license files have been identified for the Python dependency
+  candidates. Their final ZIP placement and all nested native/data notices are
+  still subject to the MS27 B4/B5 artifact checks.
+- G-LICENSE is Pass under the user-confirmed project policy: the current
+  FFmpeg version is retained, acquisition is recorded as starting from the
+  FFmpeg official Download page, current official license/legal references are
+  used, and an exact license-revision / binary-revision match is not required.
+  Exact archive correspondence and final artifact placement remain separate
+  provenance or B4/B5 checks.
+
+Additional note for binary distribution:
+
+When distributing binary builds, include this NOTICE file, the LICENSE file,
+and the applicable third-party license notices together with the distribution.
+
+MS27-B4 artifact status (2026-09-14):
+
+- The fix-03 onefile candidate passed build and SmokeLaunch, and its internal
+  archive excludes matplotlib package/data, sample_data, retired Qt bindings,
+  Torch test/TensorBoard trees, and the optional Numba TBB backend.
+- The candidate retains the Whisper, Torch, and Numba runtime modules required
+  by the current application path. This is an internal artifact audit result;
+  ZIP placement, extracted-package independence, and public release readiness
+  remain MS27-B5/B6 work.
+- The user reports that manual verification passed and that there was no issue
+  in actual MMD. This is user-reported evidence, not a Codex GUI or MMD run.
+
+Current FFmpeg note:
+
+- MS17 assumes manual staging of the currently selected FFmpeg build.
+- Only the `bin` contents are staged for build input.
+- The staged files are expected under `FFmpeg\bin\` before running `build.ps1`.
+- The bundled binary output is bundled within the executable (`onefile` mode).
+- The MS17 pre-check confirmed the staged FFmpeg build as
+  `N-123549-g70537ec8e6-20260318` with `--enable-gpl --enable-version3`.
+- The selected build contains ffmpeg.exe, ffprobe.exe, ffplay.exe, and the
+  avcodec, avdevice, avfilter, avformat, avutil, swresample, and swscale DLLs.
+- As of 2026-07-02, the staged `FFmpeg\bin\` binaries are tracked by Git;
+  GitHub-generated Source code ZIP / tar.gz archives should also be reviewed
+  as FFmpeg-containing distribution artifacts.
+- FFmpeg version and bundling notes must stay synchronized with
+  `README.md`, `THIRD_PARTY_LICENSES.md`, and the packaging documents.
+
+Network research supplement (2026-09-14):
+
+- The FFmpeg upstream revision corresponding to the local version suffix is
+  `70537ec8e6`, recorded as `N-123549-g70537ec8e6` on 2026-03-18 in the FFmpeg
+  FATE history.
+- The revision-pinned upstream license reference is
+  `https://raw.githubusercontent.com/FFmpeg/FFmpeg/70537ec8e6/LICENSE.md`.
+  The related `COPYING.LGPLv2.1`, `COPYING.LGPLv3`, `COPYING.GPLv2`, and
+  `COPYING.GPLv3` files are also identified from that source tree.
+- The local configuration includes `--enable-gpl`, `--enable-version3`, and
+  `--enable-shared`. The build is therefore recorded as GPL-enabled and
+  version3-enabled; this is not an unqualified `GPLv3` label.
+- The build signature is strongly consistent with BtbN's `win64` /
+  `gpl-shared` family. The user reports that the binaries were obtained via
+  the FFmpeg official Download page at acquisition time; the page links
+  externally compiled Windows builds and does not itself identify the exact
+  local archive. This provenance limitation is recorded without changing the
+  selected binaries.
+- FFmpeg's official legal guidance is referenced for the current license and
+  compliance information. Under the user-confirmed project policy, an exact
+  license-revision / binary-revision match is not required for the G-LICENSE
+  decision. The repository records the current official references, build
+  configuration, acquisition route, and notice guidance; final frozen/ZIP
+  placement remains a later artifact check. G-LICENSE is Pass under this
+  policy, not a claim of independently verified archive correspondence.

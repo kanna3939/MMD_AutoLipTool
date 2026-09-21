@@ -1,0 +1,683 @@
+from __future__ import annotations
+
+import configparser
+import json
+import math
+import os
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from tempfile import NamedTemporaryFile
+from typing import Any
+
+from .event_adjustment import validate_long_vowel_mode
+
+
+class ThemeStrings:
+    DARK = "dark"
+    LIGHT = "light"
+    SYSTEM = "system"
+    SUPPORTED = (DARK, LIGHT, SYSTEM)
+
+SETTINGS_FILE_NAME = "MMD_AutoLipTool.ini"
+
+_SECTION_UI = "ui"
+_SECTION_RECENT = "recent"
+
+_KEY_THEME = "theme"
+_KEY_CENTER_SPLITTER_RATIO = "center_splitter_ratio"
+_KEY_WINDOW_WIDTH = "window_width"
+_KEY_WINDOW_HEIGHT = "window_height"
+_KEY_LANGUAGE = "language"
+_KEY_MORPH_UPPER_LIMIT = "morph_upper_limit"
+_KEY_CLOSING_HOLD_FRAMES = "closing_hold_frames"
+_KEY_CLOSING_SOFTNESS_FRAMES = "closing_softness_frames"
+_KEY_LONG_VOWEL_MODE = "long_vowel_mode"
+_KEY_ACTIVE_PRESET_ID = "active_preset_id"
+_KEY_ACTIVE_MODEL_PROFILE_ID = "active_model_profile_id"
+_KEY_ACTIVE_PROFILE_BASELINE_PRESET_ID = "active_profile_baseline_preset_id"
+_KEY_WHISPER_MODELS_DIR = "whisper_models_dir"
+_KEY_SELECTED_WHISPER_MODEL_KEY = "selected_whisper_model_key"
+_KEY_ACTIVE_WHISPER_MODEL_KEY = "active_whisper_model_key"
+_KEY_ACTIVE_WHISPER_MANIFEST_IDENTITY = "active_whisper_manifest_identity"
+_KEY_RECENT_TEXT_FILES = "recent_text_files"
+_KEY_RECENT_WAV_FILES = "recent_wav_files"
+_KEY_LAST_VMD_OUTPUT_DIR = "last_vmd_output_dir"
+_KEY_LAST_MMD_WAV_EXPORT_DIR = "last_mmd_wav_export_dir"
+
+_ALLOWED_LANGUAGES = ("ja", "en")
+_DEFAULT_THEME = ThemeStrings.DARK
+_DEFAULT_CENTER_SPLITTER_RATIO = 0.3
+_DEFAULT_WINDOW_WIDTH = 1280
+_DEFAULT_WINDOW_HEIGHT = 740
+_DEFAULT_LANGUAGE = "ja"
+_DEFAULT_MORPH_UPPER_LIMIT = 0.5
+_DEFAULT_CLOSING_HOLD_FRAMES = 0
+_DEFAULT_CLOSING_SOFTNESS_FRAMES = 0
+_DEFAULT_LONG_VOWEL_MODE = "hold"
+_DEFAULT_ACTIVE_PRESET_ID: str | None = None
+_DEFAULT_ACTIVE_MODEL_PROFILE_ID: str | None = None
+_DEFAULT_ACTIVE_PROFILE_BASELINE_PRESET_ID: str | None = None
+_DEFAULT_SELECTED_WHISPER_MODEL_KEY = "small"
+_DEFAULT_ACTIVE_WHISPER_MODEL_KEY = "small"
+_DEFAULT_ACTIVE_WHISPER_MANIFEST_IDENTITY = ""
+_MIN_MORPH_UPPER_LIMIT = 0.0
+_MAX_MORPH_UPPER_LIMIT = 10.0
+_RECENT_FILE_LIMIT = 10
+
+
+@dataclass(frozen=True)
+class SettingsLoadResult:
+    settings: dict[str, Any]
+    settings_path: Path
+    file_exists: bool
+    load_error: str | None
+    invalid_keys: tuple[str, ...]
+    used_default_keys: tuple[str, ...]
+
+    @property
+    def had_error(self) -> bool:
+        return self.load_error is not None
+
+
+@dataclass(frozen=True)
+class SettingsSaveResult:
+    attempted: bool
+    succeeded: bool
+    settings_path: Path
+    save_disabled: bool
+    first_failure_in_session: bool
+    error_message: str | None
+
+    @property
+    def should_notify_user(self) -> bool:
+        return self.first_failure_in_session and self.error_message is not None
+
+
+class SettingsStore:
+    def __init__(self, settings_path: Path | None = None) -> None:
+        self._settings_path = settings_path or self.default_settings_path()
+        self._save_disabled = False
+        self._save_failure_reported = False
+        self._last_save_error: str | None = None
+
+    @property
+    def settings_path(self) -> Path:
+        return self._settings_path
+
+    @property
+    def last_save_error(self) -> str | None:
+        return self._last_save_error
+
+    @property
+    def save_disabled(self) -> bool:
+        return self._save_disabled
+
+    @classmethod
+    def default_settings_path(cls) -> Path:
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable).resolve().parent / SETTINGS_FILE_NAME
+        return Path(__file__).resolve().parents[2] / SETTINGS_FILE_NAME
+
+    @classmethod
+    def default_settings(cls) -> dict[str, Any]:
+        return {
+            _KEY_THEME: _DEFAULT_THEME,
+            _KEY_CENTER_SPLITTER_RATIO: _DEFAULT_CENTER_SPLITTER_RATIO,
+            _KEY_WINDOW_WIDTH: _DEFAULT_WINDOW_WIDTH,
+            _KEY_WINDOW_HEIGHT: _DEFAULT_WINDOW_HEIGHT,
+            _KEY_LANGUAGE: _DEFAULT_LANGUAGE,
+            _KEY_MORPH_UPPER_LIMIT: _DEFAULT_MORPH_UPPER_LIMIT,
+            _KEY_CLOSING_HOLD_FRAMES: _DEFAULT_CLOSING_HOLD_FRAMES,
+            _KEY_CLOSING_SOFTNESS_FRAMES: _DEFAULT_CLOSING_SOFTNESS_FRAMES,
+            _KEY_LONG_VOWEL_MODE: _DEFAULT_LONG_VOWEL_MODE,
+            _KEY_ACTIVE_PRESET_ID: _DEFAULT_ACTIVE_PRESET_ID,
+            _KEY_ACTIVE_MODEL_PROFILE_ID: _DEFAULT_ACTIVE_MODEL_PROFILE_ID,
+            _KEY_ACTIVE_PROFILE_BASELINE_PRESET_ID: _DEFAULT_ACTIVE_PROFILE_BASELINE_PRESET_ID,
+            _KEY_WHISPER_MODELS_DIR: "",
+            _KEY_SELECTED_WHISPER_MODEL_KEY: _DEFAULT_SELECTED_WHISPER_MODEL_KEY,
+            _KEY_ACTIVE_WHISPER_MODEL_KEY: _DEFAULT_ACTIVE_WHISPER_MODEL_KEY,
+            _KEY_ACTIVE_WHISPER_MANIFEST_IDENTITY: _DEFAULT_ACTIVE_WHISPER_MANIFEST_IDENTITY,
+            _KEY_RECENT_TEXT_FILES: [],
+            _KEY_RECENT_WAV_FILES: [],
+            _KEY_LAST_VMD_OUTPUT_DIR: "",
+            _KEY_LAST_MMD_WAV_EXPORT_DIR: "",
+        }
+
+    @classmethod
+    def normalize_settings(
+        cls,
+        settings: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any], tuple[str, ...], tuple[str, ...]]:
+        base = cls.default_settings()
+        raw_settings = dict(settings or {})
+        normalized: dict[str, Any] = {}
+        invalid_keys: list[str] = []
+        used_default_keys: list[str] = []
+
+        for key, default_value in base.items():
+            raw_value = raw_settings.get(key, default_value)
+            normalized_value, used_default = cls._normalize_value(key, raw_value)
+            normalized[key] = normalized_value
+            if used_default:
+                used_default_keys.append(key)
+                if key in raw_settings:
+                    invalid_keys.append(key)
+
+        return (normalized, tuple(invalid_keys), tuple(used_default_keys))
+
+    def load(self) -> SettingsLoadResult:
+        file_exists = self.settings_path.is_file()
+        defaults = self.default_settings()
+        if not file_exists:
+            return SettingsLoadResult(
+                settings=defaults,
+                settings_path=self.settings_path,
+                file_exists=False,
+                load_error=None,
+                invalid_keys=(),
+                used_default_keys=tuple(defaults.keys()),
+            )
+
+        parser = configparser.ConfigParser()
+        try:
+            with self.settings_path.open("r", encoding="utf-8") as fh:
+                parser.read_file(fh)
+        except (OSError, configparser.Error, UnicodeError, ValueError) as error:
+            return SettingsLoadResult(
+                settings=defaults,
+                settings_path=self.settings_path,
+                file_exists=True,
+                load_error=self._summarize_exception(error),
+                invalid_keys=(),
+                used_default_keys=tuple(defaults.keys()),
+            )
+
+        raw_settings = self._settings_from_parser(parser)
+        normalized, invalid_keys, used_default_keys = self.normalize_settings(raw_settings)
+        return SettingsLoadResult(
+            settings=normalized,
+            settings_path=self.settings_path,
+            file_exists=True,
+            load_error=None,
+            invalid_keys=invalid_keys,
+            used_default_keys=used_default_keys,
+        )
+
+    def can_save(self) -> bool:
+        return not self._save_disabled
+
+    def save(self, settings: dict[str, Any] | None) -> SettingsSaveResult:
+        if self._save_disabled:
+            return SettingsSaveResult(
+                attempted=False,
+                succeeded=False,
+                settings_path=self.settings_path,
+                save_disabled=True,
+                first_failure_in_session=False,
+                error_message=self._last_save_error,
+            )
+
+        raw_settings = dict(settings or {})
+        normalized_settings, _, _ = self.normalize_settings(raw_settings)
+        parser = self._build_parser_for_merge(
+            normalized_settings,
+            provided_keys=set(raw_settings),
+        )
+
+        try:
+            self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = self._write_temp_file(parser)
+            os.replace(temp_path, self.settings_path)
+        except OSError as error:
+            temp_path_ref = locals().get("temp_path")
+            if isinstance(temp_path_ref, Path):
+                try:
+                    temp_path_ref.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            self._last_save_error = self._summarize_exception(error)
+            first_failure = not self._save_failure_reported
+            self._save_failure_reported = True
+            self._save_disabled = True
+            return SettingsSaveResult(
+                attempted=True,
+                succeeded=False,
+                settings_path=self.settings_path,
+                save_disabled=True,
+                first_failure_in_session=first_failure,
+                error_message=self._last_save_error,
+            )
+
+        self._last_save_error = None
+        return SettingsSaveResult(
+            attempted=True,
+            succeeded=True,
+            settings_path=self.settings_path,
+            save_disabled=False,
+            first_failure_in_session=False,
+            error_message=None,
+        )
+
+    def _write_temp_file(self, parser: configparser.ConfigParser) -> Path:
+        temp_path: Path | None = None
+        try:
+            with NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                delete=False,
+                dir=str(self.settings_path.parent),
+                prefix="mmd_autoliptool_",
+                suffix=".tmp",
+            ) as fh:
+                temp_path = Path(fh.name)
+                parser.write(fh)
+            return temp_path
+        except Exception:
+            if temp_path is not None:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise
+
+    def _build_parser_for_merge(
+        self,
+        settings: dict[str, Any],
+        *,
+        provided_keys: set[str] | None = None,
+    ) -> configparser.ConfigParser:
+        parser = configparser.ConfigParser()
+        parser.optionxform = str
+        if self.settings_path.is_file():
+            try:
+                with self.settings_path.open("r", encoding="utf-8") as fh:
+                    parser.read_file(fh)
+            except Exception:
+                pass
+
+        if not parser.has_section(_SECTION_UI):
+            parser.add_section(_SECTION_UI)
+        if not parser.has_section(_SECTION_RECENT):
+            parser.add_section(_SECTION_RECENT)
+
+        provided = set(settings) if provided_keys is None else set(provided_keys)
+        existing_settings = self._settings_from_parser(parser)
+        effective_settings = dict(self.default_settings())
+        effective_settings.update(settings)
+        for key in effective_settings:
+            if key in provided or key not in existing_settings:
+                continue
+            normalized_value, _ = self._normalize_value(key, existing_settings[key])
+            effective_settings[key] = normalized_value
+
+        parser[_SECTION_UI][_KEY_THEME] = str(effective_settings[_KEY_THEME])
+        parser[_SECTION_UI][_KEY_CENTER_SPLITTER_RATIO] = self._format_ratio(
+            effective_settings[_KEY_CENTER_SPLITTER_RATIO]
+        )
+        parser[_SECTION_UI][_KEY_WINDOW_WIDTH] = str(int(effective_settings[_KEY_WINDOW_WIDTH]))
+        parser[_SECTION_UI][_KEY_WINDOW_HEIGHT] = str(int(effective_settings[_KEY_WINDOW_HEIGHT]))
+        parser[_SECTION_UI][_KEY_LANGUAGE] = str(effective_settings[_KEY_LANGUAGE])
+        parser[_SECTION_UI][_KEY_MORPH_UPPER_LIMIT] = self._format_morph_upper_limit(
+            effective_settings[_KEY_MORPH_UPPER_LIMIT]
+        )
+        parser[_SECTION_UI][_KEY_CLOSING_HOLD_FRAMES] = self._format_non_negative_int(
+            effective_settings[_KEY_CLOSING_HOLD_FRAMES]
+        )
+        parser[_SECTION_UI][_KEY_CLOSING_SOFTNESS_FRAMES] = self._format_non_negative_int(
+            effective_settings[_KEY_CLOSING_SOFTNESS_FRAMES]
+        )
+        parser[_SECTION_UI][_KEY_LONG_VOWEL_MODE] = str(effective_settings[_KEY_LONG_VOWEL_MODE])
+        parser[_SECTION_UI][_KEY_ACTIVE_PRESET_ID] = str(
+            effective_settings[_KEY_ACTIVE_PRESET_ID] or ""
+        )
+        parser[_SECTION_UI][_KEY_ACTIVE_MODEL_PROFILE_ID] = str(
+            effective_settings[_KEY_ACTIVE_MODEL_PROFILE_ID] or ""
+        )
+        parser[_SECTION_UI][_KEY_ACTIVE_PROFILE_BASELINE_PRESET_ID] = str(
+            effective_settings[_KEY_ACTIVE_PROFILE_BASELINE_PRESET_ID] or ""
+        )
+        parser[_SECTION_UI][_KEY_WHISPER_MODELS_DIR] = str(
+            effective_settings[_KEY_WHISPER_MODELS_DIR]
+        )
+        parser[_SECTION_UI][_KEY_SELECTED_WHISPER_MODEL_KEY] = str(
+            effective_settings[_KEY_SELECTED_WHISPER_MODEL_KEY]
+        )
+        parser[_SECTION_UI][_KEY_ACTIVE_WHISPER_MODEL_KEY] = str(
+            effective_settings[_KEY_ACTIVE_WHISPER_MODEL_KEY]
+        )
+        parser[_SECTION_UI][_KEY_ACTIVE_WHISPER_MANIFEST_IDENTITY] = str(
+            effective_settings[_KEY_ACTIVE_WHISPER_MANIFEST_IDENTITY]
+        )
+
+        parser[_SECTION_RECENT][_KEY_RECENT_TEXT_FILES] = json.dumps(
+            effective_settings[_KEY_RECENT_TEXT_FILES],
+            ensure_ascii=False,
+        )
+        parser[_SECTION_RECENT][_KEY_RECENT_WAV_FILES] = json.dumps(
+            effective_settings[_KEY_RECENT_WAV_FILES],
+            ensure_ascii=False,
+        )
+        parser[_SECTION_RECENT][_KEY_LAST_VMD_OUTPUT_DIR] = str(
+            effective_settings[_KEY_LAST_VMD_OUTPUT_DIR]
+        )
+        parser[_SECTION_RECENT][_KEY_LAST_MMD_WAV_EXPORT_DIR] = str(
+            effective_settings[_KEY_LAST_MMD_WAV_EXPORT_DIR]
+        )
+        return parser
+
+    @classmethod
+    def _settings_from_parser(cls, parser: configparser.ConfigParser) -> dict[str, Any]:
+        raw: dict[str, Any] = {}
+        if parser.has_section(_SECTION_UI):
+            section = parser[_SECTION_UI]
+            for key in (
+                _KEY_THEME,
+                _KEY_CENTER_SPLITTER_RATIO,
+                _KEY_WINDOW_WIDTH,
+                _KEY_WINDOW_HEIGHT,
+                _KEY_LANGUAGE,
+                _KEY_MORPH_UPPER_LIMIT,
+                _KEY_CLOSING_HOLD_FRAMES,
+                _KEY_CLOSING_SOFTNESS_FRAMES,
+                _KEY_LONG_VOWEL_MODE,
+                _KEY_ACTIVE_PRESET_ID,
+                _KEY_ACTIVE_MODEL_PROFILE_ID,
+                _KEY_ACTIVE_PROFILE_BASELINE_PRESET_ID,
+                _KEY_WHISPER_MODELS_DIR,
+                _KEY_SELECTED_WHISPER_MODEL_KEY,
+                _KEY_ACTIVE_WHISPER_MODEL_KEY,
+                _KEY_ACTIVE_WHISPER_MANIFEST_IDENTITY,
+            ):
+                if key in section:
+                    value = section.get(key)
+                    if key in (_KEY_CLOSING_HOLD_FRAMES, _KEY_CLOSING_SOFTNESS_FRAMES):
+                        value = cls._parse_ini_integer(value)
+                    raw[key] = value
+
+        if parser.has_section(_SECTION_RECENT):
+            section = parser[_SECTION_RECENT]
+            for key in (_KEY_RECENT_TEXT_FILES, _KEY_RECENT_WAV_FILES):
+                if key in section:
+                    raw[key] = cls._parse_recent_files_value(section.get(key))
+            if _KEY_LAST_VMD_OUTPUT_DIR in section:
+                raw[_KEY_LAST_VMD_OUTPUT_DIR] = section.get(_KEY_LAST_VMD_OUTPUT_DIR)
+            if _KEY_LAST_MMD_WAV_EXPORT_DIR in section:
+                raw[_KEY_LAST_MMD_WAV_EXPORT_DIR] = section.get(_KEY_LAST_MMD_WAV_EXPORT_DIR)
+
+        return raw
+
+    @classmethod
+    def _parse_recent_files_value(cls, value: str | None) -> list[Any]:
+        if value is None:
+            return []
+        stripped = str(value).strip()
+        if not stripped:
+            return []
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            return []
+        if isinstance(parsed, list):
+            return parsed
+        return []
+
+    @staticmethod
+    def _parse_ini_integer(value: str | None) -> object:
+        if value is None:
+            return value
+        stripped = value.strip()
+        if not stripped:
+            return value
+        try:
+            if stripped[0] in "+-":
+                digits = stripped[1:]
+            else:
+                digits = stripped
+            if not digits.isdigit():
+                return value
+            return int(stripped)
+        except ValueError:
+            return value
+
+    @classmethod
+    def _normalize_value(cls, key: str, value: Any) -> tuple[Any, bool]:
+        if key == _KEY_THEME:
+            return cls._normalize_theme(value)
+        if key == _KEY_CENTER_SPLITTER_RATIO:
+            return cls._normalize_center_splitter_ratio(value)
+        if key == _KEY_WINDOW_WIDTH:
+            return cls._normalize_positive_int(value, _DEFAULT_WINDOW_WIDTH)
+        if key == _KEY_WINDOW_HEIGHT:
+            return cls._normalize_positive_int(value, _DEFAULT_WINDOW_HEIGHT)
+        if key == _KEY_LANGUAGE:
+            return cls._normalize_language(value)
+        if key == _KEY_MORPH_UPPER_LIMIT:
+            return cls._normalize_morph_upper_limit(value)
+        if key == _KEY_CLOSING_HOLD_FRAMES:
+            return cls._normalize_bounded_int(
+                value,
+                _DEFAULT_CLOSING_HOLD_FRAMES,
+            )
+        if key == _KEY_CLOSING_SOFTNESS_FRAMES:
+            return cls._normalize_bounded_int(
+                value,
+                _DEFAULT_CLOSING_SOFTNESS_FRAMES,
+            )
+        if key == _KEY_LONG_VOWEL_MODE:
+            try:
+                return (validate_long_vowel_mode(value), False)
+            except ValueError:
+                return (_DEFAULT_LONG_VOWEL_MODE, True)
+        if key == _KEY_ACTIVE_PRESET_ID:
+            return cls._normalize_optional_identity(value)
+        if key in (_KEY_ACTIVE_MODEL_PROFILE_ID, _KEY_ACTIVE_PROFILE_BASELINE_PRESET_ID):
+            return cls._normalize_optional_identity(value)
+        if key == _KEY_RECENT_TEXT_FILES:
+            return cls._normalize_recent_files(value)
+        if key == _KEY_RECENT_WAV_FILES:
+            return cls._normalize_recent_files(value)
+        if key == _KEY_LAST_VMD_OUTPUT_DIR:
+            return cls._normalize_optional_path_string(value)
+        if key == _KEY_LAST_MMD_WAV_EXPORT_DIR:
+            return cls._normalize_optional_path_string(value)
+        if key == _KEY_WHISPER_MODELS_DIR:
+            return cls._normalize_optional_path_string(value)
+        if key in (_KEY_SELECTED_WHISPER_MODEL_KEY, _KEY_ACTIVE_WHISPER_MODEL_KEY):
+            return cls._normalize_whisper_model_key(value)
+        if key == _KEY_ACTIVE_WHISPER_MANIFEST_IDENTITY:
+            return cls._normalize_whisper_manifest_identity(value)
+        raise KeyError(f"Unsupported settings key: {key}")
+
+    @classmethod
+    def _normalize_optional_identity(cls, value: Any) -> tuple[str | None, bool]:
+        if value is None:
+            return (None, False)
+        if type(value) is not str:
+            return (None, True)
+        normalized = value.strip()
+        if not normalized:
+            return (None, False)
+        return (normalized, False)
+
+    @classmethod
+    def _normalize_whisper_model_key(cls, value: Any) -> tuple[str, bool]:
+        if type(value) is not str:
+            return (_DEFAULT_SELECTED_WHISPER_MODEL_KEY, True)
+        normalized = value.strip()
+        if not normalized:
+            return (_DEFAULT_SELECTED_WHISPER_MODEL_KEY, True)
+        return (normalized, False)
+
+    @classmethod
+    def _normalize_whisper_manifest_identity(cls, value: Any) -> tuple[str, bool]:
+        if value is None:
+            return (_DEFAULT_ACTIVE_WHISPER_MANIFEST_IDENTITY, False)
+        if type(value) is not str:
+            return (_DEFAULT_ACTIVE_WHISPER_MANIFEST_IDENTITY, True)
+        return (value.strip(), False)
+
+    @classmethod
+    def _normalize_theme(cls, value: Any) -> tuple[str, bool]:
+        resolved = str(value).strip().lower()
+        if resolved in ThemeStrings.SUPPORTED:
+            return (resolved, False)
+        return (_DEFAULT_THEME, True)
+
+    @classmethod
+    def _normalize_center_splitter_ratio(cls, value: Any) -> tuple[float, bool]:
+        if isinstance(value, (list, tuple)) and len(value) >= 2:
+            try:
+                left = float(value[0])
+                right = float(value[1])
+            except (TypeError, ValueError):
+                return (_DEFAULT_CENTER_SPLITTER_RATIO, True)
+            if not all(math.isfinite(part) for part in (left, right)):
+                return (_DEFAULT_CENTER_SPLITTER_RATIO, True)
+            if left <= 0.0 or right <= 0.0:
+                return (_DEFAULT_CENTER_SPLITTER_RATIO, True)
+            total = left + right
+            if total <= 0.0:
+                return (_DEFAULT_CENTER_SPLITTER_RATIO, True)
+            ratio = left / total
+            if 0.0 < ratio < 1.0:
+                return (round(ratio, 6), False)
+            return (_DEFAULT_CENTER_SPLITTER_RATIO, True)
+
+        try:
+            ratio = float(value)
+        except (TypeError, ValueError):
+            return (_DEFAULT_CENTER_SPLITTER_RATIO, True)
+        if not math.isfinite(ratio):
+            return (_DEFAULT_CENTER_SPLITTER_RATIO, True)
+        if not (0.0 < ratio < 1.0):
+            return (_DEFAULT_CENTER_SPLITTER_RATIO, True)
+        return (round(ratio, 6), False)
+
+    @classmethod
+    def _normalize_positive_int(cls, value: Any, default: int) -> tuple[int, bool]:
+        try:
+            resolved = int(value)
+        except (TypeError, ValueError):
+            return (default, True)
+        if resolved <= 0:
+            return (default, True)
+        return (resolved, False)
+
+    @classmethod
+    def _normalize_non_negative_int(cls, value: Any, default: int) -> tuple[int, bool]:
+        try:
+            resolved = int(value)
+        except (TypeError, ValueError):
+            return (default, True)
+        if resolved < 0:
+            return (default, True)
+        return (resolved, False)
+
+    @classmethod
+    def _normalize_bounded_int(cls, value: Any, default: int) -> tuple[int, bool]:
+        if isinstance(value, bool) or not isinstance(value, int):
+            return (default, True)
+        if not 0 <= value <= 100:
+            return (default, True)
+        return (value, False)
+
+    @classmethod
+    def _normalize_language(cls, value: Any) -> tuple[str, bool]:
+        resolved = str(value).strip().lower()
+        if resolved in _ALLOWED_LANGUAGES:
+            return (resolved, False)
+        return (_DEFAULT_LANGUAGE, True)
+
+    @classmethod
+    def _normalize_morph_upper_limit(cls, value: Any) -> tuple[float, bool]:
+        try:
+            resolved = float(value)
+        except (TypeError, ValueError):
+            return (_DEFAULT_MORPH_UPPER_LIMIT, True)
+        if not math.isfinite(resolved):
+            return (_DEFAULT_MORPH_UPPER_LIMIT, True)
+        clamped = min(max(resolved, _MIN_MORPH_UPPER_LIMIT), _MAX_MORPH_UPPER_LIMIT)
+        return (round(clamped, 4), clamped != resolved)
+
+    @classmethod
+    def _normalize_recent_files(cls, value: Any) -> tuple[list[str], bool]:
+        if value is None:
+            return ([], False)
+
+        raw_items: list[Any]
+        if isinstance(value, str):
+            raw_items = [value]
+        elif isinstance(value, (list, tuple)):
+            raw_items = list(value)
+        else:
+            return ([], True)
+
+        normalized_items: list[str] = []
+        seen: set[str] = set()
+        had_invalid = False
+
+        for item in raw_items:
+            if not isinstance(item, str):
+                had_invalid = True
+                continue
+            stripped = item.strip()
+            if not stripped:
+                had_invalid = True
+                continue
+            dedupe_key = os.path.normcase(os.path.normpath(stripped))
+            if dedupe_key in seen:
+                had_invalid = True
+                continue
+            seen.add(dedupe_key)
+            normalized_items.append(stripped)
+            if len(normalized_items) >= _RECENT_FILE_LIMIT:
+                break
+
+        if len(raw_items) > len(normalized_items):
+            had_invalid = True
+        return (normalized_items, had_invalid)
+
+    @classmethod
+    def _normalize_optional_path_string(cls, value: Any) -> tuple[str, bool]:
+        if value is None:
+            return ("", False)
+        if not isinstance(value, str):
+            return ("", True)
+        stripped = value.strip()
+        if not stripped:
+            return ("", False)
+        return (stripped, False)
+
+    @classmethod
+    def _format_ratio(cls, value: Any) -> str:
+        normalized, _ = cls._normalize_center_splitter_ratio(value)
+        return f"{normalized:.6f}"
+
+    @classmethod
+    def _format_morph_upper_limit(cls, value: Any) -> str:
+        normalized, _ = cls._normalize_morph_upper_limit(value)
+        return f"{normalized:.4f}"
+
+    @classmethod
+    def _format_non_negative_int(cls, value: Any) -> str:
+        normalized, _ = cls._normalize_bounded_int(
+            value,
+            _DEFAULT_CLOSING_SOFTNESS_FRAMES,
+        )
+        return str(normalized)
+
+    @staticmethod
+    def _summarize_exception(error: BaseException) -> str:
+        message = str(error).strip()
+        if message:
+            return message
+        return error.__class__.__name__
+
+
+def default_settings_path() -> Path:
+    return SettingsStore.default_settings_path()
+
+
+def default_settings() -> dict[str, Any]:
+    return SettingsStore.default_settings()

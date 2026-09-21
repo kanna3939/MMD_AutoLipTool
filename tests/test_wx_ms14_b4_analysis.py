@@ -1,0 +1,120 @@
+import unittest
+import wx
+import sys
+import os
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
+
+from gui_wx.app import AutoLipToolApp
+from gui_wx.main_frame import MainFrame
+from src.core import SpeechTimingAnchor, VowelTimingPlan
+from src.vmd_writer import VowelTimelinePoint
+from tests.helpers import destroy_wx_app, get_or_create_wx_app
+
+
+def _timing_plan() -> VowelTimingPlan:
+    return VowelTimingPlan(
+        vowels=["あ"],
+        timeline=[
+            VowelTimelinePoint(
+                time_sec=0.2,
+                vowel="あ",
+                duration_sec=0.2,
+                start_sec=0.1,
+                end_sec=0.3,
+            )
+        ],
+        anchors=[SpeechTimingAnchor(start_sec=0.1, end_sec=0.3, text="あ")],
+        source="whisper_segments",
+        observations=[],
+    )
+
+class TestWXMS14B4Analysis(unittest.TestCase):
+    """
+    [MS14-B4] 解析実行と Worker の非同期動作・二重防止のテスト
+    """
+    @classmethod
+    def setUpClass(cls):
+        with patch("gui_wx.app.get_resource_path", return_value=Path("missing_splash.png")):
+            cls.app, cls.owns_app = get_or_create_wx_app(AutoLipToolApp, False)
+
+    @classmethod
+    def tearDownClass(cls):
+        destroy_wx_app(cls.app, owns_app=cls.owns_app)
+
+    def setUp(self):
+        self.frame: MainFrame = self.app.frame
+        self.frame.controller.build_active_whisper_model_request = MagicMock(
+            return_value=MagicMock()
+        )
+        self.frame.ui_state.selected_text_path = "dummy.txt"
+        self.frame.ui_state.selected_text_content = "あいうえお"
+        self.frame.ui_state.selected_wav_path = "dummy.wav"
+        self.frame.ui_state.selected_wav_analysis = MagicMock()
+        self.frame.ui_state.selected_wav_analysis.duration_sec = 1.0
+        self.frame.ui_state.set_busy(False)
+        self.frame.ui_state.invalidate_analysis()
+
+    @patch('gui_wx.main_frame.wx.ProgressDialog')
+    @patch('gui_wx.main_frame.AnalysisWorker')
+    def test_run_analysis_success_state(self, mock_worker_class, mock_progress_dialog):
+        mock_worker_instance = MagicMock()
+        mock_worker_class.return_value = mock_worker_instance
+        
+        # Action
+        self.frame._run_analysis()
+        
+        # Verify busy state applied
+        self.assertTrue(self.frame.ui_state.is_busy)
+        self.assertTrue(mock_worker_instance.start.called)
+        
+        # Simulate worker success
+        timing_plan = _timing_plan()
+        self.frame._on_analysis_success(self.frame._current_job_id, timing_plan)
+        
+        # Verify
+        self.assertFalse(self.frame.ui_state.is_busy)
+        self.assertTrue(self.frame.ui_state.analysis_result_valid)
+        self.assertEqual(self.frame.ui_state.current_timing_plan, timing_plan)
+
+    @patch('gui_wx.main_frame.wx.ProgressDialog')
+    @patch('gui_wx.main_frame.wx.MessageBox')
+    @patch('gui_wx.main_frame.AnalysisWorker')
+    def test_run_analysis_error_state(self, mock_worker_class, mock_msgbox, mock_progress_dialog):
+        mock_worker_instance = MagicMock()
+        mock_worker_class.return_value = mock_worker_instance
+        
+        # Action
+        self.frame._run_analysis()
+        
+        # Simulate worker error
+        self.frame._on_analysis_error(self.frame._current_job_id, "Mock Exception")
+        
+        # Verify state
+        self.assertFalse(self.frame.ui_state.is_busy)
+        self.assertFalse(self.frame.ui_state.analysis_result_valid)
+        self.assertIsNone(self.frame.ui_state.current_timing_plan)
+        # Verify input was kept
+        self.assertEqual(self.frame.ui_state.selected_text_content, "あいうえお")
+        # Verify message box for error was called
+        self.assertTrue(mock_msgbox.called)
+
+    @patch('gui_wx.main_frame.wx.ProgressDialog')
+    @patch('gui_wx.main_frame.AnalysisWorker')
+    def test_double_start_guard(self, mock_worker_class, mock_progress_dialog):
+        mock_worker_instance = MagicMock()
+        mock_worker_class.return_value = mock_worker_instance
+        
+        # Already busy
+        self.frame.ui_state.set_busy(True)
+        
+        # Attempt run
+        self.frame._run_analysis()
+        
+        # Verify worker not launched
+        self.assertFalse(mock_worker_instance.start.called)
+
+if __name__ == "__main__":
+    unittest.main()

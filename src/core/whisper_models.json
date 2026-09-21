@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "openai_whisper_version": "20250625",
+  "default_model_key": "small",
+  "models": [
+    {
+      "model_key": "small",
+      "display_name": "Whisper small",
+      "multilingual": true,
+      "japanese_supported": true,
+      "official_url": "https://openaipublic.azureedge.net/main/whisper/models/9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794/small.pt",
+      "filename": "small.pt",
+      "sha256": "9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794",
+      "size_bytes": 483617219,
+      "vram_hint": "~2 GB",
+      "speed_hint": "~4x",
+      "recommended_use": "標準・既定モデル"
+    },
+    {
+      "model_key": "medium",
+      "display_name": "Whisper medium",
+      "multilingual": true,
+      "japanese_supported": true,
+      "official_url": "https://openaipublic.azureedge.net/main/whisper/models/345ae4da62f9b3d59415adc60127b97c714f32e89e936602e85993674d08dcb1/medium.pt",
+      "filename": "medium.pt",
+      "sha256": "345ae4da62f9b3d59415adc60127b97c714f32e89e936602e85993674d08dcb1",
+      "size_bytes": 1528008539,
+      "vram_hint": "~5 GB",
+      "speed_hint": "~2x",
+      "recommended_use": "高負荷モデル"
+    },
+    {
+      "model_key": "turbo",
+      "display_name": "Whisper turbo",
+      "multilingual": true,
+      "japanese_supported": true,
+      "official_url": "https://openaipublic.azureedge.net/main/whisper/models/aff26ae408abcba5fbf8813c21e62b0941638c5f6eebfb145be0c9839262a19a/large-v3-turbo.pt",
+      "filename": "large-v3-turbo.pt",
+      "sha256": "aff26ae408abcba5fbf8813c21e62b0941638c5f6eebfb145be0c9839262a19a",
+      "size_bytes": 1617941637,
+      "vram_hint": "~6 GB",
+      "speed_hint": "~8x",
+      "recommended_use": "高速モデル"
+    }
+  ]
+}

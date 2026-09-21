@@ -1,0 +1,24 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"chatgpt.openOnStartup": true,
+		"cSpell.words": [
+			"guifix",
+			"matplotlib",
+			"pyopenjtalk"
+		],
+		"cSpell.customDictionaries": {
+			"custom-dictionary-workspace": {
+				"name": "custom-dictionary-workspace",
+				"path": "${workspaceFolder:MMD_AutoLipTool}/.cspell/custom-dictionary-workspace.txt",
+				"addWords": true,
+				"scope": "workspace"
+			}
+		},
+		"python.defaultInterpreterPath": ""
+	}
+}

@@ -1,0 +1,37 @@
+# Python cache and artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.cache/
+cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Build outputs
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Manual FFmpeg staging for distribution build
+FFmpeg/bin/*
+!FFmpeg/bin/.gitkeep
+
+# Runtime user data
+/presets.json
+/profiles.json
+/MMD_AutoLipTool.ini
+/models/
+/debug/
+
+# Tooling / IDE
+.vscode/
+.idea/
+.codex/config.toml
+
+# OS files
+.DS_Store
+Thumbs.db

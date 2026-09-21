@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=82.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mmd-autolip-tool"
+version = "1.0.0"
+description = "Desktop utility that generates MMD lip-motion VMD from UTF-8 text and wav/mp3/m4a audio."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "wxPython==4.2.5",
+  "matplotlib==3.10.8",
+  "numpy==2.4.3",
+  "openai-whisper==20250625",
+  "pyopenjtalk==0.4.1",
+]
+
+[project.scripts]
+mmd-autolip-tool = "main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["core", "vmd_writer", "gui_wx"]
+
+[tool.setuptools.package-data]
+core = ["whisper_models.json"]
