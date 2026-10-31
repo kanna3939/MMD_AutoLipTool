@@ -3,6 +3,7 @@ from collections.abc import Sequence
 import wx
 from gui_wx.waveform_panel import WaveformPanel
 from gui_wx.preview_panel import PreviewPanel
+from gui_wx.theme import ThemeManager
 from src.core.preview_hit_test import PreviewSelectionRequest
 from src.core.preview_transform import PreviewData
 
@@ -13,8 +14,14 @@ class PlaceholderContainer(wx.Panel):
     [MS15-B2] PreviewPanelを実体化し組み込み。
     """
     def __init__(self, parent):
-        super().__init__(parent, style=wx.BORDER_SIMPLE)
+        super().__init__(parent, style=wx.BORDER_NONE)
+        self._ms33c_theme_border = True
+        self.Bind(wx.EVT_PAINT, self._on_paint)
         self._init_ui()
+
+    def _on_paint(self, event):
+        dc = wx.PaintDC(self)
+        ThemeManager.draw_border(dc, self.GetClientRect(), self)
 
     def _init_ui(self):
         sizer = wx.BoxSizer(wx.VERTICAL)
@@ -28,14 +35,39 @@ class PlaceholderContainer(wx.Panel):
         self.SetSizer(sizer)
 
         self.on_pan_callback = None
+        self.on_scrub_start_callback = None
+        self.on_scrub_update_callback = None
+        self.on_scrub_end_callback = None
+        self.on_seek_callback = None
         self.on_selection_request_callback = None
-        self.pnl_waveform.on_pan_callback = self._on_pan
+        self.pnl_waveform.on_scrub_start_callback = self._on_scrub_start
+        self.pnl_waveform.on_scrub_update_callback = self._on_scrub_update
+        self.pnl_waveform.on_scrub_end_callback = self._on_scrub_end
+        self.pnl_waveform.on_seek_callback = self._on_seek
         self.pnl_preview.on_pan_callback = self._on_pan
         self.pnl_preview.on_selection_request_callback = self._on_selection_request
 
     def _on_pan(self, delta_sec: float):
         if self.on_pan_callback:
             self.on_pan_callback(delta_sec)
+
+    def _on_scrub_start(self, position_sec: float):
+        if self.on_scrub_start_callback:
+            return self.on_scrub_start_callback(position_sec)
+        return False
+
+    def _on_scrub_update(self, position_sec: float):
+        if self.on_scrub_update_callback:
+            self.on_scrub_update_callback(position_sec)
+
+    def _on_scrub_end(self, position_sec: float):
+        if self.on_scrub_end_callback:
+            self.on_scrub_end_callback(position_sec)
+
+    def _on_seek(self, position_sec: float):
+        if self.on_seek_callback:
+            return self.on_seek_callback(position_sec)
+        return False
 
     def _on_selection_request(self, request: PreviewSelectionRequest):
         if self.on_selection_request_callback:
@@ -56,11 +88,13 @@ class PlaceholderContainer(wx.Panel):
         data: PreviewData,
         duration_sec: float,
         base_plan_identity_digest: str,
+        final_output_binding: str | None = None,
     ):
         self.pnl_preview.set_identity_aware_preview_data(
             data,
             duration_sec,
             base_plan_identity_digest,
+            final_output_binding,
         )
 
     def set_preview_placeholder_text(
@@ -68,13 +102,15 @@ class PlaceholderContainer(wx.Panel):
         text: str,
         *,
         output_morph_names: Sequence[str] | None = None,
+        loading: bool = False,
     ):
         if output_morph_names is None:
-            self.pnl_preview.set_placeholder(text)
+            self.pnl_preview.set_placeholder(text, loading=loading)
         else:
             self.pnl_preview.set_placeholder(
                 text,
                 output_morph_names=output_morph_names,
+                loading=loading,
             )
 
     def set_playback_position_sec(self, position_sec: float | None):

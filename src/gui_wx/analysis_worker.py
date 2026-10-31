@@ -38,12 +38,13 @@ class AnalysisWorker(threading.Thread):
         wav_analysis,
         whisper_model_request: VerifiedAnalysisModelRequest | None = None,
         whisper_runtime: WhisperModelRuntime | None = None,
-        upper_limit=0.5,
+        upper_limit=0.9,
         input_mode=INPUT_MODE_TEXT_AUDIO,
         transcription_text_override=None,
         retained_whisper_timing_result=None,
         reuse_retained_timing=False,
         debug_trace=None,
+        collect_transition_acoustics=False,
     ):
         super().__init__()
         self.daemon = True
@@ -62,6 +63,9 @@ class AnalysisWorker(threading.Thread):
         self.retained_whisper_timing_result = retained_whisper_timing_result
         self.reuse_retained_timing = reuse_retained_timing
         self.debug_trace = debug_trace
+        if type(collect_transition_acoustics) is not bool:
+            raise ValueError("collect_transition_acoustics must be a boolean")
+        self.collect_transition_acoustics = collect_transition_acoustics
 
     def run(self):
         def _phase_cb(phase_name):
@@ -150,6 +154,7 @@ class AnalysisWorker(threading.Thread):
                     phase_callback=_phase_cb,
                     whisper_timing_result=whisper_result,
                     debug_trace=self.debug_trace,
+                    collect_transition_acoustics=self.collect_transition_acoustics,
                 )
                 if self.debug_trace is not None:
                     self.debug_trace.set_timing_source(getattr(plan, "source", None))
@@ -179,6 +184,7 @@ class AnalysisWorker(threading.Thread):
                     upper_limit=self.upper_limit,
                     phase_callback=_phase_cb,
                     debug_trace=self.debug_trace,
+                    collect_transition_acoustics=self.collect_transition_acoustics,
                 )
                 if self.debug_trace is not None:
                     self.debug_trace.set_timing_source(getattr(plan, "source", None))

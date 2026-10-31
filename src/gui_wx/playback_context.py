@@ -13,11 +13,13 @@ class PlaybackInfoContext:
     position_sec: float
     frame_no: int
     current_vowel: str | None
+    is_paused: bool = False
 
 
 def build_playback_info_context(
     *,
     is_playing: bool,
+    is_paused: bool = False,
     position_sec: object,
     timeline: Iterable[object] | None = None,
     analysis_result_valid: bool = False,
@@ -25,7 +27,8 @@ def build_playback_info_context(
 ) -> PlaybackInfoContext:
     normalized_position, position_is_valid = _normalize_position(position_sec)
     playing = bool(is_playing)
-    if not playing:
+    paused = bool(is_paused and not playing)
+    if not playing and not paused:
         normalized_position = 0.0
 
     frame_no = max(0, int(round(normalized_position * VMD_FPS)))
@@ -44,6 +47,7 @@ def build_playback_info_context(
 
     return PlaybackInfoContext(
         is_playing=playing,
+        is_paused=paused,
         position_sec=normalized_position,
         frame_no=frame_no,
         current_vowel=current_vowel,
@@ -54,7 +58,7 @@ def format_playback_info_context(context: PlaybackInfoContext) -> str:
     vowel_text = context.current_vowel or "(なし)"
     return "\n".join(
         (
-            "[再生]",
+            "[一時停止]" if context.is_paused else "[再生]",
             f"再生位置: {context.position_sec:.2f} 秒",
             f"現在フレーム: {context.frame_no}",
             f"現在母音: {vowel_text}",

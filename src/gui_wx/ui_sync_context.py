@@ -21,7 +21,7 @@ from src.core.effective_shape_diagnostics import ResolverDiagnosticsCollector
 class UiSyncContext:
     base_input: BaseTimingPlanInput
     base_plan_identity: BasePlanIdentity
-    effective_plan: EffectiveShapePlan
+    effective_plan: EffectiveShapePlan | None
 
 
 def build_ui_sync_context(
@@ -31,11 +31,17 @@ def build_ui_sync_context(
     effective_plan_hint: EffectiveShapePlan | None = None,
     diagnostics: ResolverDiagnosticsCollector | None = None,
     resolver_diagnostics: ResolverDiagnosticsCollector | None = None,
+    defer_resolution: bool = False,
 ) -> UiSyncContext:
     if diagnostics is None:
         diagnostics = resolver_diagnostics
     if not isinstance(base_input, BaseTimingPlanInput):
         raise TypeError("base_input must be BaseTimingPlanInput")
+    if defer_resolution:
+        identity = build_base_plan_identity(base_input)
+        if adjustment_snapshot is not None and adjustment_snapshot.base_plan_identity != identity:
+            raise AdjustmentContractError("deferred source identity mismatch")
+        return UiSyncContext(base_input, identity, None)
 
     if effective_plan_hint is None:
         try:

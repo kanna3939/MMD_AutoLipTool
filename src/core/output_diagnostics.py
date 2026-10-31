@@ -29,6 +29,7 @@ from src.core.morph_name_sets import (
     get_builtin_morph_name_set,
 )
 from src.core.whisper_timing import SpeechTimingAnchor
+from src.core.transition_diagnostics import TransitionDiagnosticSummary
 from src.vmd_writer import SUPPORTED_MORPHS, VMD_FPS, VowelTimelinePoint
 
 
@@ -63,6 +64,7 @@ _RECOVERABILITIES = {
 _INPUT_MODES = {"text_audio", "voice_only"}
 _EFFECTIVE_WRITER_INPUT_STATES = {"not_applicable", "ready", "invalid"}
 _FINGERPRINT_SCHEMA_VERSION = "ms21-effective-output-v1"
+_SHARED_FINAL_OUTPUT_FINGERPRINT_SCHEMA_VERSION = "ms31-final-output-v1"
 _PROFILE_RESOLUTION_REASONS = {
     "profile_store_unavailable",
     "orphan_profile_baseline",
@@ -669,6 +671,11 @@ class DiagnosticSnapshotInput:
     resolved_morph_name_set_display_name: str = "日本語5母音"
     whisper_summary: WhisperDiagnosticsSummary = WhisperDiagnosticsSummary()
     projection_generation: int = 0
+    shared_final_output_identity: object | None = None
+    shared_final_output_restrictions: tuple[object, ...] = ()
+    shared_final_output_restriction_event_targets: tuple[object, ...] = ()
+    transition_summary: TransitionDiagnosticSummary | None = None
+    cleanup_summary: object | None = None
 
     def __post_init__(self) -> None:
         if self.effective_writer_input_state not in _EFFECTIVE_WRITER_INPUT_STATES:
@@ -722,6 +729,26 @@ class DiagnosticSnapshotInput:
             raise ValueError(
                 "effective_writer_input_failure_reason must be a non-empty string"
             )
+        if self.shared_final_output_identity is not None and not hasattr(
+            self.shared_final_output_identity, "input_identity"
+        ):
+            raise ValueError("shared_final_output_identity is invalid")
+        if self.transition_summary is not None and not isinstance(
+            self.transition_summary, TransitionDiagnosticSummary
+        ):
+            raise ValueError("transition_summary is invalid")
+        if self.cleanup_summary is not None and not hasattr(self.cleanup_summary, "summary_digest"):
+            raise ValueError("cleanup_summary is invalid")
+        object.__setattr__(
+            self,
+            "shared_final_output_restrictions",
+            tuple(self.shared_final_output_restrictions),
+        )
+        object.__setattr__(
+            self,
+            "shared_final_output_restriction_event_targets",
+            tuple(self.shared_final_output_restriction_event_targets),
+        )
         if not isinstance(self.whisper_summary, WhisperDiagnosticsSummary):
             raise ValueError("whisper_summary must be WhisperDiagnosticsSummary")
         if (
@@ -888,6 +915,11 @@ class OutputDiagnosticsSnapshot:
     adjustment_summary: AdjustmentDiagnosticsSummary = AdjustmentDiagnosticsSummary()
     whisper_summary: WhisperDiagnosticsSummary = WhisperDiagnosticsSummary()
     projection_generation: int = 0
+    shared_final_output_identity: object | None = None
+    shared_final_output_restrictions: tuple[object, ...] = ()
+    shared_final_output_restriction_event_targets: tuple[object, ...] = ()
+    transition_summary: TransitionDiagnosticSummary | None = None
+    cleanup_summary: object | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "items", tuple(self.items))
@@ -895,6 +927,22 @@ class OutputDiagnosticsSnapshot:
             object.__setattr__(self, "fingerprint_payload", tuple(self.fingerprint_payload))
         if not isinstance(self.whisper_summary, WhisperDiagnosticsSummary):
             raise ValueError("whisper_summary must be WhisperDiagnosticsSummary")
+        if self.transition_summary is not None and not isinstance(
+            self.transition_summary, TransitionDiagnosticSummary
+        ):
+            raise ValueError("transition_summary is invalid")
+        if self.cleanup_summary is not None and not hasattr(self.cleanup_summary, "summary_digest"):
+            raise ValueError("cleanup_summary is invalid")
+        object.__setattr__(
+            self,
+            "shared_final_output_restrictions",
+            tuple(self.shared_final_output_restrictions),
+        )
+        object.__setattr__(
+            self,
+            "shared_final_output_restriction_event_targets",
+            tuple(self.shared_final_output_restriction_event_targets),
+        )
         if (
             isinstance(self.projection_generation, bool)
             or not isinstance(self.projection_generation, int)
@@ -1313,6 +1361,90 @@ def build_save_state_fingerprint_payload(
     )
 
 
+def build_shared_final_output_fingerprint_payload(
+    snapshot_input: DiagnosticSnapshotInput,
+    items: tuple[DiagnosticItem, ...],
+) -> FingerprintPayload:
+    """Build the B3 fingerprint without changing the legacy payload schema."""
+    identity = snapshot_input.shared_final_output_identity
+    if identity is None:
+        raise ValueError("shared final-output identity is required")
+    input_identity = getattr(identity, "input_identity", None)
+    if input_identity is None:
+        raise ValueError("shared final-output input identity is missing")
+    if snapshot_input.input_mode != getattr(input_identity, "input_mode", None):
+        raise ValueError("diagnostics input mode differs from final-output identity")
+    normalized_text_path = _normalized_path(snapshot_input.text_path)
+    identity_text_path = getattr(input_identity, "normalized_text_path", None)
+    normalized_identity_text_path = (
+        None
+        if identity_text_path is None
+        else _normalized_path(Path(identity_text_path))
+    )
+    if normalized_text_path != normalized_identity_text_path:
+        raise ValueError("diagnostics text path differs from final-output identity")
+    diagnostic_identities = tuple(
+        (
+            item.severity.value,
+            item.code,
+            item.phase,
+            item.identity_context,
+        )
+        for item in sorted(
+            items,
+            key=lambda item: (
+                _severity_rank(item.severity),
+                _CODE_RANK.get(item.code, len(_CODE_ORDER)),
+            ),
+        )
+    )
+    output_mapping = tuple(getattr(input_identity, "output_mapping", ()))
+    plan_schema_id = getattr(identity, "plan_schema_id", None)
+    semantic_digest = getattr(identity, "semantic_digest", None)
+    wire_digest = getattr(identity, "wire_digest", None)
+    curve_policy_id = getattr(identity, "curve_policy_id", None)
+    for field_name, value in (
+        ("plan_schema_id", plan_schema_id),
+        ("final_curve_policy_id", curve_policy_id),
+        ("final_semantic_digest", semantic_digest),
+        ("final_wire_digest", wire_digest),
+    ):
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"{field_name} is missing")
+    if not output_mapping:
+        raise ValueError("final output mapping is missing")
+    payload = (
+        ("schema_version", _SHARED_FINAL_OUTPUT_FINGERPRINT_SCHEMA_VERSION),
+        ("input_mode", snapshot_input.input_mode),
+        ("normalized_text_path", normalized_text_path),
+        (
+            "normalized_effective_wav_path",
+            _normalized_path(snapshot_input.effective_wav_path),
+        ),
+        ("vmd_model_name", snapshot_input.writer_parameters.vmd_model_name),
+        ("final_plan_schema_id", plan_schema_id),
+        ("final_curve_policy_id", curve_policy_id),
+        ("final_semantic_digest", semantic_digest),
+        ("final_wire_digest", wire_digest),
+        ("output_mapping", output_mapping),
+        ("diagnostic_identities", diagnostic_identities),
+    )
+    if snapshot_input.transition_summary is not None:
+        payload += (("transition_summary_digest", snapshot_input.transition_summary.summary_digest),)
+    cleanup_summary = snapshot_input.cleanup_summary
+    if getattr(input_identity, "cleanup_input_digest", None) is None:
+        if cleanup_summary is not None:
+            raise ValueError("cleanup summary has no cleanup identity")
+    else:
+        if (
+            cleanup_summary is None
+            or getattr(cleanup_summary, "final_binding", None) != identity.binding_digest
+        ):
+            raise ValueError("cleanup summary differs from final-output identity")
+        payload += (("cleanup_summary_digest", cleanup_summary.summary_digest),)
+    return payload
+
+
 def compute_save_state_fingerprint(payload: FingerprintPayload) -> str:
     _assert_canonical_value(payload, field="payload")
     canonical_json = json.dumps(
@@ -1322,6 +1454,25 @@ def compute_save_state_fingerprint(payload: FingerprintPayload) -> str:
         allow_nan=False,
     ).encode("utf-8")
     return f"sha256:{hashlib.sha256(canonical_json).hexdigest()}"
+
+
+def shared_warning_confirmation_matches(
+    snapshot: OutputDiagnosticsSnapshot,
+    confirmed_fingerprint: str | None,
+) -> bool:
+    """Compare B3 warning confirmation without reading or mutating legacy state."""
+    if (
+        not isinstance(snapshot, OutputDiagnosticsSnapshot)
+        or snapshot.shared_final_output_identity is None
+        or snapshot.save_state_fingerprint is None
+        or snapshot.saveability.blocking_codes
+        or not snapshot.analysis_summary.analysis_result_valid
+        or snapshot.analysis_summary.analysis_pending_rebuild
+    ):
+        return False
+    if not snapshot.saveability.warning_codes:
+        return True
+    return confirmed_fingerprint == snapshot.save_state_fingerprint
 
 
 def _assert_canonical_value(value: object, *, field: str) -> None:
@@ -1648,7 +1799,11 @@ def build_output_diagnostics_snapshot(
         vmd_model_name=writer_parameters.vmd_model_name,
         closing_hold_frames=writer_parameters.closing_hold_frames,
         closing_softness_frames=writer_parameters.closing_softness_frames,
-        fingerprint_schema_version=_FINGERPRINT_SCHEMA_VERSION,
+        fingerprint_schema_version=(
+            _SHARED_FINAL_OUTPUT_FINGERPRINT_SCHEMA_VERSION
+            if snapshot_input.shared_final_output_identity is not None
+            else _FINGERPRINT_SCHEMA_VERSION
+        ),
         active_long_vowel_mode=snapshot_input.active_long_vowel_mode,
         active_preset_id=snapshot_input.active_preset_id,
         active_preset_display_name=snapshot_input.active_preset_display_name,
@@ -1711,7 +1866,12 @@ def build_output_diagnostics_snapshot(
     payload: FingerprintPayload | None = None
     fingerprint: str | None = None
     if nonfinite_failure is None and not effective_writer_input_invalid:
-        payload = build_save_state_fingerprint_payload(snapshot_input, items_tuple)
+        if snapshot_input.shared_final_output_identity is not None:
+            payload = build_shared_final_output_fingerprint_payload(
+                snapshot_input, items_tuple
+            )
+        else:
+            payload = build_save_state_fingerprint_payload(snapshot_input, items_tuple)
         fingerprint = compute_save_state_fingerprint(payload)
     return OutputDiagnosticsSnapshot(
         input_summary=input_summary,
@@ -1724,6 +1884,15 @@ def build_output_diagnostics_snapshot(
         adjustment_summary=adjustment_summary,
         whisper_summary=snapshot_input.whisper_summary,
         projection_generation=snapshot_input.projection_generation,
+        shared_final_output_identity=snapshot_input.shared_final_output_identity,
+        shared_final_output_restrictions=(
+            snapshot_input.shared_final_output_restrictions
+        ),
+        shared_final_output_restriction_event_targets=(
+            snapshot_input.shared_final_output_restriction_event_targets
+        ),
+        transition_summary=snapshot_input.transition_summary,
+        cleanup_summary=snapshot_input.cleanup_summary,
     )
 
 
@@ -1754,6 +1923,8 @@ __all__ = [
     "WhisperModelDiagnosticsItem",
     "build_output_diagnostics_snapshot",
     "build_save_state_fingerprint_payload",
+    "build_shared_final_output_fingerprint_payload",
     "compute_save_state_fingerprint",
+    "shared_warning_confirmation_matches",
     "evaluate_whisper_identity_status",
 ]

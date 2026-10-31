@@ -1,4 +1,5 @@
 import wx
+from gui_wx.theme import ThemeButton, ThemeManager
 
 class InfoPanel(wx.Panel):
     """
@@ -6,8 +7,14 @@ class InfoPanel(wx.Panel):
     TEXT/WAVのパス、パース結果プレビュー、WAV情報を表示する。
     """
     def __init__(self, parent):
-        super().__init__(parent, style=wx.BORDER_SIMPLE)
+        super().__init__(parent, style=wx.BORDER_NONE)
+        self._ms33c_theme_border = True
+        self.Bind(wx.EVT_PAINT, self._on_paint)
         self._init_ui()
+
+    def _on_paint(self, event):
+        dc = wx.PaintDC(self)
+        ThemeManager.draw_border(dc, self.GetClientRect(), self)
 
     def _init_ui(self):
         sizer = wx.BoxSizer(wx.VERTICAL)
@@ -21,8 +28,8 @@ class InfoPanel(wx.Panel):
         self._text_preview_editable = False
         self.tc_hiragana_preview = wx.TextCtrl(self, style=readonly_tc_style)
         self.tc_vowel_preview = wx.TextCtrl(self, style=readonly_tc_style)
-        self.btn_apply_transcription_edit = wx.Button(self, label="適用")
-        self.btn_revert_transcription_edit = wx.Button(self, label="元に戻す")
+        self.btn_apply_transcription_edit = ThemeButton(self, label="適用")
+        self.btn_revert_transcription_edit = ThemeButton(self, label="元に戻す")
         self.set_transcription_edit_controls_enabled(False)
 
         # WAV info

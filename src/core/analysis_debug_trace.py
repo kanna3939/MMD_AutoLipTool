@@ -9,19 +9,19 @@ payload.
 from __future__ import annotations
 
 import hashlib
-import importlib.metadata
 import math
 import os
 import platform
 import re
 import sys
 import threading
-import tomllib
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
+
+from app_version import resolve_app_version
 
 
 SCHEMA_VERSION = 1
@@ -125,27 +125,6 @@ def _model_identity(model_identity: Any) -> dict[str, Any]:
     return safe or {"status": "unavailable"}
 
 
-def _resolve_app_version() -> str:
-    try:
-        return importlib.metadata.version("mmd-autolip-tool")
-    except importlib.metadata.PackageNotFoundError:
-        pass
-
-    candidates = [Path(__file__).resolve().parents[2] / "pyproject.toml"]
-    if getattr(sys, "frozen", False) and sys.executable:
-        candidates.append(Path(sys.executable).resolve().parent / "pyproject.toml")
-    for candidate in candidates:
-        try:
-            with candidate.open("rb") as handle:
-                project = tomllib.load(handle).get("project", {})
-            version = project.get("version") if isinstance(project, dict) else None
-            if isinstance(version, str) and version.strip():
-                return version.strip()
-        except (OSError, tomllib.TOMLDecodeError):
-            continue
-    return "unavailable"
-
-
 def _runtime_identity() -> dict[str, Any]:
     executable_basename = "unavailable"
     if sys.executable:
@@ -160,7 +139,7 @@ def _runtime_identity() -> dict[str, Any]:
         "execution_mode": "frozen" if getattr(sys, "frozen", False) else "source",
         "executable_basename": executable_basename,
         "python_version": platform.python_version(),
-        "app_version": _resolve_app_version(),
+        "app_version": resolve_app_version() or "unavailable",
         "build_identifier": build_identifier,
     }
 
@@ -255,8 +234,13 @@ class AnalysisDebugTrace:
         selected_model_key: str | None = None,
         selected_wav_analysis: Any = None,
         settings_provenance: Mapping[str, Any] | None = None,
+        analysis_run_id: str | None = None,
     ) -> None:
-        self.analysis_run_id = uuid.uuid4().hex
+        if analysis_run_id is not None and (
+            type(analysis_run_id) is not str or not analysis_run_id
+        ):
+            raise ValueError("analysis_run_id must be non-empty text or None")
+        self.analysis_run_id = analysis_run_id or uuid.uuid4().hex
         self.folder_timestamp = _folder_timestamp()
         self.started_at = _timestamp()
         self.input_mode = str(input_mode)
@@ -641,6 +625,7 @@ def build_debug_trace(
     selected_model_key: str | None,
     selected_wav_analysis: Any,
     settings_provenance: Mapping[str, Any] | None = None,
+    analysis_run_id: str | None = None,
 ) -> AnalysisDebugTrace:
     return AnalysisDebugTrace(
         input_mode=input_mode,
@@ -654,4 +639,5 @@ def build_debug_trace(
         selected_model_key=selected_model_key,
         selected_wav_analysis=selected_wav_analysis,
         settings_provenance=settings_provenance,
+        analysis_run_id=analysis_run_id,
     )

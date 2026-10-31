@@ -11,6 +11,32 @@ class FfmpegRunResult:
     stderr: str
     returncode: int
 
+def run_ffmpeg_pcm_s16le_bytes(
+    ffmpeg_path: str | Path,
+    input_path: str | Path,
+    sample_rate: int = 16000,
+) -> bytes:
+    """Decode mono PCM s16le bytes for Whisper without creating a console window."""
+    cmd = [
+        str(ffmpeg_path),
+        "-nostdin",
+        "-threads", "0",
+        "-i", str(input_path),
+        "-f", "s16le",
+        "-ac", "1",
+        "-acodec", "pcm_s16le",
+        "-ar", str(sample_rate),
+        "-",
+    ]
+    process = subprocess.run(
+        cmd,
+        capture_output=True,
+        check=True,
+        shell=False,
+        creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+    )
+    return process.stdout
+
 def _run_ffmpeg_pcm_wav(
     ffmpeg_path: Path,
     input_path: Path,

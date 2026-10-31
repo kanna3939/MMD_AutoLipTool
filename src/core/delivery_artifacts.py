@@ -17,6 +17,10 @@ from src.core.diagnostic_report import (
     write_diagnostic_report,
 )
 from src.core.ffmpeg_runner import run_ffmpeg_mmd_wav_cancellable
+from src.core.final_output_gate import (
+    project_shared_output_context,
+    validate_shared_output_readback,
+)
 from src.core.mmd_wav_export import (
     MMD_WAV_SPEC,
     MmdWavExportResult,
@@ -31,6 +35,11 @@ from src.vmd_writer.validator import (
     validate_morph_vmd_readback,
 )
 from src.vmd_writer.writer import write_morph_frames_vmd
+from src.vmd_writer.verified_morph_output import (
+    VerifiedMorphOutputError,
+    validate_verified_morph_readback,
+    write_verified_morph_vmd,
+)
 
 
 _UTF8_BOM = b"\xef\xbb\xbf"
@@ -81,6 +90,54 @@ def _generate_and_validate_vmd(
 ) -> None:
     _ensure_not_cancelled(cancel_token)
     state = context.current_state
+
+    if state.projection_kind == "shared_final_output":
+        shared = state.shared_final_output_context
+        if shared is None or shared.candidate.plan is None:
+            _raise_delivery_error(
+                "vmd_write_failed",
+                "the shared final output context is unavailable.",
+            )
+        try:
+            projection = project_shared_output_context(shared)
+            if projection != shared.projection:
+                _raise_delivery_error(
+                    "vmd_validation_failed",
+                    "the captured shared wire projection changed.",
+                )
+            write_verified_morph_vmd(
+                output_path,
+                projection,
+                model_name=state.writer_parameters.vmd_model_name,
+            )
+        except DeliveryContractError:
+            raise
+        except Exception as error:
+            _raise_if_cancelled_after_error(cancel_token, error)
+            _raise_delivery_error(
+                "vmd_write_failed",
+                "the shared delivery VMD could not be generated.",
+                error,
+            )
+        _ensure_not_cancelled(cancel_token)
+        try:
+            evidence = validate_shared_output_readback(
+                shared,
+                output_path,
+                model_name=state.writer_parameters.vmd_model_name,
+            )
+            if not evidence.closure_verified:
+                raise VerifiedMorphOutputError("wire closure evidence is incomplete")
+            cancel_token.capture_artifact_seal("vmd", output_path)
+        except Exception as error:
+            _raise_if_cancelled_after_error(cancel_token, error)
+            _raise_delivery_error(
+                "vmd_validation_failed",
+                "the shared delivery VMD did not pass independent readback.",
+                error,
+            )
+        _ensure_not_cancelled(cancel_token)
+        return
 
     try:
         prepared_frames = build_morph_frames_from_effective_shape_plan(
@@ -282,6 +339,16 @@ def _generate_and_validate_mmd_wav(
         _raise_source_audio_changed(error)
     if post_identity != state.source_identity:
         _raise_source_audio_changed()
+    if state.projection_kind == "shared_final_output":
+        try:
+            cancel_token.capture_artifact_seal("mmd_wav", output_path)
+        except Exception as error:
+            _raise_if_cancelled_after_error(cancel_token, error)
+            _raise_delivery_error(
+                "mmd_wav_validation_failed",
+                "the MMD WAV identity could not be captured.",
+                error,
+            )
     _ensure_not_cancelled(cancel_token)
 
 
@@ -356,15 +423,83 @@ def _generate_and_validate_report(
             error,
         )
     _validate_report_bytes(actual_bytes, expected_bytes)
+    if context.current_state.projection_kind == "shared_final_output":
+        try:
+            cancel_token.capture_artifact_seal("report", output_path)
+        except Exception as error:
+            _raise_if_cancelled_after_error(cancel_token, error)
+            _raise_delivery_error(
+                "report_validation_failed",
+                "the diagnostic report identity could not be captured.",
+                error,
+            )
+    _ensure_not_cancelled(cancel_token)
+
+
+def _validate_shared_delivery_before_commit(
+    context: DeliveryStartContext,
+    artifact_paths: tuple[tuple[str, Path], ...],
+    cancel_token: DeliveryCancelToken,
+) -> None:
+    """Recheck shared semantic artifacts; the orchestrator owns seal scans."""
+    state = context.current_state
+    if state.projection_kind != "shared_final_output":
+        return
+    shared = state.shared_final_output_context
+    if shared is None or shared.candidate.plan is None:
+        _raise_delivery_error(
+            "vmd_validation_failed",
+            "the shared final output context is unavailable before commit.",
+        )
+    if tuple(kind for kind, _ in artifact_paths) != ("vmd", "mmd_wav", "report"):
+        _raise_delivery_error(
+            "vmd_validation_failed",
+            "the delivery artifact set is incomplete.",
+        )
+    paths = dict(artifact_paths)
+    try:
+        projection = project_shared_output_context(shared)
+        if projection != shared.projection:
+            raise VerifiedMorphOutputError("shared projection changed before commit")
+        evidence = validate_shared_output_readback(
+            shared,
+            paths["vmd"],
+            model_name=state.writer_parameters.vmd_model_name,
+        )
+        if not evidence.closure_verified:
+            raise VerifiedMorphOutputError("wire closure evidence is incomplete")
+
+        source_before = capture_source_audio_identity(state.audio_probe.source_path)
+        if source_before != state.source_identity:
+            _raise_source_audio_changed()
+        expected_report = format_diagnostic_report(
+            state.diagnostics_snapshot,
+            generated_at=context.report_generated_at,
+        ).encode("utf-8")
+        actual_report = paths["report"].read_bytes()
+        _validate_report_bytes(actual_report, expected_report)
+        source_after = capture_source_audio_identity(state.audio_probe.source_path)
+        if source_after != state.source_identity:
+            _raise_source_audio_changed()
+    except DeliveryContractError:
+        raise
+    except Exception as error:
+        _raise_if_cancelled_after_error(cancel_token, error)
+        _raise_delivery_error(
+            "vmd_validation_failed",
+            "delivery artifacts failed final verification.",
+            error,
+        )
     _ensure_not_cancelled(cancel_token)
 
 
 def build_delivery_artifact_operations() -> DeliveryArtifactOperations:
-    """Build the GUI-independent B3 artifact generation operations."""
+    """Build the GUI-independent delivery artifact generation operations."""
     return DeliveryArtifactOperations(
         generate_and_validate_vmd=_generate_and_validate_vmd,
         generate_and_validate_mmd_wav=_generate_and_validate_mmd_wav,
         generate_and_validate_report=_generate_and_validate_report,
+        validate_before_commit=_validate_shared_delivery_before_commit,
     )
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import errno
+import hashlib
 import os
 import shutil
 import stat
@@ -13,6 +14,7 @@ from typing import Any, Callable, Literal, Sequence
 
 from src.core.audio_probe import AudioProbeResult
 from src.core.effective_shape_plan import EffectiveShapePlan
+from src.core.final_output_projection import SharedFinalOutputContext
 from src.core.mmd_wav_export import MMD_WAV_SPEC, MmdWavSpec
 from src.core.morph_name_sets import (
     JAPANESE_OUTPUT_NAMES,
@@ -233,10 +235,76 @@ class DeliveryCurrentState:
     projection_generation: int
     artifact_order: tuple[DeliveryArtifactKind, ...] = DELIVERY_ARTIFACT_ORDER
     gate_status: Literal["ready", "warning_confirmation_required"] = "ready"
+    projection_kind: Literal["legacy_effective", "shared_final_output"] = "legacy_effective"
+    shared_final_output_context: SharedFinalOutputContext | None = None
+    expected_transition_input_digest: str | None = None
+    expected_application_binding_digest: str | None = None
+    expected_cleanup_input_digest: str | None = None
+    expected_cleanup_application_binding_digest: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.effective_shape_plan, EffectiveShapePlan):
             raise ValueError("effective_shape_plan must be EffectiveShapePlan")
+        if self.projection_kind not in {"legacy_effective", "shared_final_output"}:
+            raise ValueError("projection_kind is unsupported")
+        if self.projection_kind == "legacy_effective":
+            if self.shared_final_output_context is not None:
+                raise ValueError("legacy projection cannot carry a shared context")
+        elif not isinstance(self.shared_final_output_context, SharedFinalOutputContext):
+            raise ValueError("shared projection requires a shared final output context")
+        if self.projection_kind == "legacy_effective":
+            if (
+                self.expected_transition_input_digest is not None
+                or self.expected_application_binding_digest is not None
+                or self.expected_cleanup_input_digest is not None
+                or self.expected_cleanup_application_binding_digest is not None
+            ):
+                raise ValueError("legacy delivery cannot carry shared binding digests")
+        elif self.shared_final_output_context.transition_binding is None:
+            if (
+                self.expected_transition_input_digest is not None
+                or self.shared_final_output_context.input_identity.transition_input_digest is not None
+            ):
+                raise ValueError("legacy shared delivery has an unexpected transition digest")
+        elif (
+            self.expected_transition_input_digest is None
+            or self.shared_final_output_context.input_identity.transition_input_digest
+            != self.expected_transition_input_digest
+            or self.shared_final_output_context.transition_binding.input_snapshot.input_digest
+            != self.expected_transition_input_digest
+        ):
+            raise ValueError("shared delivery transition identity is stale")
+        if self.projection_kind == "shared_final_output" and (
+            self.shared_final_output_context.input_identity.application_binding_digest
+            != self.expected_application_binding_digest
+        ):
+            raise ValueError("shared delivery application binding is stale")
+        if self.projection_kind == "shared_final_output":
+            cleanup_binding = self.shared_final_output_context.cleanup_binding
+            if cleanup_binding is None:
+                if (
+                    self.expected_cleanup_input_digest is not None
+                    or self.expected_cleanup_application_binding_digest is not None
+                    or self.shared_final_output_context.input_identity.cleanup_input_digest is not None
+                    or self.shared_final_output_context.input_identity.cleanup_application_binding_digest is not None
+                    or self.diagnostics_snapshot.cleanup_summary is not None
+                ):
+                    raise ValueError("shared delivery cleanup binding is unexpected")
+            elif (
+                self.expected_cleanup_input_digest != cleanup_binding.input_digest
+                or self.shared_final_output_context.input_identity.cleanup_input_digest
+                != cleanup_binding.input_digest
+                or self.shared_final_output_context.input_identity.cleanup_application_binding_digest
+                != (
+                    None
+                    if cleanup_binding.default_selection is None
+                    else cleanup_binding.default_selection.selection_digest
+                )
+                or self.expected_cleanup_application_binding_digest
+                != self.shared_final_output_context.input_identity.cleanup_application_binding_digest
+                or self.diagnostics_snapshot.cleanup_summary != cleanup_binding.summary
+            ):
+                raise ValueError("shared delivery cleanup binding is stale")
         if not isinstance(self.diagnostics_snapshot, OutputDiagnosticsSnapshot):
             raise ValueError(
                 "diagnostics_snapshot must be OutputDiagnosticsSnapshot"
@@ -285,6 +353,39 @@ class DeliveryCurrentState:
             != self.diagnostics_snapshot.adjustment_summary.base_plan_identity_digest
         ):
             raise ValueError("effective plan and snapshot base identity mismatch")
+        if self.projection_kind == "shared_final_output":
+            shared = self.shared_final_output_context
+            assert shared is not None
+            if self.diagnostics_snapshot.shared_final_output_identity != shared.identity:
+                raise ValueError("shared diagnostics and output context differ")
+            if shared.identity.wire_digest != shared.projection.wire_digest:
+                raise ValueError("shared projection digest differs from its identity")
+            if shared.transition_binding is not None:
+                transition_context = shared
+                if shared.cleanup_binding is not None:
+                    transition_context = shared.cleanup_binding.upstream_context
+                if (
+                    transition_context.transition_binding != shared.transition_binding
+                    or transition_context.identity.semantic_digest
+                    != shared.transition_binding.plan.semantic_digest
+                    or transition_context.identity.plan_schema_id
+                    != shared.transition_binding.plan.schema_id
+                ):
+                    raise ValueError("shared upstream transition identity differs from its plan")
+            if shared.input_identity.output_mapping != shared.candidate.plan.identity_context.output_mapping:
+                raise ValueError("shared projection mapping differs from its closure plan")
+            try:
+                shared_source_path = (
+                    None
+                    if shared.input_identity.source_audio_path is None
+                    else Path(shared.input_identity.source_audio_path).resolve(strict=False)
+                )
+            except (OSError, RuntimeError, TypeError, ValueError) as error:
+                raise ValueError("shared source audio path is invalid") from error
+            if shared_source_path != self.source_identity.resolved_path:
+                raise ValueError("shared source audio identity differs from delivery source")
+            if self.start_fingerprint != self.diagnostics_snapshot.save_state_fingerprint:
+                raise ValueError("shared save fingerprint differs from diagnostics")
         adjustment_summary = self.diagnostics_snapshot.adjustment_summary
         if (
             adjustment_summary.effective_shape_count is not None
@@ -292,16 +393,17 @@ class DeliveryCurrentState:
             != len(self.effective_shape_plan.shapes)
         ):
             raise ValueError("effective shape count mismatch")
-        expected_morph_frames = build_morph_frames_from_effective_shape_plan(
-            self.effective_shape_plan,
-            output_morph_names=normalized_names,
-        )
-        if (
-            adjustment_summary.effective_morph_frame_count is not None
-            and adjustment_summary.effective_morph_frame_count
-            != len(expected_morph_frames)
-        ):
-            raise ValueError("effective morph frame count mismatch")
+        if self.projection_kind == "legacy_effective":
+            expected_morph_frames = build_morph_frames_from_effective_shape_plan(
+                self.effective_shape_plan,
+                output_morph_names=normalized_names,
+            )
+            if (
+                adjustment_summary.effective_morph_frame_count is not None
+                and adjustment_summary.effective_morph_frame_count
+                != len(expected_morph_frames)
+            ):
+                raise ValueError("effective morph frame count mismatch")
         if (
             self.diagnostics_snapshot.generation_summary.vmd_model_name
             != self.writer_parameters.vmd_model_name
@@ -474,10 +576,90 @@ def evaluate_delivery_start_gate(
     confirmed_warning_save_state_fingerprint: str | None = None,
     application_busy: bool = False,
     analysis_in_progress: bool = False,
+    projection_kind: Literal["legacy_effective", "shared_final_output"] = "legacy_effective",
+    shared_final_output_context: SharedFinalOutputContext | None = None,
+    shared_lifecycle_signature: tuple[object, ...] | None = None,
+    expected_transition_input_digest: str | None = None,
+    expected_application_binding_digest: str | None = None,
+    expected_cleanup_input_digest: str | None = None,
+    expected_cleanup_application_binding_digest: str | None = None,
 ) -> DeliveryStartGateResult:
     """Evaluate the pure, fail-closed B1 start contract."""
     blocking_codes: list[str] = []
     snapshot_is_valid = isinstance(diagnostics_snapshot, OutputDiagnosticsSnapshot)
+
+    if projection_kind not in {"legacy_effective", "shared_final_output"}:
+        blocking_codes.append("delivery_projection_kind_invalid")
+    elif projection_kind == "legacy_effective":
+        if shared_final_output_context is not None:
+            blocking_codes.append("delivery_projection_context_mismatch")
+        if (
+            expected_transition_input_digest is not None
+            or expected_application_binding_digest is not None
+            or expected_cleanup_input_digest is not None
+            or expected_cleanup_application_binding_digest is not None
+        ):
+            blocking_codes.append("delivery_projection_context_mismatch")
+    elif (
+        not isinstance(shared_final_output_context, SharedFinalOutputContext)
+        or not snapshot_is_valid
+        or diagnostics_snapshot.shared_final_output_identity
+        != shared_final_output_context.identity
+        or shared_final_output_context.identity.wire_digest
+        != shared_final_output_context.projection.wire_digest
+        or shared_final_output_context.lifecycle_signature
+        != shared_lifecycle_signature
+        or shared_final_output_context.input_identity.application_binding_digest
+        != expected_application_binding_digest
+        or (
+            shared_final_output_context.cleanup_binding is None
+            and (
+                expected_cleanup_input_digest is not None
+                or expected_cleanup_application_binding_digest is not None
+                or shared_final_output_context.input_identity.cleanup_input_digest is not None
+                or shared_final_output_context.input_identity.cleanup_application_binding_digest is not None
+                or diagnostics_snapshot.cleanup_summary is not None
+            )
+        )
+        or (
+            shared_final_output_context.cleanup_binding is not None
+            and (
+                expected_cleanup_input_digest is None
+                or expected_cleanup_input_digest
+                != shared_final_output_context.cleanup_binding.input_digest
+                or expected_cleanup_input_digest
+                != shared_final_output_context.input_identity.cleanup_input_digest
+                or shared_final_output_context.input_identity.cleanup_application_binding_digest
+                != (
+                    None
+                    if shared_final_output_context.cleanup_binding.default_selection is None
+                    else shared_final_output_context.cleanup_binding.default_selection.selection_digest
+                )
+                or expected_cleanup_application_binding_digest
+                != shared_final_output_context.input_identity.cleanup_application_binding_digest
+                or diagnostics_snapshot.cleanup_summary
+                != shared_final_output_context.cleanup_binding.summary
+            )
+        )
+        or (
+            shared_final_output_context.transition_binding is None
+            and (
+                expected_transition_input_digest is not None
+                or shared_final_output_context.input_identity.transition_input_digest is not None
+            )
+        )
+        or (
+            shared_final_output_context.transition_binding is not None
+            and (
+                expected_transition_input_digest is None
+                or expected_transition_input_digest
+                != shared_final_output_context.transition_binding.input_snapshot.input_digest
+                or expected_transition_input_digest
+                != shared_final_output_context.input_identity.transition_input_digest
+            )
+        )
+    ):
+        blocking_codes.append("delivery_shared_output_unavailable")
 
     if application_busy or (
         snapshot_is_valid
@@ -611,6 +793,12 @@ def evaluate_delivery_start_gate(
                 if warning_confirmation_required
                 else "ready"
             ),
+            projection_kind=projection_kind,
+            shared_final_output_context=shared_final_output_context,
+            expected_transition_input_digest=expected_transition_input_digest,
+            expected_application_binding_digest=expected_application_binding_digest,
+            expected_cleanup_input_digest=expected_cleanup_input_digest,
+            expected_cleanup_application_binding_digest=expected_cleanup_application_binding_digest,
         )
     except (TypeError, ValueError, DeliveryContractError):
         return _blocked_result(
@@ -1131,6 +1319,10 @@ class DeliveryArtifactOperations:
     generate_and_validate_vmd: Callable[[DeliveryStartContext, Path, "DeliveryCancelToken"], None]
     generate_and_validate_mmd_wav: Callable[[DeliveryStartContext, Path, "DeliveryCancelToken"], None]
     generate_and_validate_report: Callable[[DeliveryStartContext, Path, "DeliveryCancelToken"], None]
+    validate_before_commit: Callable[
+        [DeliveryStartContext, tuple[tuple[DeliveryArtifactKind, Path], ...], "DeliveryCancelToken"],
+        None,
+    ] | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -1140,6 +1332,8 @@ class DeliveryArtifactOperations:
         ):
             if not callable(getattr(self, field_name)):
                 raise ValueError(f"{field_name} must be callable")
+        if self.validate_before_commit is not None and not callable(self.validate_before_commit):
+            raise ValueError("validate_before_commit must be callable or None")
 
 
 class DeliveryCancelToken:
@@ -1157,6 +1351,10 @@ class DeliveryCancelToken:
         self._commit_started = False
         self._lock = threading.Lock()
         self._commit_lock = threading.Lock()
+        self._artifact_seals: dict[
+            str,
+            tuple[str, tuple[int | None, int | None, int | None, int], str],
+        ] = {}
 
     @property
     def cancel_requested(self) -> bool:
@@ -1208,6 +1406,77 @@ class DeliveryCancelToken:
     def _set_commit_result(self, phase: Literal["committed", "commit_failed"]) -> None:
         with self._lock:
             self._phase = phase
+
+    @staticmethod
+    def _read_artifact_seal(
+        path: str | Path,
+    ) -> tuple[str, tuple[int | None, int | None, int | None, int], str]:
+        artifact = Path(path).resolve(strict=True)
+        before = artifact.stat()
+        if not stat.S_ISREG(before.st_mode) or before.st_size <= 0:
+            raise DeliveryContractError(
+                "delivery_staging_artifact_invalid",
+                "delivery artifact is not a non-empty regular file.",
+            )
+        digest = hashlib.sha256()
+        bytes_read = 0
+        with artifact.open("rb") as stream:
+            while True:
+                chunk = stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                bytes_read += len(chunk)
+        after = artifact.stat()
+        identity_before = (
+            getattr(before, "st_dev", None),
+            getattr(before, "st_ino", None),
+            getattr(before, "st_mtime_ns", None),
+            int(before.st_size),
+        )
+        identity_after = (
+            getattr(after, "st_dev", None),
+            getattr(after, "st_ino", None),
+            getattr(after, "st_mtime_ns", None),
+            int(after.st_size),
+        )
+        if identity_before != identity_after or bytes_read != after.st_size:
+            raise DeliveryContractError(
+                "delivery_staging_artifact_invalid",
+                "delivery artifact changed while its identity was captured.",
+            )
+        return str(artifact), identity_after, digest.hexdigest()
+
+    def capture_artifact_seal(self, kind: DeliveryArtifactKind, path: str | Path) -> None:
+        if kind not in DELIVERY_ARTIFACT_ORDER:
+            raise DeliveryContractError(
+                "delivery_artifact_kind_invalid", "delivery artifact kind is invalid."
+            )
+        seal = self._read_artifact_seal(path)
+        with self._lock:
+            if kind in self._artifact_seals:
+                raise DeliveryContractError(
+                    "delivery_artifact_seal_duplicate",
+                    "delivery artifact identity was captured more than once.",
+                )
+            self._artifact_seals[kind] = seal
+
+    def verify_artifact_seal(self, kind: DeliveryArtifactKind, path: str | Path) -> bool:
+        with self._lock:
+            expected = self._artifact_seals.get(kind)
+        if expected is None:
+            return False
+        try:
+            actual = self._read_artifact_seal(path)
+        except (DeliveryContractError, OSError, RuntimeError, TypeError, ValueError):
+            return False
+        return actual == expected
+
+    def has_complete_artifact_seals(self) -> bool:
+        with self._lock:
+            return tuple(
+                kind for kind in DELIVERY_ARTIFACT_ORDER if kind in self._artifact_seals
+            ) == DELIVERY_ARTIFACT_ORDER
 
     def _terminate_process_async(self, process: Any) -> None:
         thread = threading.Thread(
@@ -1963,6 +2232,85 @@ def _orchestrate_delivery_package_impl(
             artifact_phase="report",
         )
 
+    validate_before_commit = artifact_operations.validate_before_commit
+    if (
+        start_context.current_state.projection_kind == "shared_final_output"
+        and validate_before_commit is None
+    ):
+        return _build_delivery_terminal_result(
+            job_id=job_id,
+            primary_status="failed",
+            primary_error_code="delivery_artifact_operations_invalid",
+            committed=False,
+            final_path=None,
+            staging_path=owned_staging,
+            parent_directory=destination.parent_directory,
+            commit_phase="before_commit",
+            artifact_phase="report",
+        )
+    if validate_before_commit is not None:
+        if cancel_token.cancel_requested:
+            return _build_delivery_terminal_result(
+                job_id=job_id,
+                primary_status="cancelled",
+                primary_error_code="output_cancelled",
+                committed=False,
+                final_path=None,
+                staging_path=owned_staging,
+                parent_directory=destination.parent_directory,
+                commit_phase="before_commit",
+                artifact_phase="report",
+            )
+        try:
+            validate_before_commit(
+                start_context,
+                staging.artifact_paths,
+                cancel_token,
+            )
+        except Exception as error:
+            if cancel_token.cancel_requested:
+                return _build_delivery_terminal_result(
+                    job_id=job_id,
+                    primary_status="cancelled",
+                    primary_error_code="output_cancelled",
+                    committed=False,
+                    final_path=None,
+                    staging_path=owned_staging,
+                    parent_directory=destination.parent_directory,
+                    commit_phase="before_commit",
+                    artifact_phase="report",
+                )
+            return _build_delivery_terminal_result(
+                job_id=job_id,
+                primary_status="failed",
+                primary_error_code=_delivery_exception_code(
+                    error,
+                    "vmd_validation_failed",
+                ),
+                committed=False,
+                final_path=None,
+                staging_path=owned_staging,
+                parent_directory=destination.parent_directory,
+                commit_phase="before_commit",
+                artifact_phase="report",
+            )
+        if start_context.current_state.projection_kind == "shared_final_output":
+            if not cancel_token.has_complete_artifact_seals() or not all(
+                cancel_token.verify_artifact_seal(kind, path)
+                for kind, path in staging.artifact_paths
+            ):
+                return _build_delivery_terminal_result(
+                    job_id=job_id,
+                    primary_status="failed",
+                    primary_error_code="vmd_validation_failed",
+                    committed=False,
+                    final_path=None,
+                    staging_path=owned_staging,
+                    parent_directory=destination.parent_directory,
+                    commit_phase="before_commit",
+                    artifact_phase="report",
+                )
+
     if cancel_token.cancel_requested:
         return _build_delivery_terminal_result(
             job_id=job_id,
@@ -2017,6 +2365,21 @@ def _orchestrate_delivery_package_impl(
             job_id=job_id,
             primary_status="failed",
             primary_error_code="delivery_commit_authorization_invalid",
+            committed=False,
+            final_path=None,
+            staging_path=owned_staging,
+            parent_directory=destination.parent_directory,
+            commit_phase="awaiting_commit_guard",
+            artifact_phase="report",
+        )
+    if start_context.current_state.projection_kind == "shared_final_output" and not all(
+        cancel_token.verify_artifact_seal(kind, path)
+        for kind, path in staging.artifact_paths
+    ):
+        return _build_delivery_terminal_result(
+            job_id=job_id,
+            primary_status="failed",
+            primary_error_code="vmd_validation_failed",
             committed=False,
             final_path=None,
             staging_path=owned_staging,

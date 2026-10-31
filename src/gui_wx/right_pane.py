@@ -8,7 +8,7 @@ from gui_wx.playback_context import (
     PlaybackInfoContext,
     format_playback_info_context,
 )
-from gui_wx.theme import ThemeManager
+from gui_wx.theme import ThemeButton, ThemeManager
 from gui_wx.selected_event_editor import (
     SelectedEventEditBoundaryRequest,
     SelectedEventEditRequest,
@@ -44,6 +44,28 @@ def _format_whisper_artifact_status(status: str) -> str:
         "read_failed": "読み取り失敗",
         "invalid_path": "パス不正",
     }.get(status, "確認失敗")
+
+
+def _format_closure_restriction_reason(reason: str) -> str:
+    return {
+        "silence_core_precedence": "無音区間の閉口要件を適用",
+        "manual_or_unknown_key_preserved": "手動または由来不明の値を保護",
+        "preserved_protected_shape_value": "保護対象の既存形状値を維持",
+    }.get(reason, "閉口要件に基づく値の制限")
+
+
+@dataclass(frozen=True)
+class CleanupEventSelectionRequest:
+    binding_digest: str
+    ticket: int
+    lifecycle_epoch: int
+    base_event_index: int
+
+    def __post_init__(self) -> None:
+        if type(self.binding_digest) is not str or len(self.binding_digest) != 64:
+            raise ValueError("binding_digest must be a SHA-256 digest")
+        for name in ("ticket", "lifecycle_epoch", "base_event_index"):
+            _require_revision(getattr(self, name), name)
 
 
 @dataclass(frozen=True)
@@ -219,7 +241,7 @@ class ModelProfilePanelState:
     active_morph_name_set_display_name: str = "日本語5母音"
     active_output_names: tuple[str, str, str, str, str] = JAPANESE_OUTPUT_NAMES
     active_generation_settings: GenerationSettings = GenerationSettings()
-    active_morph_upper_limit: float = 0.5
+    active_morph_upper_limit: float = 0.9
     resolution_status: str = "no_profile"
     resolution_reason: str | None = None
     mutation_available: bool = True
@@ -483,6 +505,8 @@ class WhisperModelCancelRequest:
 
 
 _REANALYSIS_STATE_LINE = "状態: 再解析が必要"
+PENDING_OUTPUT_EDIT_INFO_PREFIX = "変更未適用（編集表示）。"
+PENDING_OUTPUT_EDIT_DIAGNOSTICS_NOTE = "以下は最後に適用した結果の診断です"
 
 
 class RightPane(wx.Panel):
@@ -494,6 +518,9 @@ class RightPane(wx.Panel):
     """
     def __init__(self, parent):
         super().__init__(parent)
+        self._is_shutting_down = False
+        self._pending_output_edit_info = False
+        self._pending_output_edit_diagnostics_note = False
         
         main_sizer = wx.BoxSizer(wx.VERTICAL)
         
@@ -512,11 +539,38 @@ class RightPane(wx.Panel):
         
         # サイズ変更時にテキストのWrapを更新するためのイベントバインド
         self.Bind(wx.EVT_SIZE, self._on_size)
+        self.on_closure_restriction_selection = None
 
     def _init_info_tab(self):
         self.panel_info = wx.ScrolledWindow(self.notebook, style=wx.VSCROLL)
         self.panel_info.SetScrollRate(0, 10)
         sizer = wx.BoxSizer(wx.VERTICAL)
+        self.st_pending_output_edit = wx.StaticText(
+            self.panel_info,
+            label=PENDING_OUTPUT_EDIT_INFO_PREFIX,
+        )
+        self.st_pending_output_edit.SetMinSize((1, -1))
+        self.st_pending_output_edit.Wrap(200)
+        self.st_pending_output_edit.Hide()
+        sizer.Add(
+            self.st_pending_output_edit,
+            0,
+            wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND,
+            5,
+        )
+        self.st_pending_output_edit_note = wx.StaticText(
+            self.panel_info,
+            label=PENDING_OUTPUT_EDIT_DIAGNOSTICS_NOTE,
+        )
+        self.st_pending_output_edit_note.SetMinSize((1, -1))
+        self.st_pending_output_edit_note.Wrap(200)
+        self.st_pending_output_edit_note.Hide()
+        sizer.Add(
+            self.st_pending_output_edit_note,
+            0,
+            wx.LEFT | wx.RIGHT | wx.EXPAND,
+            5,
+        )
         self.st_info = wx.StaticText(
             self.panel_info,
             label="",
@@ -524,6 +578,28 @@ class RightPane(wx.Panel):
         self.st_info.SetMinSize((1, -1))
         self.st_info.Wrap(200)
         sizer.Add(self.st_info, 0, wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND, 5)
+
+        self.st_transition_candidate_status = wx.StaticText(
+            self.panel_info,
+            label="",
+        )
+        self.st_transition_candidate_status.SetMinSize((1, -1))
+        self.st_transition_candidate_status.Wrap(200)
+        sizer.Add(
+            self.st_transition_candidate_status,
+            0,
+            wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND,
+            5,
+        )
+        self.st_transition_summary = wx.StaticText(self.panel_info, label="")
+        self.st_transition_summary.SetMinSize((1, -1))
+        self.st_transition_summary.Wrap(200)
+        sizer.Add(
+            self.st_transition_summary,
+            0,
+            wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND,
+            5,
+        )
 
         self.pnl_info_reanalysis = wx.Panel(self.panel_info)
         reanalysis_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -564,9 +640,40 @@ class RightPane(wx.Panel):
             wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
             5,
         )
+        self.st_shared_restrictions_title = wx.StaticText(
+            self.panel_info,
+            label="閉口要件による出力制限",
+        )
+        self.tree_shared_restrictions = wx.TreeCtrl(
+            self.panel_info,
+            style=wx.TR_HAS_BUTTONS | wx.TR_LINES_AT_ROOT | wx.TR_HIDE_ROOT,
+            size=(-1, 130),
+        )
+        self._shared_restrictions_binding = None
+        self._shared_restrictions_render_signature = None
+        self.tree_shared_restrictions.Bind(
+            wx.EVT_TREE_SEL_CHANGED,
+            self._on_shared_restriction_selection,
+        )
+        sizer.Add(
+            self.st_shared_restrictions_title,
+            0,
+            wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND,
+            5,
+        )
+        sizer.Add(
+            self.tree_shared_restrictions,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
+            5,
+        )
         self.pnl_info_reanalysis.Hide()
+        self.st_transition_candidate_status.Hide()
+        self.st_transition_summary.Hide()
         self.st_info_suffix.Hide()
         self.st_playback_context.Hide()
+        self.st_shared_restrictions_title.Hide()
+        self.tree_shared_restrictions.Hide()
         self.refresh_info_attention_style()
         self.panel_info.SetSizer(sizer)
         self.notebook.AddPage(self.panel_info, "Info")
@@ -592,7 +699,11 @@ class RightPane(wx.Panel):
         self.on_selected_event_edit_boundary_callback = None
         self.on_selected_event_reset_callback = None
         self.on_selected_event_mode_callback = None
+        self.on_cleanup_event_select_callback = None
+        self._cleanup_event_selection_binding = None
+        self._cleanup_event_selection_rows = ()
         self._selected_editor_state = None
+        self._selected_editor_pending_request = None
         self._suppress_selected_editor_events = False
         self._selected_event_editor_revision = 0
         self._selected_editor_gesture_serial = 0
@@ -605,6 +716,15 @@ class RightPane(wx.Panel):
         )
         self.st_selected_event.Wrap(200)
         sizer.Add(self.st_selected_event, 0, wx.ALL | wx.EXPAND, 5)
+        self.st_cleanup_event_label = wx.StaticText(
+            self.panel_selected_event, label="出力を整理したイベント"
+        )
+        self.choice_cleanup_events = wx.Choice(self.panel_selected_event, choices=())
+        self.choice_cleanup_events.Enable(False)
+        self.st_cleanup_event_label.Hide()
+        self.choice_cleanup_events.Hide()
+        sizer.Add(self.st_cleanup_event_label, 0, wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND, 5)
+        sizer.Add(self.choice_cleanup_events, 0, wx.ALL | wx.EXPAND, 5)
 
         self.pnl_selected_editor = wx.Panel(self.panel_selected_event)
         editor_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -666,6 +786,17 @@ class RightPane(wx.Panel):
         slope.SetDigits(2)
         self._add_selected_editor_row(grid, "slope_ratio", "閉口傾斜比", slope)
         editor_sizer.Add(grid, 0, wx.ALL | wx.EXPAND, 5)
+
+        self.chk_manual_overlap_limit_override = wx.CheckBox(
+            self.pnl_selected_editor,
+            label="制限を解除（後続の異母音へ延長）",
+        )
+        editor_sizer.Add(
+            self.chk_manual_overlap_limit_override,
+            0,
+            wx.LEFT | wx.RIGHT | wx.BOTTOM,
+            5,
+        )
 
         mode_sizer = wx.BoxSizer(wx.HORIZONTAL)
         mode_sizer.Add(
@@ -789,7 +920,7 @@ class RightPane(wx.Panel):
             wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND,
             5,
         )
-        self.btn_reset_selected_event = wx.Button(
+        self.btn_reset_selected_event = ThemeButton(
             self.pnl_selected_editor,
             label="選択イベントの補正をリセット",
         )
@@ -901,6 +1032,11 @@ class RightPane(wx.Panel):
             wx.EVT_CHOICE,
             self._on_selected_event_mode_choice,
         )
+        self.chk_manual_overlap_limit_override.Bind(
+            wx.EVT_CHECKBOX,
+            self._on_manual_overlap_limit_override,
+        )
+        self.choice_cleanup_events.Bind(wx.EVT_CHOICE, self._on_cleanup_event_choice)
 
     def _init_preset_tab(self):
         self.panel_preset = wx.ScrolledWindow(self.notebook, style=wx.VSCROLL)
@@ -935,12 +1071,12 @@ class RightPane(wx.Panel):
         self.st_preset_settings = wx.StaticText(self.panel_preset, label="")
         self.st_preset_settings.SetMinSize((1, -1))
         sizer.Add(self.st_preset_settings, 0, wx.ALL | wx.EXPAND, 5)
-        self.btn_apply_preset = wx.Button(self.panel_preset, label="選択したプリセットを適用")
+        self.btn_apply_preset = ThemeButton(self.panel_preset, label="選択したプリセットを適用")
         sizer.Add(self.btn_apply_preset, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 5)
         management_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.btn_create_preset = wx.Button(self.panel_preset, label="作成")
-        self.btn_update_preset = wx.Button(self.panel_preset, label="更新 / 名前変更")
-        self.btn_delete_preset = wx.Button(self.panel_preset, label="削除")
+        self.btn_create_preset = ThemeButton(self.panel_preset, label="作成")
+        self.btn_update_preset = ThemeButton(self.panel_preset, label="更新 / 名前変更")
+        self.btn_delete_preset = ThemeButton(self.panel_preset, label="削除")
         management_sizer.Add(self.btn_create_preset, 1, wx.RIGHT, 3)
         management_sizer.Add(self.btn_update_preset, 1, wx.LEFT | wx.RIGHT, 3)
         management_sizer.Add(self.btn_delete_preset, 1, wx.LEFT, 3)
@@ -999,7 +1135,7 @@ class RightPane(wx.Panel):
         sizer.Add(self.st_model_profile_morph, 0, wx.LEFT | wx.RIGHT | wx.EXPAND, 5)
         self.st_model_profile_values = wx.StaticText(
             self.panel_model_profile,
-            label="解決値: モーフ最大値 0.50 / 開口保持 0f / 閉口スムース 0f / 長音 hold",
+            label="解決値: モーフ最大値 0.90 / 開口保持 0f / 閉口スムース 0f / 長音 hold",
         )
         self.st_model_profile_values.SetMinSize((1, -1))
         sizer.Add(self.st_model_profile_values, 0, wx.ALL | wx.EXPAND, 5)
@@ -1026,7 +1162,7 @@ class RightPane(wx.Panel):
         )
         self.st_model_profile_selected.SetMinSize((1, -1))
         sizer.Add(self.st_model_profile_selected, 0, wx.ALL | wx.EXPAND, 5)
-        self.btn_apply_model_profile = wx.Button(
+        self.btn_apply_model_profile = ThemeButton(
             self.panel_model_profile,
             label="選択したモデルプロファイルを適用",
         )
@@ -1037,12 +1173,12 @@ class RightPane(wx.Panel):
             5,
         )
         management_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.btn_create_model_profile = wx.Button(self.panel_model_profile, label="作成")
-        self.btn_update_model_profile = wx.Button(
+        self.btn_create_model_profile = ThemeButton(self.panel_model_profile, label="作成")
+        self.btn_update_model_profile = ThemeButton(
             self.panel_model_profile,
             label="更新 / 名前変更",
         )
-        self.btn_delete_model_profile = wx.Button(self.panel_model_profile, label="削除")
+        self.btn_delete_model_profile = ThemeButton(self.panel_model_profile, label="削除")
         management_sizer.Add(self.btn_create_model_profile, 1, wx.RIGHT, 3)
         management_sizer.Add(self.btn_update_model_profile, 1, wx.LEFT | wx.RIGHT, 3)
         management_sizer.Add(self.btn_delete_model_profile, 1, wx.LEFT, 3)
@@ -1142,19 +1278,19 @@ class RightPane(wx.Panel):
         )
         sizer.Add(self.choice_whisper_model, 0, wx.LEFT | wx.RIGHT | wx.EXPAND, 5)
         action_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.btn_whisper_download = wx.Button(
+        self.btn_whisper_download = ThemeButton(
             self.panel_whisper_model,
             label="Download & Verify",
         )
-        self.btn_whisper_apply = wx.Button(
+        self.btn_whisper_apply = ThemeButton(
             self.panel_whisper_model,
             label="選択モデルを適用",
         )
-        self.btn_whisper_cancel = wx.Button(
+        self.btn_whisper_cancel = ThemeButton(
             self.panel_whisper_model,
             label="キャンセル",
         )
-        self.btn_whisper_delete = wx.Button(
+        self.btn_whisper_delete = ThemeButton(
             self.panel_whisper_model,
             label="削除",
         )
@@ -1163,7 +1299,7 @@ class RightPane(wx.Panel):
         action_sizer.Add(self.btn_whisper_cancel, 0, wx.RIGHT, 5)
         action_sizer.Add(self.btn_whisper_delete, 0)
         sizer.Add(action_sizer, 0, wx.ALL | wx.EXPAND, 5)
-        self.btn_whisper_change_storage = wx.Button(
+        self.btn_whisper_change_storage = ThemeButton(
             self.panel_whisper_model,
             label="保存先を変更",
         )
@@ -1473,6 +1609,8 @@ class RightPane(wx.Panel):
         width = self.GetClientSize().width - 20
         info_width = self.panel_info.GetClientSize().width - 10
         if info_width > 0:
+            self.st_pending_output_edit.Wrap(info_width)
+            self.st_pending_output_edit_note.Wrap(info_width)
             self.st_info.Wrap(info_width)
             self.st_info_suffix.Wrap(info_width)
             self.st_playback_context.Wrap(info_width)
@@ -1539,7 +1677,17 @@ class RightPane(wx.Panel):
             return
         self.notebook.ChangeSelection(page_index)
 
-    def set_info_text(self, text: str):
+    def set_info_text(
+        self,
+        text: str,
+        *,
+        pending_edits: bool = False,
+        pending_diagnostics: bool = True,
+    ):
+        self._set_pending_output_edit_info(
+            pending_edits,
+            show_diagnostics_note=pending_diagnostics,
+        )
         if (
             self.st_info.GetLabel() == text
             and not self.pnl_info_reanalysis.IsShown()
@@ -1555,14 +1703,68 @@ class RightPane(wx.Panel):
 
     def get_info_text(self) -> str:
         if not self.pnl_info_reanalysis.IsShown():
-            return self.st_info.GetLabel()
-        return "\n".join(
-            (
-                self.st_info.GetLabel(),
-                _REANALYSIS_STATE_LINE,
-                self.st_info_suffix.GetLabel(),
+            body = self.st_info.GetLabel()
+        else:
+            body = "\n".join(
+                (
+                    self.st_info.GetLabel(),
+                    _REANALYSIS_STATE_LINE,
+                    self.st_info_suffix.GetLabel(),
+                )
             )
+        if not self._pending_output_edit_info:
+            return body
+        lines = [PENDING_OUTPUT_EDIT_INFO_PREFIX]
+        if self._pending_output_edit_diagnostics_note:
+            lines.append(PENDING_OUTPUT_EDIT_DIAGNOSTICS_NOTE)
+        lines.extend(("", body))
+        return "\n".join(lines)
+
+    def set_transition_candidate_status(self, text: str) -> None:
+        if type(text) is not str or not text:
+            raise ValueError("transition candidate status must be non-empty text")
+        if self.st_transition_candidate_status.GetLabel() == text and self.st_transition_candidate_status.IsShown():
+            return
+        self.st_transition_candidate_status.SetLabel(text)
+        self.st_transition_candidate_status.Show()
+        self._update_wrap()
+
+    def clear_transition_candidate_status(self) -> None:
+        if not self.st_transition_candidate_status.IsShown() and not self.st_transition_candidate_status.GetLabel():
+            return
+        self.st_transition_candidate_status.SetLabel("")
+        self.st_transition_candidate_status.Hide()
+        self._update_wrap()
+
+    def set_transition_summary(
+        self,
+        summary,
+        *,
+        label: str = "候補遷移",
+    ) -> None:
+        if summary is None:
+            self.clear_transition_summary()
+            return
+        if label not in {"候補遷移", "自動母音遷移", "自動整理：比較候補"}:
+            raise ValueError("transition summary label is unsupported")
+        pairs = tuple(getattr(summary, "pairs", ()))
+        applied = sum(getattr(item, "state", None) == "applied" for item in pairs)
+        not_applicable = sum(
+            getattr(item, "state", None) == "not_applicable" for item in pairs
         )
+        text = f"{label}: 適用 {applied}件 / 非適用 {not_applicable}件"
+        if self.st_transition_summary.GetLabel() == text and self.st_transition_summary.IsShown():
+            return
+        self.st_transition_summary.SetLabel(text)
+        self.st_transition_summary.Show()
+        self._update_wrap()
+
+    def clear_transition_summary(self) -> None:
+        if not self.st_transition_summary.IsShown() and not self.st_transition_summary.GetLabel():
+            return
+        self.st_transition_summary.SetLabel("")
+        self.st_transition_summary.Hide()
+        self._update_wrap()
 
     def refresh_info_attention_style(self):
         font = self.st_info_reanalysis.GetFont()
@@ -1571,9 +1773,42 @@ class RightPane(wx.Panel):
         self.st_info_reanalysis.SetForegroundColour(
             ThemeManager.get_palette().attention_text
         )
+        pending_font = self.st_pending_output_edit.GetFont()
+        pending_font.SetWeight(wx.FONTWEIGHT_BOLD)
+        self.st_pending_output_edit.SetFont(pending_font)
+        self.st_pending_output_edit.SetForegroundColour(
+            ThemeManager.get_palette().pending_edit_text
+        )
+
+    def _set_pending_output_edit_info(
+        self,
+        pending: bool,
+        *,
+        show_diagnostics_note: bool = True,
+    ) -> bool:
+        pending = bool(pending)
+        show_diagnostics_note = bool(pending and show_diagnostics_note)
+        if (
+            self._pending_output_edit_info == pending
+            and self._pending_output_edit_diagnostics_note == show_diagnostics_note
+        ):
+            return False
+        self._pending_output_edit_info = pending
+        self._pending_output_edit_diagnostics_note = show_diagnostics_note
+        if pending:
+            self.st_pending_output_edit.Show()
+            self.st_pending_output_edit_note.Show(show_diagnostics_note)
+            self.refresh_info_attention_style()
+        else:
+            self.st_pending_output_edit.Hide()
+            self.st_pending_output_edit_note.Hide()
+        self._update_wrap()
+        return True
 
     def clear_info(self):
         self.set_info_text("")
+        self.clear_transition_candidate_status()
+        self.clear_transition_summary()
         self.clear_playback_context()
 
     def set_playback_context(self, context: PlaybackInfoContext):
@@ -1606,13 +1841,30 @@ class RightPane(wx.Panel):
         snapshot: OutputDiagnosticsSnapshot,
         *,
         analysis_in_progress: bool = False,
+        transition_label: str | None = None,
+        pending_edits: bool = False,
     ):
+        if transition_label is None:
+            identity = snapshot.shared_final_output_identity
+            input_identity = getattr(identity, "input_identity", None)
+            transition_label = (
+                "自動母音遷移"
+                if getattr(input_identity, "application_binding_digest", None)
+                is not None
+                else "候補遷移"
+            )
+        self.set_transition_summary(
+            snapshot.transition_summary,
+            label=transition_label,
+        )
         text = format_output_diagnostics_info(
             snapshot,
             analysis_in_progress=analysis_in_progress,
         )
+        self._set_pending_output_edit_info(pending_edits)
+        self._set_shared_final_output_restrictions(snapshot)
         if _REANALYSIS_STATE_LINE not in text:
-            self.set_info_text(text)
+            self.set_info_text(text, pending_edits=pending_edits)
             return
 
         prefix, suffix = text.split(_REANALYSIS_STATE_LINE, maxsplit=1)
@@ -1631,6 +1883,121 @@ class RightPane(wx.Panel):
         self.st_info_suffix.Show()
         self.refresh_info_attention_style()
         self._update_wrap()
+
+    def _set_shared_final_output_restrictions(
+        self,
+        snapshot: OutputDiagnosticsSnapshot,
+    ) -> None:
+        identity = snapshot.shared_final_output_identity
+        restrictions = tuple(snapshot.shared_final_output_restrictions)
+        binding = getattr(identity, "binding_digest", None)
+        if not isinstance(binding, str) or not binding:
+            binding = None
+        targets = tuple(snapshot.shared_final_output_restriction_event_targets)
+        render_signature = (binding, restrictions, targets)
+        if render_signature == self._shared_restrictions_render_signature:
+            return
+        self._shared_restrictions_render_signature = render_signature
+        if binding is None or not restrictions:
+            self._shared_restrictions_binding = None
+            self.tree_shared_restrictions.DeleteAllItems()
+            self.tree_shared_restrictions.Hide()
+            self.st_shared_restrictions_title.Hide()
+            self.panel_info.Layout()
+            return
+        self._shared_restrictions_binding = binding
+        self.tree_shared_restrictions.DeleteAllItems()
+        root = self.tree_shared_restrictions.AddRoot("制限一覧")
+        targets_by_id = {}
+        for target in targets:
+            restriction_id = getattr(target.restriction, "restriction_id", None)
+            if isinstance(restriction_id, str):
+                targets_by_id.setdefault(restriction_id, []).append(target)
+        for restriction in restrictions:
+            try:
+                requested = float.fromhex(restriction.requested_value_hex)
+                effective = float.fromhex(restriction.effective_value_hex)
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                continue
+            label = (
+                f"{restriction.semantic_morph} / frame {restriction.frame_no} / "
+                f"{requested:.4f} → {effective:.4f} / "
+                f"{_format_closure_restriction_reason(restriction.reason)}"
+            )
+            parent = self.tree_shared_restrictions.AppendItem(root, label)
+            for target in targets_by_id.get(restriction.restriction_id, ()):
+                event = target.event
+                group_label = ",".join(
+                    str(index) for index in event.group_event_indices
+                )
+                long_label = (
+                    ""
+                    if event.long_vowel_role is None
+                    else (
+                        f" / long {event.long_vowel_role}"
+                        f" ({event.long_vowel_mode}, source {event.long_vowel_source_event_index})"
+                    )
+                )
+                child = self.tree_shared_restrictions.AppendItem(
+                    parent,
+                    (
+                        f"event {event.base_event_index}: frame "
+                        f"{event.start_frame}–{event.end_frame} "
+                        f"(peak {event.peak_frame}) / group [{group_label}]"
+                        f"{long_label}"
+                    ),
+                )
+                self.tree_shared_restrictions.SetItemData(child, target)
+            if targets_by_id.get(restriction.restriction_id):
+                self.tree_shared_restrictions.Expand(parent)
+        self.st_shared_restrictions_title.Show()
+        self.tree_shared_restrictions.Show()
+        self.panel_info.Layout()
+
+    def clear_shared_final_output_restrictions(self) -> None:
+        empty_signature = (None, (), ())
+        if (
+            self._shared_restrictions_render_signature == empty_signature
+            and not self.tree_shared_restrictions.IsShown()
+            and not self.st_shared_restrictions_title.IsShown()
+        ):
+            return
+        self._shared_restrictions_render_signature = empty_signature
+        self._shared_restrictions_binding = None
+        self.tree_shared_restrictions.DeleteAllItems()
+        self.tree_shared_restrictions.Hide()
+        self.st_shared_restrictions_title.Hide()
+        self.panel_info.Layout()
+
+    def prepare_for_shutdown(self) -> None:
+        if self._is_shutting_down:
+            return
+        self._is_shutting_down = True
+        self.on_closure_restriction_selection = None
+        try:
+            self.tree_shared_restrictions.Unbind(
+                wx.EVT_TREE_SEL_CHANGED,
+                handler=self._on_shared_restriction_selection,
+            )
+        except RuntimeError:
+            pass
+
+    def _on_shared_restriction_selection(self, event):
+        if self._is_shutting_down:
+            event.Skip()
+            return
+        item = event.GetItem()
+        try:
+            target = self.tree_shared_restrictions.GetItemData(item)
+        except RuntimeError:
+            event.Skip()
+            return
+        if target is not None and callable(self.on_closure_restriction_selection):
+            self.on_closure_restriction_selection(
+                self._shared_restrictions_binding,
+                target,
+            )
+        event.Skip()
 
     def set_warnings(self, items: list[str]):
         if not items:
@@ -1747,6 +2114,62 @@ class RightPane(wx.Panel):
     def clear_selected_event(self):
         self.set_selected_event_summary("選択中のイベントはありません。")
 
+    def set_cleanup_event_choices(
+        self,
+        *,
+        binding_digest: str,
+        ticket: int,
+        lifecycle_epoch: int,
+        items: tuple[tuple[str, int], ...],
+        busy: bool = False,
+    ) -> None:
+        rows = tuple(items)
+        if any(
+            type(label) is not str or not label
+            or isinstance(index, bool) or not isinstance(index, int) or index < 0
+            for label, index in rows
+        ):
+            raise ValueError("cleanup event choices are invalid")
+        self._cleanup_event_selection_binding = (binding_digest, ticket, lifecycle_epoch)
+        self._cleanup_event_selection_rows = rows
+        self.choice_cleanup_events.Set(tuple(label for label, _index in rows))
+        self.choice_cleanup_events.SetSelection(wx.NOT_FOUND)
+        available = bool(rows) and not busy
+        self.st_cleanup_event_label.Show(bool(rows))
+        self.choice_cleanup_events.Show(bool(rows))
+        self.choice_cleanup_events.Enable(available)
+        self.panel_selected_event.Layout()
+        self.panel_selected_event.FitInside()
+
+    def clear_cleanup_event_choices(self) -> None:
+        self._cleanup_event_selection_binding = None
+        self._cleanup_event_selection_rows = ()
+        self.choice_cleanup_events.Set(())
+        self.choice_cleanup_events.SetSelection(wx.NOT_FOUND)
+        self.choice_cleanup_events.Enable(False)
+        self.choice_cleanup_events.Hide()
+        self.st_cleanup_event_label.Hide()
+        self.panel_selected_event.Layout()
+        self.panel_selected_event.FitInside()
+
+    def _on_cleanup_event_choice(self, _event) -> None:
+        selection = self.choice_cleanup_events.GetSelection()
+        binding = self._cleanup_event_selection_binding
+        callback = self.on_cleanup_event_select_callback
+        if (
+            selection < 0
+            or selection >= len(self._cleanup_event_selection_rows)
+            or binding is None
+            or not callable(callback)
+        ):
+            return
+        callback(CleanupEventSelectionRequest(
+            binding_digest=binding[0],
+            ticket=binding[1],
+            lifecycle_epoch=binding[2],
+            base_event_index=self._cleanup_event_selection_rows[selection][1],
+        ))
+
     def set_selected_event_editor_revision(self, revision: int) -> None:
         self._selected_event_editor_revision = _require_revision(
             revision,
@@ -1763,6 +2186,12 @@ class RightPane(wx.Panel):
         active = self._selected_editor_active_gesture
         self._suppress_selected_editor_events = True
         try:
+            previous_state = self._selected_editor_state
+            if (
+                previous_state is None
+                or previous_state.editor_revision != state.editor_revision
+            ):
+                self._selected_editor_pending_request = None
             self._selected_editor_state = state
             self._selected_event_editor_revision = state.editor_revision
             self.st_selected_event.Hide()
@@ -1786,8 +2215,8 @@ class RightPane(wx.Panel):
                 state.start_offset_max,
             )
             controls["end_offset_frames"].SetRange(
-                state.end_offset_min,
-                state.end_offset_max,
+                min(state.end_offset_min, state.requested_end_offset_frames),
+                max(state.end_offset_max, state.requested_end_offset_frames),
             )
             controls["peak_value"].ChangeValue(f"{state.requested_peak_value:.4g}")
             for field in (
@@ -1798,6 +2227,9 @@ class RightPane(wx.Panel):
             ):
                 controls[field].SetValue(int(values[field]))
             controls["slope_ratio"].SetValue(state.requested_slope_ratio)
+            self.chk_manual_overlap_limit_override.SetValue(
+                state.requested_manual_overlap_limit_override
+            )
             mode_selection = {
                 None: 0,
                 "hold": 1,
@@ -1856,14 +2288,15 @@ class RightPane(wx.Panel):
             controls["slope_ratio"].Enable(
                 state.slope_enabled and tail_enabled
             )
+            self.chk_manual_overlap_limit_override.Enable(
+                state.manual_overlap_override_enabled and not busy
+            )
             self.choice_selected_event_mode.Enable(
                 state.long_vowel_mode_enabled and not busy
             )
             self.btn_reset_selected_event.Enable(state.reset_enabled and not busy)
             self.st_selected_event_validation.SetLabel(
-                ""
-                if state.is_group_tail
-                else "開口保持・閉口スムーズ・閉口傾斜比はgroup末尾でのみ編集できます。"
+                state.end_offset_range_error
             )
             self.st_selected_event_notice.SetLabel(operation_notice)
             self.st_selected_event_effect_notice_header.SetLabel(
@@ -1920,6 +2353,7 @@ class RightPane(wx.Panel):
 
     def refresh_selected_event_editor_styles(self):
         palette = ThemeManager.get_palette()
+        self.chk_manual_overlap_limit_override.SetForegroundColour(palette.text_fg)
         self.st_selected_event_validation.SetForegroundColour(palette.error_text)
         self.st_selected_event_notice.SetForegroundColour(palette.attention_text)
         self.st_selected_event_mode_notice.SetForegroundColour(palette.attention_text)
@@ -2020,6 +2454,7 @@ class RightPane(wx.Panel):
             active is not None
             and active.base_event_index == state.base_event_index
             and active.base_identity_digest == state.base_identity_digest
+            and active.final_output_binding == state.final_output_binding
             and active.field == field
         ):
             return active
@@ -2031,6 +2466,7 @@ class RightPane(wx.Panel):
             base_identity_digest=state.base_identity_digest,
             field=field,
             coalescing_token=self._selected_editor_gesture_serial,
+            final_output_binding=state.final_output_binding,
         )
         self._selected_editor_active_gesture = active
         return active
@@ -2072,6 +2508,13 @@ class RightPane(wx.Panel):
             requested = (None, "hold", "decay")[selected] if selected in {0, 1, 2} else None
             if requested != state.requested_long_vowel_mode:
                 return True
+        if (
+            state.manual_overlap_override_enabled
+            and self.chk_manual_overlap_limit_override.IsEnabled()
+            and self.chk_manual_overlap_limit_override.GetValue()
+            != state.requested_manual_overlap_limit_override
+        ):
+            return True
         return False
 
     def _on_selected_event_mode_choice(self, event):
@@ -2100,6 +2543,38 @@ class RightPane(wx.Panel):
                     field="long_vowel_mode",
                     value=value,
                     coalescing_token=None,
+                    final_output_binding=state.final_output_binding,
+                )
+            )
+
+    def _on_manual_overlap_limit_override(self, event):
+        event.Skip()
+        state = self._selected_editor_state
+        if (
+            self._suppress_selected_editor_events
+            or state is None
+            or not state.manual_overlap_override_enabled
+            or not self.chk_manual_overlap_limit_override.IsEnabled()
+        ):
+            return
+        value = self.chk_manual_overlap_limit_override.GetValue()
+        if value == state.requested_manual_overlap_limit_override:
+            return
+        callback = self.on_selected_event_edit_callback
+        if callback is not None:
+            self._selected_editor_pending_request = (
+                state.editor_revision,
+                "manual_overlap_limit_override",
+                value,
+            )
+            callback(
+                SelectedEventEditRequest(
+                    base_event_index=state.base_event_index,
+                    base_identity_digest=state.base_identity_digest,
+                    editor_revision=state.editor_revision,
+                    field="manual_overlap_limit_override",
+                    value=value,
+                    final_output_binding=state.final_output_binding,
                 )
             )
 
@@ -2170,8 +2645,27 @@ class RightPane(wx.Panel):
         current = self._current_requested_value(state, field)
         if value == current:
             return
+        if self._selected_editor_pending_request == (
+            state.editor_revision,
+            field,
+            value,
+        ):
+            return
         callback = self.on_selected_event_edit_callback
         if callback is not None:
+            self._selected_editor_pending_request = (
+                state.editor_revision,
+                field,
+                value,
+            )
+            active = self._selected_editor_active_gesture
+            request_binding = state.final_output_binding
+            if (
+                coalescing_token is not None
+                and active is not None
+                and active.coalescing_token == coalescing_token
+            ):
+                request_binding = active.final_output_binding
             callback(
                 SelectedEventEditRequest(
                     base_event_index=state.base_event_index,
@@ -2180,8 +2674,12 @@ class RightPane(wx.Panel):
                     field=field,
                     value=value,
                     coalescing_token=coalescing_token,
+                    final_output_binding=request_binding,
                 )
             )
+
+    def clear_selected_event_edit_pending(self) -> None:
+        self._selected_editor_pending_request = None
 
     def _on_reset_selected_event(self, event):
         state = self._selected_editor_state
@@ -2193,6 +2691,7 @@ class RightPane(wx.Panel):
                 state.base_event_index,
                 state.base_identity_digest,
                 state.editor_revision,
+                state.final_output_binding,
             )
 
     def get_preset_panel_state(self) -> PresetPanelState:

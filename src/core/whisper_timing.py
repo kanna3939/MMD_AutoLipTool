@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import os
-from contextlib import contextmanager
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
+from src.core.ffmpeg_runner import run_ffmpeg_pcm_s16le_bytes
 from src.core.ffmpeg_locator import locate_ffmpeg_tools
 from src.core.whisper_model_runtime import (
     ModelIdentity,
@@ -75,13 +77,22 @@ def recognize_audio(
         )
 
     try:
-        with _prepend_located_ffmpeg_to_path():
-            result = model.transcribe(
-                str(path),
-                language=language,
-                fp16=fp16,
-                word_timestamps=word_timestamps,
-            )
+        ffmpeg_path = locate_ffmpeg_tools().ffmpeg.path or Path("ffmpeg")
+        try:
+            audio_bytes = run_ffmpeg_pcm_s16le_bytes(ffmpeg_path, path)
+        except subprocess.CalledProcessError as error:
+            stderr = error.stderr or b""
+            raise RuntimeError(
+                f"Failed to load audio: {stderr.decode()}"
+            ) from error
+
+        audio = np.frombuffer(audio_bytes, np.int16).flatten().astype(np.float32) / 32768.0
+        result = model.transcribe(
+            audio,
+            language=language,
+            fp16=fp16,
+            word_timestamps=word_timestamps,
+        )
     except Exception as error:
         failure_class, code = classify_whisper_failure(error)
         if failure_class == "transcribe_failure":
@@ -99,31 +110,6 @@ def recognize_audio(
             failure_class="transcribe_failure",
         )
     return result
-
-
-@contextmanager
-def _prepend_located_ffmpeg_to_path():
-    """
-    Ensure openai-whisper can find ffmpeg when the app uses repo-local FFmpeg/bin.
-    """
-    tools = locate_ffmpeg_tools()
-    ffmpeg_path = tools.ffmpeg.path
-    if ffmpeg_path is None:
-        yield
-        return
-
-    ffmpeg_dir = str(ffmpeg_path.parent)
-    original_path = os.environ.get("PATH", "")
-    path_parts = original_path.split(os.pathsep) if original_path else []
-    if ffmpeg_dir in path_parts:
-        yield
-        return
-
-    os.environ["PATH"] = ffmpeg_dir + (os.pathsep + original_path if original_path else "")
-    try:
-        yield
-    finally:
-        os.environ["PATH"] = original_path
 
 
 def extract_transcription_text(result: dict[str, Any]) -> TranscriptionTextResult:

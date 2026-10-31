@@ -6,7 +6,7 @@ from typing import Iterable
 
 
 BASE_PLAN_IDENTITY_SCHEMA = "ms22-base-plan-v1"
-ADJUSTMENT_SNAPSHOT_SCHEMA = "ms22-adjustment-snapshot-v1"
+ADJUSTMENT_SNAPSHOT_SCHEMA = "ms22-adjustment-snapshot-v2"
 DEFAULT_SLOPE_RATIO = 0.7
 LONG_VOWEL_MODE_HOLD = "hold"
 LONG_VOWEL_MODE_DECAY = "decay"
@@ -145,6 +145,7 @@ class EventAdjustment:
     softness_frames: int | None = None
     slope_ratio: float | None = None
     long_vowel_mode: str | None = None
+    manual_overlap_limit_override: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -192,6 +193,13 @@ class EventAdjustment:
             object.__setattr__(self, "slope_ratio", slope_ratio)
         if self.long_vowel_mode is not None:
             object.__setattr__(self, "long_vowel_mode", validate_long_vowel_mode(self.long_vowel_mode))
+        if type(self.manual_overlap_limit_override) is not bool:
+            raise AdjustmentContractError(
+                "manual_overlap_limit_override must be bool",
+                safe_code="adjustment_field_invalid",
+                safe_field_code="manual_overlap_limit_override",
+                safe_phase="snapshot_canonicalize",
+            )
 
     @property
     def is_empty(self) -> bool:
@@ -203,6 +211,20 @@ class EventAdjustment:
             and self.softness_frames is None
             and self.slope_ratio is None
             and self.long_vowel_mode is None
+            and not self.manual_overlap_limit_override
+        )
+
+    @property
+    def has_shape_adjustment(self) -> bool:
+        """Whether this entry changes a requested shape value."""
+        return (
+            self.peak_value is not None
+            or self.start_offset_frames != 0
+            or self.end_offset_frames != 0
+            or self.hold_frames is not None
+            or self.softness_frames is not None
+            or self.slope_ratio is not None
+            or self.long_vowel_mode is not None
         )
 
 
@@ -303,6 +325,7 @@ def canonicalize_adjustment_snapshot(
             softness_frames=softness_frames,
             slope_ratio=slope_ratio,
             long_vowel_mode=item.long_vowel_mode,
+            manual_overlap_limit_override=item.manual_overlap_limit_override,
         )
         if not normalized.is_empty:
             canonical.append(normalized)

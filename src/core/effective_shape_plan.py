@@ -1176,6 +1176,14 @@ def _validate_long_adjustment_ownership(
                 safe_phase="adjustment_ownership",
                 event_index=item.base_event_index,
             )
+        if event.long_vowel_role is not None and item.manual_overlap_limit_override:
+            raise AdjustmentContractError(
+                "manual overlap override is not supported for long-vowel runs",
+                safe_code="long_adjustment_ownership_invalid",
+                safe_field_code="manual_overlap_limit_override",
+                safe_phase="adjustment_ownership",
+                event_index=event.base_event_index,
+            )
         if event.long_vowel_role is None:
             if item.long_vowel_mode is not None:
                 raise AdjustmentContractError(
@@ -1970,6 +1978,7 @@ def _build_event_silence_admissions(
     base_events: Sequence[BaseShapeEvent] | None = None,
     long_runs: Sequence[EffectiveLongVowelRun] = (),
     failure_detail_sink: dict[str, object] | None = None,
+    _defer_boundary_validation: bool = False,
 ) -> tuple[tuple[EventSilenceAdmission, ...], set[int]]:
     observations = base_input.observations or ()
     adjustment_by_index = {item.base_event_index: item for item in snapshot.adjustments}
@@ -2020,7 +2029,9 @@ def _build_event_silence_admissions(
             )
         )
         adjustment = adjustment_by_index.get(event.base_event_index)
-        manual_adjustment_applied = adjustment is not None and not adjustment.is_empty
+        manual_adjustment_applied = (
+            adjustment is not None and adjustment.has_shape_adjustment
+        )
         has_positive_core = bool(positive_core_frame_ranges)
         explicitly_allowed = event.long_vowel_role is not None or manual_adjustment_applied
         enabled = not has_positive_core or explicitly_allowed
@@ -2096,6 +2107,25 @@ def _build_event_silence_admissions(
                 boundary_action=boundary_action,
                 long_runs=long_runs,
             )
+        if (_defer_boundary_validation and event.peak_value > 0
+                and _admission_range_status(candidate_effective_frame_range) == "zero_width"
+                and not core_ranges and not manual_adjustment_applied and not event.long_vowel_role):
+            boundary_only = False
+            boundary_frame = None
+            boundary_point_kind = None
+            boundary_relation = "not_applicable"
+            boundary_action = "not_applicable"
+            effective_frame_range = None
+            enabled = True
+            rejection_reason_code = None
+            rejected_indices.discard(event.base_event_index)
+        if (rejection_reason_code == "admission_boundary_invalid" and _defer_boundary_validation
+                and not core_ranges and not manual_adjustment_applied and not event.long_vowel_role):
+            # Held only inside the B4B preparation DTO. The scheduler must
+            # supply the positive support before any final issuer is accepted.
+            enabled = True
+            rejection_reason_code = None
+            rejected_indices.discard(event.base_event_index)
         if rejection_reason_code == "admission_boundary_invalid":
             raise AdjustmentContractError(
                 "zero-width admission is not a verified boundary",
@@ -2186,6 +2216,28 @@ def _group_events(events: tuple[EffectiveShapeEvent, ...]) -> list[list[Effectiv
     return groups
 
 
+def _validate_manual_overlap_override_ownership(
+    events: tuple[EffectiveShapeEvent, ...],
+    snapshot: AdjustmentLayerSnapshot,
+    long_indices: set[int],
+) -> None:
+    regular_events = tuple(
+        event for event in events if event.base_event_index not in long_indices
+    )
+    tail_indices = {
+        group[-1].base_event_index for group in _group_events(regular_events)
+    }
+    for item in snapshot.adjustments:
+        if item.manual_overlap_limit_override and item.base_event_index not in tail_indices:
+            raise AdjustmentContractError(
+                "manual overlap override belongs to the regular group tail owner",
+                safe_code="manual_overlap_override_owner_invalid",
+                safe_field_code="manual_overlap_limit_override",
+                safe_phase="adjustment_ownership",
+                event_index=item.base_event_index,
+            )
+
+
 def _next_shape_boundary_event(
     effective_events: tuple[EffectiveShapeEvent, ...],
     after_base_event_index: int,
@@ -2195,6 +2247,23 @@ def _next_shape_boundary_event(
             event
             for event in effective_events
             if event.base_event_index > after_base_event_index
+            and event.long_vowel_role in (None, "long_source")
+        ),
+        None,
+    )
+
+
+def _next_same_vowel_boundary_event(
+    effective_events: tuple[EffectiveShapeEvent, ...],
+    after_base_event_index: int,
+    vowel: str,
+) -> EffectiveShapeEvent | None:
+    return next(
+        (
+            event
+            for event in effective_events
+            if event.base_event_index > after_base_event_index
+            and event.vowel == vowel
             and event.long_vowel_role in (None, "long_source")
         ),
         None,
@@ -2235,7 +2304,17 @@ def _shape_for_group(
         left_available = first.peak_frame - first.start_frame
         right_available = first.end_frame - first.peak_frame
         max_centered_half_width = min(left_available - 1, right_available - 1)
-        if total_span >= 4 and max_centered_half_width >= 1:
+        if first.peak_frame == first.start_frame:
+            # A source event can begin on its acoustic peak. In that case the
+            # start-zero and peak occupy the same VMD frame; preserve the peak
+            # so normalization does not erase the entire opening.
+            peak_start = peak_end = first.peak_frame
+            points[0] = ShapeControlPoint(
+                first.peak_frame,
+                first.peak_value,
+                "top",
+            )
+        elif total_span >= 4 and max_centered_half_width >= 1:
             relative_half_width = min(left_available, right_available) // 2
             top_half_width = max(1, min(relative_half_width, max_centered_half_width))
             peak_start = first.peak_frame - top_half_width
@@ -2340,6 +2419,8 @@ def _shape_for_long_run(
     shape_parameters: ShapeParameters,
     next_shape_start_frame: int | None,
     next_shape_vowel: str | None = None,
+    next_same_vowel_start_frame: int | None = None,
+    next_same_vowel_starts_positive: bool = False,
 ) -> EffectiveShape:
     by_index = {event.base_event_index: event for event in effective_events}
     members = tuple(
@@ -2408,8 +2489,20 @@ def _shape_for_long_run(
         )
         shape_kind = "long_vowel_decay"
     else:
+        # A different vowel may be interleaved before the next same-vowel
+        # event, so the immediate next shape does not protect this boundary.
+        adjacent_same_vowel_handoff = (
+            next_same_vowel_starts_positive
+            and next_same_vowel_start_frame == terminal.end_frame + 1
+        )
         if terminal.end_frame > source.peak_frame and not same_frame_same_vowel_handoff:
-            points.append(ShapeControlPoint(terminal.end_frame, source.peak_value, "top"))
+            terminal_hold_frame = (
+                terminal.end_frame - 1
+                if adjacent_same_vowel_handoff
+                else terminal.end_frame
+            )
+            if terminal_hold_frame > points[-1].frame_no:
+                points.append(ShapeControlPoint(terminal_hold_frame, source.peak_value, "top"))
         effective_hold = hold_frames
         effective_softness = softness_frames
         if available_extension is not None:
@@ -2419,9 +2512,14 @@ def _shape_for_long_run(
         if closing_frame <= terminal.end_frame:
             closing_frame = (
                 terminal.end_frame
-                if same_frame_same_vowel_handoff
+                if same_frame_same_vowel_handoff or adjacent_same_vowel_handoff
                 else terminal.end_frame + 1
             )
+        if (
+            adjacent_same_vowel_handoff
+            and closing_frame >= next_same_vowel_start_frame
+        ):
+            closing_frame = terminal.end_frame
         # Equality is safe: the repaired next same-morph event starts with the
         # same explicit zero.  A later closing zero would overlap its shape.
         if (
@@ -2668,6 +2766,7 @@ def _apply_manual_crossfade_extensions(
             and adjustment.end_offset_frames > 0
             and raw_by_index[context.source_base_event_index].end_frame
             > context.crossfade_limit_frame
+            and not adjustment.manual_overlap_limit_override
         ):
             raise AdjustmentContractError(
                 "positive end offset exceeds the manual crossfade range",
@@ -2880,6 +2979,7 @@ def resolve_manual_crossfade_end_offset_max(
     base_event_index: int,
     *,
     source_duration_frames: int,
+    adjustment_snapshot: AdjustmentLayerSnapshot | None = None,
 ) -> int:
     if not isinstance(effective_plan, EffectiveShapePlan):
         raise AdjustmentContractError("effective_plan must be EffectiveShapePlan")
@@ -2904,6 +3004,16 @@ def resolve_manual_crossfade_end_offset_max(
         raise AdjustmentContractError("base event is missing from effective plan")
     base = base_matches[0]
     fallback = source_duration_frames - base.end_frame
+    snapshot = (
+        effective_plan.canonical_adjustment_snapshot
+        if adjustment_snapshot is None
+        else adjustment_snapshot
+    )
+    if (
+        not isinstance(snapshot, AdjustmentLayerSnapshot)
+        or snapshot.base_plan_identity != effective_plan.base_plan_identity
+    ):
+        raise AdjustmentContractError("adjustment_snapshot differs from effective plan base")
     source_matches = tuple(
         (index, shape)
         for index, shape in enumerate(effective_plan.shapes)
@@ -2917,6 +3027,35 @@ def resolve_manual_crossfade_end_offset_max(
         or source_shape.resolved_tail.tail_base_event_index != base_event_index
     ):
         return fallback
+    owner_adjustment = next(
+        (
+            item
+            for item in snapshot.adjustments
+            if item.base_event_index == base_event_index
+        ),
+        None,
+    )
+    if (
+        owner_adjustment is not None
+        and owner_adjustment.manual_overlap_limit_override
+        and not source_shape.shape_kind.startswith("long_vowel_")
+    ):
+        same_vowel_limit = fallback
+        for index, shape in enumerate(effective_plan.shapes):
+            if index == source_shape_index or shape.vowel != source_shape.vowel:
+                continue
+            later_event_indices = tuple(
+                event_index
+                for event_index in shape.real_base_event_indices
+                if event_index > base_event_index
+            )
+            if not later_event_indices:
+                continue
+            same_vowel_limit = min(
+                same_vowel_limit,
+                shape.start_frame - base.end_frame,
+            )
+        return max(0, same_vowel_limit)
     context = _manual_crossfade_context_for_shape(
         effective_plan.shapes,
         source_shape_index,
@@ -2957,12 +3096,11 @@ def _silence_core_boundary_zero_frames(
     shapes: Sequence[EffectiveShape],
     silence_core_frame_ranges: Sequence[tuple[int, int]],
 ) -> tuple[tuple[str, int], ...]:
-    """Return zero keys needed to stop same-vowel interpolation across a core.
+    """Return zero keys that stop same-vowel interpolation through each core.
 
-    A clipped shape already carries explicit zeros when it overlaps the core.
-    This also covers two separate shapes of the same vowel whose domains are
-    on opposite sides of the core; without these keys the VMD curve can still
-    interpolate through the silent gap.
+    Add the start boundary when a positive point precedes the core and the end
+    boundary when a positive point follows it. Either side alone can otherwise
+    interpolate through part of the silent interval.
     """
 
     result: set[tuple[str, int]] = set()
@@ -2989,13 +3127,10 @@ def _silence_core_boundary_zero_frames(
                 )
                 for shape in shapes
             )
-            if has_positive_before and has_positive_after:
-                result.update(
-                    {
-                        (vowel, start_frame),
-                        (vowel, end_frame),
-                    }
-                )
+            if has_positive_before:
+                result.add((vowel, start_frame))
+            if has_positive_after:
+                result.add((vowel, end_frame))
     return tuple(sorted(result, key=lambda item: (item[1], item[0])))
 
 
@@ -3125,7 +3260,20 @@ def _build_shapes_with_long_runs(
             effective_events,
             run.terminal_base_event_index,
         )
+        next_same_vowel_event = _next_same_vowel_boundary_event(
+            effective_events,
+            run.terminal_base_event_index,
+            run.vowel,
+        )
         next_start = None if next_event is None else next_event.start_frame
+        next_same_vowel_start = (
+            None if next_same_vowel_event is None else next_same_vowel_event.start_frame
+        )
+        next_same_vowel_starts_positive = (
+            next_same_vowel_event is not None
+            and next_same_vowel_event.peak_frame == next_same_vowel_event.start_frame
+            and next_same_vowel_event.peak_value > MORPH_FRAME_OPEN_EPSILON
+        )
         long_shapes.append(
             _shape_for_long_run(
                 run,
@@ -3134,6 +3282,8 @@ def _build_shapes_with_long_runs(
                 shape_parameters=shape_parameters,
                 next_shape_start_frame=next_start,
                 next_shape_vowel=None if next_event is None else next_event.vowel,
+                next_same_vowel_start_frame=next_same_vowel_start,
+                next_same_vowel_starts_positive=next_same_vowel_starts_positive,
             )
         )
         resolved_runs.append(run)
@@ -3165,6 +3315,18 @@ def resolve_effective_shape_plan(
     *,
     diagnostics: ResolverDiagnosticsCollector | None = None,
     resolver_diagnostics: ResolverDiagnosticsCollector | None = None,
+) -> EffectiveShapePlan:
+    return _build_effective_shape_plan(base_input, adjustment_snapshot,
+        diagnostics=diagnostics, resolver_diagnostics=resolver_diagnostics)
+
+
+def _build_effective_shape_plan(
+    base_input: BaseTimingPlanInput,
+    adjustment_snapshot: AdjustmentLayerSnapshot | Sequence[EventAdjustment] | None = None,
+    *,
+    diagnostics: ResolverDiagnosticsCollector | None = None,
+    resolver_diagnostics: ResolverDiagnosticsCollector | None = None,
+    _defer_zero_conflicts: bool = False,
 ) -> EffectiveShapePlan:
     if diagnostics is None:
         diagnostics = resolver_diagnostics
@@ -3272,6 +3434,15 @@ def resolve_effective_shape_plan(
         fallback_code="unknown_contract_failure",
         field_code="observation",
     )
+    _diagnostic_resolver_call(
+        diagnostics,
+        "manual_overlap_ownership",
+        lambda: _validate_manual_overlap_override_ownership(
+            effective_events, snapshot, long_indices
+        ),
+        fallback_code="manual_overlap_override_owner_invalid",
+        field_code="manual_overlap_limit_override",
+    )
     silence_clip_records: list[dict[str, Any]] = []
     shapes, resolved_runs = _diagnostic_resolver_call(
         diagnostics,
@@ -3302,6 +3473,7 @@ def resolve_effective_shape_plan(
             base_events=events,
             long_runs=base_long_runs,
             failure_detail_sink=(admission_detail_holder if diagnostics is not None else None),
+            _defer_boundary_validation=_defer_zero_conflicts,
         ),
         fallback_code="admission_range_invalid",
         field_code="effective_frame_range",
@@ -3409,13 +3581,14 @@ def resolve_effective_shape_plan(
         fallback_code="manual_crossfade_limit_exceeded",
         field_code="end_offset_frames",
     )
-    _diagnostic_resolver_call(
-        diagnostics,
-        "required_zero_conflicts",
-        lambda: _validate_required_zero_conflicts(shapes, effective_events),
-        fallback_code="required_zero_positive_conflict",
-        field_code="required_zero_frames",
-    )
+    if not _defer_zero_conflicts:
+        _diagnostic_resolver_call(
+            diagnostics,
+            "required_zero_conflicts",
+            lambda: _validate_required_zero_conflicts(shapes, effective_events),
+            fallback_code="required_zero_positive_conflict",
+            field_code="required_zero_frames",
+        )
     additional_required_zero_frames = _diagnostic_resolver_call(
         diagnostics,
         "normalization_contract",
@@ -3472,6 +3645,8 @@ def apply_adjustment_update(
     base_input: BaseTimingPlanInput,
     current_snapshot: AdjustmentLayerSnapshot,
     requested_change: EventAdjustment,
+    *,
+    defer_automatic_zero_conflicts: bool = False,
 ) -> AdjustmentUpdateResult:
     if current_snapshot.base_plan_identity != build_base_plan_identity(base_input):
         raise AdjustmentContractError("adjustment snapshot base identity mismatch")
@@ -3508,9 +3683,16 @@ def apply_adjustment_update(
             item.hold_frames is not None
             or item.softness_frames is not None
             or item.slope_ratio is not None
+            or item.manual_overlap_limit_override
         ):
             removed_tail.append(item.base_event_index)
-            item = replace(item, hold_frames=None, softness_frames=None, slope_ratio=None)
+            item = replace(
+                item,
+                hold_frames=None,
+                softness_frames=None,
+                slope_ratio=None,
+                manual_overlap_limit_override=False,
+            )
         if not item.is_empty:
             cleaned.append(item)
     canonical = AdjustmentLayerSnapshot(
@@ -3536,7 +3718,8 @@ def apply_adjustment_update(
             base_plan_identity=canonical.base_plan_identity,
             adjustments=tuple(adjustments_without_slopes),
         )
-        probe_plan = resolve_effective_shape_plan(base_input, without_slopes)
+        probe_plan = _build_effective_shape_plan(base_input, without_slopes,
+            _defer_zero_conflicts=defer_automatic_zero_conflicts)
         midpoint_by_tail = {
             shape.resolved_tail.tail_base_event_index: (
                 shape.resolved_tail.has_slope_midpoint,
@@ -3562,7 +3745,8 @@ def apply_adjustment_update(
             adjustments=tuple(final_adjustments),
         )
 
-    plan = resolve_effective_shape_plan(base_input, canonical)
+    plan = _build_effective_shape_plan(base_input, canonical,
+        _defer_zero_conflicts=defer_automatic_zero_conflicts)
     return AdjustmentUpdateResult(
         canonical_snapshot=canonical,
         removed_tail_override_event_indices=tuple(sorted(removed_tail)),

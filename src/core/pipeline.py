@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import math
+import unicodedata
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from src.core.audio_processing import RmsSeriesData, WavAnalysisResult, analyze_wav_file, load_rms_series
-from src.core.text_processing import VowelToken, text_to_vowel_tokens
+from src.core.text_processing import (
+    VowelToken,
+    text_to_vowel_tokens,
+)
+from src.core.transition_acoustic import (
+    TransitionAcousticSnapshot,
+    build_transition_acoustic_snapshot,
+    rebind_transition_acoustic_source,
+    sha256_file,
+)
 from src.core.morph_name_sets import JAPANESE_OUTPUT_NAMES, validate_output_morph_names
 from src.core.whisper_timing import (
     SpeechTimingAnchor,
@@ -132,13 +142,14 @@ def _debug_rms_payload(
 
 _MIN_EVENT_DURATION_SEC = 1e-6
 _RMS_BOUNDARY_SEARCH_SEC = 0.08
+_TEXT_ANCHOR_TAIL_PAD_SEC = 0.16
 _RMS_THRESHOLD_RATIO = 0.35
 _RMS_ABS_MIN_THRESHOLD = 0.01
 _RMS_MIN_REFINED_DURATION_SEC = 0.03
 _RMS_MAX_ADJACENT_OVERLAP_SEC = 0.02
 _PEAK_WINDOW_HALO_SEC = 0.03
 _RMS_UNAVAILABLE_FALLBACK_RATIO = 0.25
-_DEFAULT_MORPH_UPPER_LIMIT = 0.5
+_DEFAULT_MORPH_UPPER_LIMIT = 0.9
 _MORPH_FRAME_OPEN_EPSILON = 1e-9
 _SAME_VOWEL_BURST_LOW_POSITIVE_MAX = 0.2
 _SAME_VOWEL_MAX_CANDIDATE_SPAN_FRAMES = 2
@@ -521,6 +532,8 @@ class VowelTimingPlan:
     source: str
     warning: str | None = None
     observations: list[PeakValueObservation] | None = None
+    transition_acoustic_snapshot: TransitionAcousticSnapshot | None = None
+    source_silence_intervals: tuple[tuple[float, float, str, str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -532,6 +545,15 @@ class PeakValueEvaluation:
     local_peak: float | None
     peak_value: float
     reason: str | None = None
+
+
+@dataclass(frozen=True)
+class _PeakSampleSelection:
+    sample_time_sec: float | None
+    sample_value: float | None
+    frame_no: int | None
+    reason: str
+    source_frame_blocked: bool = False
 
 
 @dataclass(frozen=True)
@@ -587,6 +609,8 @@ class PeakValueObservation:
 class _ObservedTimelineBuildResult:
     timeline: list[VowelTimelinePoint]
     observations: list[PeakValueObservation] | None = None
+    transition_acoustic_snapshot: TransitionAcousticSnapshot | None = None
+    source_silence_intervals: tuple[tuple[float, float, str, str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -658,6 +682,10 @@ def build_anchor_based_vowel_timeline(
     speech_end_sec: float,
     *,
     tokens: Sequence[VowelToken] | None = None,
+    source_timing_anchors: Sequence[SpeechTimingAnchor] | None = None,
+    timing_source: str | None = None,
+    source_text: str | None = None,
+    debug_trace: Any = None,
 ) -> list[VowelTimelinePoint]:
     if not vowels:
         raise ValueError("No vowels to allocate.")
@@ -673,18 +701,113 @@ def build_anchor_based_vowel_timeline(
         speech_start_sec=speech_start_sec,
         speech_end_sec=speech_end_sec,
     )
+
+    source_anchors = timing_anchors if source_timing_anchors is None else source_timing_anchors
+    source_anchor_records = [
+        {
+            "source_anchor_index": index,
+            "start_sec": anchor.start_sec,
+            "end_sec": anchor.end_sec,
+        }
+        for index, anchor in enumerate(source_anchors)
+    ]
+
+    source_anchor_candidates: list[dict[str, Any]] = []
+    for source_index, anchor in enumerate(source_anchors):
+        clipped_start_sec = max(anchor.start_sec, speech_start_sec)
+        clipped_end_sec = min(anchor.end_sec, speech_end_sec)
+        if clipped_end_sec > clipped_start_sec:
+            source_anchor_candidates.append(
+                {
+                    "source_anchor_index": source_index,
+                    "start_sec": clipped_start_sec,
+                    "end_sec": clipped_end_sec,
+                }
+            )
+
+    matched_source_anchor_indexes: set[int] = set()
+    used_anchor_records: list[dict[str, Any]] = []
+    for used_anchor_index, anchor in enumerate(clipped_anchors):
+        source_anchor_index = next(
+            (
+                candidate["source_anchor_index"]
+                for candidate in source_anchor_candidates
+                if candidate["source_anchor_index"] not in matched_source_anchor_indexes
+                and candidate["start_sec"] == anchor.start_sec
+                and candidate["end_sec"] == anchor.end_sec
+            ),
+            None,
+        )
+        if source_anchor_index is not None:
+            matched_source_anchor_indexes.add(source_anchor_index)
+        used_anchor_records.append(
+            {
+                "used_anchor_index": used_anchor_index,
+                "source_anchor_index": source_anchor_index,
+                "start_sec": anchor.start_sec,
+                "end_sec": anchor.end_sec,
+                "assignments": [],
+            }
+        )
+
+    def record_fallback(
+        status: str,
+        fallback_timeline: Sequence[VowelTimelinePoint],
+        *,
+        allocation_strategy: str = "duration_weighted",
+        lexical_anchor_matches: Sequence[dict[str, int]] = (),
+    ) -> None:
+        _debug_record(
+            debug_trace,
+            "record_stage",
+            "timing_anchor_allocation",
+            payload={
+                "timing_source": timing_source or "unspecified",
+                "allocation_status": status,
+                "allocation_strategy": allocation_strategy,
+                "lexical_anchor_matches": list(lexical_anchor_matches),
+                "source_anchors": source_anchor_records,
+                "used_anchors": used_anchor_records,
+                "fallback_assignments": [
+                    {
+                        "event_index": index,
+                        "vowel": point.vowel,
+                        "token_index": (
+                            tokens[index].token_index if tokens is not None else index
+                        ),
+                        "time_sec": point.time_sec,
+                    }
+                    for index, point in enumerate(fallback_timeline)
+                ],
+            },
+        )
+
     if not clipped_anchors:
-        return build_even_vowel_timeline(
+        fallback_timeline = build_even_vowel_timeline(
             vowels=vowels,
             speech_start_sec=speech_start_sec,
             speech_end_sec=speech_end_sec,
             tokens=tokens,
         )
+        record_fallback("no_usable_anchors_even_fallback", fallback_timeline)
+        return fallback_timeline
 
-    allocation = _allocate_vowels_to_anchors(len(vowels), clipped_anchors)
+    allocation, allocation_strategy, lexical_anchor_matches = (
+        _allocate_vowels_to_anchors_with_source_text(
+            vowels=vowels,
+            tokens=tokens,
+            anchors=clipped_anchors,
+            source_text=source_text,
+        )
+    )
+    text_matched_anchor_indexes = {
+        item["anchor_index"]
+        for item in lexical_anchor_matches
+        if "anchor_index" in item
+    }
     timeline: list[VowelTimelinePoint] = []
     vowel_index = 0
-    for anchor, count in zip(clipped_anchors, allocation):
+    for anchor_index, (anchor, count) in enumerate(zip(clipped_anchors, allocation)):
         for local_index in range(count):
             if vowel_index >= len(vowels):
                 break
@@ -700,6 +823,14 @@ def build_anchor_based_vowel_timeline(
                 index=local_index,
                 count=count,
             )
+            if (
+                anchor_index in text_matched_anchor_indexes
+                and local_index == count - 1
+            ):
+                end_sec = min(
+                    speech_end_sec,
+                    end_sec + _TEXT_ANCHOR_TAIL_PAD_SEC,
+                )
             duration_sec = _ensure_positive_duration(end_sec - start_sec)
             timeline.append(
                 VowelTimelinePoint(
@@ -715,16 +846,47 @@ def build_anchor_based_vowel_timeline(
                     } if tokens is not None else {}),
                 )
             )
+            used_anchor_records[anchor_index]["assignments"].append(
+                {
+                    "event_index": len(timeline) - 1,
+                    "vowel": vowels[vowel_index],
+                    "token_index": (
+                        tokens[vowel_index].token_index if tokens is not None else vowel_index
+                    ),
+                }
+            )
             vowel_index += 1
 
     if vowel_index != len(vowels):
         # Safety fallback in case the allocation and generation diverge.
-        return build_even_vowel_timeline(
+        fallback_timeline = build_even_vowel_timeline(
             vowels=vowels,
             speech_start_sec=speech_start_sec,
             speech_end_sec=speech_end_sec,
             tokens=tokens,
         )
+        record_fallback(
+            "allocation_safety_even_fallback",
+            fallback_timeline,
+            allocation_strategy=allocation_strategy,
+            lexical_anchor_matches=lexical_anchor_matches,
+        )
+        return fallback_timeline
+
+    _debug_record(
+        debug_trace,
+        "record_stage",
+        "timing_anchor_allocation",
+        payload={
+            "timing_source": timing_source or "unspecified",
+            "allocation_status": "anchors_allocated",
+            "allocation_strategy": allocation_strategy,
+            "lexical_anchor_matches": lexical_anchor_matches,
+            "source_anchors": source_anchor_records,
+            "used_anchors": used_anchor_records,
+            "fallback_assignments": [],
+        },
+    )
     return timeline
 
 
@@ -738,8 +900,11 @@ def build_vowel_timing_plan(
     phase_callback: Callable[[str], None] | None = None,
     whisper_timing_result: WhisperTimingResult | None = None,
     debug_trace: Any = None,
+    collect_transition_acoustics: bool = False,
 ) -> VowelTimingPlan:
     if phase_callback: phase_callback("音声入力確認中")
+    if type(collect_transition_acoustics) is not bool:
+        raise ValueError("collect_transition_acoustics must be a boolean")
     if upper_limit < 0.0:
         raise ValueError("upper_limit must be >= 0.0.")
 
@@ -757,6 +922,7 @@ def build_vowel_timing_plan(
         raise ValueError("No speech interval detected in WAV.")
 
     anchors: list[SpeechTimingAnchor] = []
+    source_timing_anchors: list[SpeechTimingAnchor] = []
     timing_source = "even_fallback"
     warning: str | None = None
 
@@ -776,6 +942,7 @@ def build_vowel_timing_plan(
                 language="ja",
                 fp16=False,
             )
+            source_timing_anchors = list(whisper_result.anchors)
             anchors, timing_source, warning = _resolve_whisper_timing_result(
                 whisper_result=whisper_result,
                 wav_analysis=wav_analysis,
@@ -802,6 +969,7 @@ def build_vowel_timing_plan(
                 detail_code="model_identity_mismatch",
                 failure_class="integrity_mismatch",
             )
+        source_timing_anchors = list(whisper_timing_result.anchors)
         anchors, timing_source, warning = _resolve_whisper_timing_result(
             whisper_result=whisper_timing_result,
             wav_analysis=wav_analysis,
@@ -814,6 +982,10 @@ def build_vowel_timing_plan(
         speech_start_sec=wav_analysis.speech_start_sec,
         speech_end_sec=wav_analysis.speech_end_sec,
         tokens=tokens,
+        source_timing_anchors=source_timing_anchors,
+        timing_source=timing_source,
+        source_text=text_content,
+        debug_trace=debug_trace,
     )
     _debug_record(
         debug_trace,
@@ -839,7 +1011,34 @@ def build_vowel_timing_plan(
         speech_end_sec=wav_analysis.speech_end_sec,
         upper_limit=upper_limit,
         debug_trace=debug_trace,
+        collect_transition_acoustics=collect_transition_acoustics,
     )
+    _, alignment_strategy, lexical_anchor_matches = (
+        _allocate_vowels_to_anchors_with_source_text(
+            vowels=vowels,
+            tokens=tokens,
+            anchors=anchors,
+            source_text=text_content,
+        )
+    )
+    if alignment_strategy == "source_text_phonetic_anchor_match":
+        observed_timeline = _align_source_text_anchor_peaks(
+            observed=observed_timeline,
+            wav_path=wav_path,
+            anchors=anchors,
+            lexical_anchor_matches=lexical_anchor_matches,
+        )
+
+    transition_acoustic_snapshot = observed_timeline.transition_acoustic_snapshot
+    if collect_transition_acoustics and transition_acoustic_snapshot is not None:
+        try:
+            final_source_sha256 = sha256_file(wav_path)
+        except OSError:
+            final_source_sha256 = None
+        transition_acoustic_snapshot = rebind_transition_acoustic_source(
+            transition_acoustic_snapshot,
+            source_sha256_after=final_source_sha256,
+        )
 
     return VowelTimingPlan(
         vowels=vowels,
@@ -848,6 +1047,154 @@ def build_vowel_timing_plan(
         source=timing_source,
         warning=warning,
         observations=observed_timeline.observations,
+        transition_acoustic_snapshot=transition_acoustic_snapshot,
+        source_silence_intervals=observed_timeline.source_silence_intervals,
+    )
+
+
+def _align_source_text_anchor_peaks(
+    *,
+    observed: _ObservedTimelineBuildResult,
+    wav_path: str | Path,
+    anchors: Sequence[SpeechTimingAnchor],
+    lexical_anchor_matches: Sequence[dict[str, int]],
+) -> _ObservedTimelineBuildResult:
+    """Place text-matched vowels on their local acoustic peaks when ordered."""
+    if not observed.observations:
+        return observed
+
+    rms_series = load_rms_series(str(wav_path))
+    observation_by_event = {
+        observation.event_index: observation
+        for observation in observed.observations
+    }
+    points = list(observed.timeline)
+    observations = list(observed.observations)
+    observation_index_by_event = {
+        observation.event_index: index
+        for index, observation in enumerate(observations)
+    }
+
+    for match in lexical_anchor_matches:
+        if not (match.get("phonetic_match") or match.get("kana_anchor_peak")):
+            continue
+        anchor_index = match.get("anchor_index")
+        if anchor_index is None or not 0 <= anchor_index < len(anchors):
+            continue
+        target_token_index = match["token_end"] - 1
+        anchor = anchors[anchor_index]
+        if match.get("phonetic_match"):
+            search_start_sec = anchor.end_sec - _PEAK_WINDOW_HALO_SEC
+            search_end_sec = (
+                anchor.end_sec
+                + _TEXT_ANCHOR_TAIL_PAD_SEC
+                + _PEAK_WINDOW_HALO_SEC
+            )
+        else:
+            search_start_sec = anchor.start_sec - _RMS_BOUNDARY_SEARCH_SEC
+            search_end_sec = anchor.end_sec
+
+        for event_index, point in enumerate(points):
+            if point.vowel_token_index != target_token_index:
+                continue
+            observation = observation_by_event.get(event_index)
+            if observation is None or observation.peak_value <= 0.0:
+                break
+            candidates = [
+                (time_sec, rms_value)
+                for time_sec, rms_value in zip(
+                    rms_series.times_sec,
+                    rms_series.values,
+                )
+                if search_start_sec <= time_sec <= search_end_sec
+                and math.isfinite(time_sec)
+                and math.isfinite(rms_value)
+            ]
+            if not candidates:
+                break
+            peak_time_sec, peak_rms = max(candidates, key=lambda item: item[1])
+            if peak_rms <= _RMS_ABS_MIN_THRESHOLD:
+                break
+            peak_frame = _seconds_to_frame(peak_time_sec)
+            if any(
+                start_frame <= peak_frame <= end_frame
+                for start_frame, end_frame in observation.silence_core_frame_ranges
+            ):
+                break
+            previous_frame = (
+                None
+                if event_index == 0
+                else _seconds_to_frame(points[event_index - 1].time_sec)
+            )
+            next_frame = (
+                None
+                if event_index + 1 >= len(points)
+                else _seconds_to_frame(points[event_index + 1].time_sec)
+            )
+            if (
+                (previous_frame is not None and peak_frame < previous_frame)
+                or (next_frame is not None and peak_frame > next_frame)
+            ):
+                break
+
+            aligned_time_sec = peak_frame / VMD_FPS
+            refined_start_sec = observation.refined_interval_start_sec
+            refined_end_sec = observation.refined_interval_end_sec
+            event_start_frame, event_end_frame = _event_frame_range(
+                refined_start_sec,
+                refined_end_sec,
+            )
+            # Keep a short text-matched event from extending its positive shape
+            # across the next silence core after its acoustic peak.
+            silence_start_frame = next(
+                (
+                    start_frame
+                    for start_frame, _end_frame in observation.silence_core_frame_ranges
+                    if peak_frame < start_frame < event_end_frame
+                    and event_start_frame < start_frame
+                ),
+                None,
+            )
+            if silence_start_frame is not None:
+                clipped_end_sec = silence_start_frame / VMD_FPS
+                if clipped_end_sec > max(refined_start_sec, aligned_time_sec):
+                    refined_end_sec = clipped_end_sec
+
+            points[event_index] = replace(
+                point,
+                time_sec=aligned_time_sec,
+                start_sec=refined_start_sec,
+                end_sec=refined_end_sec,
+                duration_sec=max(0.0, refined_end_sec - refined_start_sec),
+            )
+            observation_index = observation_index_by_event.get(event_index)
+            if observation_index is not None:
+                updated_observation = observations[observation_index]
+                updated_evaluation = replace(
+                    updated_observation.evaluation,
+                    interval_end_sec=refined_end_sec,
+                    peak_window_end_sec=min(
+                        updated_observation.evaluation.peak_window_end_sec,
+                        refined_end_sec,
+                    ),
+                )
+                observations[observation_index] = replace(
+                    updated_observation,
+                    time_sec=aligned_time_sec,
+                    refined_interval_end_sec=refined_end_sec,
+                    peak_window_end_sec=min(
+                        updated_observation.peak_window_end_sec,
+                        refined_end_sec,
+                    ),
+                    evaluation=updated_evaluation,
+                )
+            break
+
+    return _ObservedTimelineBuildResult(
+        timeline=points,
+        observations=observations,
+        transition_acoustic_snapshot=observed.transition_acoustic_snapshot,
+        source_silence_intervals=observed.source_silence_intervals,
     )
 
 
@@ -893,6 +1240,8 @@ def resolve_vmd_writer_timing_plan(
         source=timing_plan.source,
         warning=timing_plan.warning,
         observations=None,
+        transition_acoustic_snapshot=timing_plan.transition_acoustic_snapshot,
+        source_silence_intervals=timing_plan.source_silence_intervals,
     )
 
 
@@ -1141,6 +1490,428 @@ def _allocate_vowels_to_anchors(
     return allocation
 
 
+def _allocate_vowels_to_anchors_with_source_text(
+    *,
+    vowels: Sequence[str],
+    tokens: Sequence[VowelToken] | None,
+    anchors: Sequence[SpeechTimingAnchor],
+    source_text: str | None,
+) -> tuple[list[int], str, list[dict[str, int]]]:
+    """Use reliable text or unique phonetic matches to constrain anchor counts."""
+    duration_allocation = _allocate_vowels_to_anchors(len(vowels), anchors)
+    if not source_text or not tokens or len(tokens) != len(vowels):
+        return duration_allocation, "duration_weighted", []
+
+    normalized_source = unicodedata.normalize("NFKC", source_text)
+    searchable_source = normalized_source.casefold()
+    source_token_vowels = [token.vowel for token in tokens]
+    matches: list[tuple[int, int, int]] = []
+    search_cursor = 0
+    previous_token_end = 0
+    phonetic_match_found = False
+
+    for anchor_index, anchor in enumerate(anchors):
+        anchor_text = unicodedata.normalize("NFKC", anchor.text.strip())
+        searchable_anchor = anchor_text.casefold()
+        if not _is_reliable_anchor_text(searchable_anchor):
+            continue
+
+        source_char_start = searchable_source.find(searchable_anchor, search_cursor)
+        if source_char_start < 0:
+            if _is_kana_anchor_text(anchor_text):
+                try:
+                    anchor_vowels = [
+                        token.vowel for token in text_to_vowel_tokens(anchor_text)
+                    ]
+                except ValueError:
+                    anchor_vowels = []
+                if (
+                    len(anchor_vowels) >= 3
+                    and (anchor.end_sec - anchor.start_sec) * VMD_FPS
+                    >= len(anchor_vowels) * 2
+                ):
+                    candidate_starts = [
+                        token_start
+                        for token_start in range(
+                            previous_token_end,
+                            len(source_token_vowels) - len(anchor_vowels) + 1,
+                        )
+                        if source_token_vowels[
+                            token_start : token_start + len(anchor_vowels)
+                        ]
+                        == anchor_vowels
+                    ]
+                    if len(candidate_starts) == 1:
+                        token_start = candidate_starts[0]
+                        token_end = token_start + len(anchor_vowels)
+                        matches.append((anchor_index, token_start, token_end))
+                        previous_token_end = token_end
+                        phonetic_match_found = True
+                        break
+            continue
+        source_char_end = source_char_start + len(searchable_anchor)
+        try:
+            anchor_vowels = [
+                token.vowel
+                for token in text_to_vowel_tokens(
+                    normalized_source[source_char_start:source_char_end]
+                )
+            ]
+            if (
+                len(anchor_vowels) < 3
+                or (anchor.end_sec - anchor.start_sec) * VMD_FPS
+                < len(anchor_vowels) * 2
+            ):
+                continue
+            token_start = (
+                0
+                if source_char_start == 0
+                else len(text_to_vowel_tokens(normalized_source[:source_char_start]))
+            )
+            token_end = len(
+                text_to_vowel_tokens(normalized_source[:source_char_end])
+            )
+        except ValueError:
+            continue
+
+        if (
+            token_start < previous_token_end
+            or token_end <= token_start
+            or token_end > len(source_token_vowels)
+            or source_token_vowels[token_start:token_end] != anchor_vowels
+        ):
+            continue
+
+        matches.append((anchor_index, token_start, token_end))
+        search_cursor = source_char_end
+        previous_token_end = token_end
+
+    if not matches:
+        return duration_allocation, "duration_weighted", []
+
+    if phonetic_match_found and len(matches) == 1:
+        anchor_index, token_start, token_end = matches[0]
+        target_count = token_end - token_start
+        prefix_count = sum(duration_allocation[:anchor_index])
+        prefix_delta = token_start - prefix_count
+        if (
+            abs(prefix_delta) > 1
+            or (anchors[anchor_index].end_sec - anchors[anchor_index].start_sec)
+            * VMD_FPS < target_count * 2
+        ):
+            return duration_allocation, "duration_weighted", []
+
+        allocation = list(duration_allocation)
+        if prefix_delta > 0:
+            candidate_indexes = [
+                index
+                for index in range(anchor_index - 1, -1, -1)
+                if (anchors[index].end_sec - anchors[index].start_sec) * VMD_FPS
+                >= (allocation[index] + prefix_delta) * 2
+            ]
+            if not candidate_indexes:
+                return duration_allocation, "duration_weighted", []
+            allocation[candidate_indexes[0]] += prefix_delta
+        elif prefix_delta < 0:
+            remaining = -prefix_delta
+            for index in range(anchor_index - 1, -1, -1):
+                moved = min(allocation[index], remaining)
+                allocation[index] -= moved
+                remaining -= moved
+                if remaining == 0:
+                    break
+            if remaining:
+                return duration_allocation, "duration_weighted", []
+
+        allocation[anchor_index] = target_count
+        trailing_target = len(tokens) - sum(allocation[: anchor_index + 1])
+        trailing_current = sum(duration_allocation[anchor_index + 1 :])
+        if trailing_target > trailing_current:
+            return duration_allocation, "duration_weighted", []
+        remaining = trailing_current - trailing_target
+        for index in range(anchor_index + 1, len(anchors)):
+            moved = min(allocation[index], remaining)
+            allocation[index] -= moved
+            remaining -= moved
+            if remaining == 0:
+                break
+        if remaining or sum(allocation) != len(tokens):
+            return duration_allocation, "duration_weighted", []
+        phonetic_record = {
+            "anchor_index": anchor_index,
+            "token_start": token_start,
+            "token_end": token_end,
+            "phonetic_match": 1,
+        }
+        allocation, local_anchor_records = _apply_local_text_anchor_run(
+            allocation=allocation,
+            tokens=tokens,
+            anchors=anchors,
+            source_text=searchable_source,
+            source_token_vowels=source_token_vowels,
+            after_anchor_index=anchor_index,
+        )
+        return (
+            allocation,
+            "source_text_phonetic_anchor_match",
+            [phonetic_record, *local_anchor_records],
+        )
+
+    allocation = [0] * len(anchors)
+    match_records: list[dict[str, int]] = []
+    previous_anchor_index = -1
+    previous_token_end = 0
+    for anchor_index, token_start, token_end in matches:
+        unmatched_anchor_indexes = range(previous_anchor_index + 1, anchor_index)
+        unmatched_token_count = token_start - previous_token_end
+        if unmatched_token_count and not unmatched_anchor_indexes:
+            return duration_allocation, "duration_weighted", []
+        if unmatched_anchor_indexes:
+            indexes = list(unmatched_anchor_indexes)
+            regional_counts = _allocate_vowels_to_anchors(
+                unmatched_token_count,
+                [anchors[index] for index in indexes],
+            )
+            for index, count in zip(indexes, regional_counts):
+                allocation[index] = count
+
+        allocation[anchor_index] = token_end - token_start
+        match_records.append(
+            {
+                "anchor_index": anchor_index,
+                "token_start": token_start,
+                "token_end": token_end,
+            }
+        )
+        previous_anchor_index = anchor_index
+        previous_token_end = token_end
+
+    trailing_anchor_indexes = range(previous_anchor_index + 1, len(anchors))
+    trailing_token_count = len(tokens) - previous_token_end
+    if trailing_token_count and not trailing_anchor_indexes:
+        return duration_allocation, "duration_weighted", []
+    if trailing_anchor_indexes:
+        indexes = list(trailing_anchor_indexes)
+        regional_counts = _allocate_vowels_to_anchors(
+            trailing_token_count,
+            [anchors[index] for index in indexes],
+        )
+        for index, count in zip(indexes, regional_counts):
+            allocation[index] = count
+
+    if sum(allocation) != len(tokens):
+        return duration_allocation, "duration_weighted", []
+    return allocation, "source_text_anchor_matches", match_records
+
+
+def _apply_local_text_anchor_run(
+    *,
+    allocation: list[int],
+    tokens: Sequence[VowelToken],
+    anchors: Sequence[SpeechTimingAnchor],
+    source_text: str,
+    source_token_vowels: Sequence[str],
+    after_anchor_index: int,
+) -> tuple[list[int], list[dict[str, int]]]:
+    """Align a short kana boundary and its following exact word run locally."""
+    for kana_anchor_index in range(after_anchor_index + 1, len(anchors)):
+        kana_text = unicodedata.normalize(
+            "NFKC", anchors[kana_anchor_index].text.strip()
+        )
+        previous_text = unicodedata.normalize(
+            "NFKC", anchors[kana_anchor_index - 1].text.strip()
+        )
+        if (
+            len(kana_text) != 1
+            or not _is_kana_anchor_text(kana_text)
+            or not any(
+                0x3400 <= ord(char) <= 0x4DBF
+                or 0x4E00 <= ord(char) <= 0x9FFF
+                or 0xF900 <= ord(char) <= 0xFAFF
+                for char in previous_text
+            )
+            or f"{previous_text}{kana_text}".casefold() not in source_text
+        ):
+            continue
+        try:
+            kana_vowels = [
+                token.vowel for token in text_to_vowel_tokens(kana_text)
+            ]
+        except ValueError:
+            continue
+        if len(kana_vowels) != 1:
+            continue
+
+        expected_start = sum(allocation[:kana_anchor_index])
+        candidate_starts = [
+            token_start
+            for token_start in range(max(0, expected_start - 1), expected_start + 1)
+            if source_token_vowels[
+                token_start : token_start + len(kana_vowels)
+            ]
+            == kana_vowels
+        ]
+        if len(candidate_starts) != 1:
+            continue
+        kana_token_start = candidate_starts[0]
+        prefix_delta = kana_token_start - expected_start
+        if abs(prefix_delta) > 1:
+            continue
+        if (
+            (anchors[kana_anchor_index].end_sec - anchors[kana_anchor_index].start_sec)
+            * VMD_FPS
+            < len(kana_vowels) * 2
+        ):
+            continue
+
+        adjusted = list(allocation)
+        if prefix_delta < 0:
+            remaining = -prefix_delta
+            for index in range(kana_anchor_index - 1, -1, -1):
+                moved = min(adjusted[index], remaining)
+                adjusted[index] -= moved
+                remaining -= moved
+                if remaining == 0:
+                    break
+            if remaining:
+                continue
+        elif prefix_delta > 0:
+            candidate_indexes = [
+                index
+                for index in range(kana_anchor_index - 1, -1, -1)
+                if (anchors[index].end_sec - anchors[index].start_sec) * VMD_FPS
+                >= (adjusted[index] + prefix_delta) * 2
+            ]
+            if not candidate_indexes:
+                continue
+            adjusted[candidate_indexes[0]] += prefix_delta
+        adjusted[kana_anchor_index] = len(kana_vowels)
+        run_start = kana_anchor_index + 1
+        run_match: tuple[int, int, list[int]] | None = None
+        max_run_length = min(7, len(anchors) - run_start)
+        for run_length in range(max_run_length, 1, -1):
+            run = anchors[run_start : run_start + run_length]
+            run_texts = [
+                unicodedata.normalize("NFKC", anchor.text.strip())
+                for anchor in run
+            ]
+            if not all(_is_reliable_anchor_text(text) for text in run_texts):
+                continue
+            joined_text = "".join(run_texts)
+            if source_text.count(joined_text.casefold()) != 1:
+                continue
+            try:
+                per_anchor_vowels = [
+                    [token.vowel for token in text_to_vowel_tokens(text)]
+                    for text in run_texts
+                ]
+                run_vowels = [
+                    token.vowel for token in text_to_vowel_tokens(joined_text)
+                ]
+            except ValueError:
+                continue
+            if (
+                len(run_vowels) < 3
+                or [vowel for values in per_anchor_vowels for vowel in values]
+                != run_vowels
+                or any(
+                    (anchor.end_sec - anchor.start_sec) * VMD_FPS
+                    < len(values) * 2
+                    for anchor, values in zip(run, per_anchor_vowels)
+                )
+            ):
+                continue
+            expected_run_start = sum(adjusted[:run_start])
+            candidate_run_starts = [
+                token_start
+                for token_start in range(
+                    max(0, expected_run_start - 2),
+                    min(
+                        len(source_token_vowels) - len(run_vowels),
+                        expected_run_start + 2,
+                    )
+                    + 1,
+                )
+                if source_token_vowels[
+                    token_start : token_start + len(run_vowels)
+                ]
+                == run_vowels
+            ]
+            if (
+                len(candidate_run_starts) != 1
+                or candidate_run_starts[0] != expected_run_start
+            ):
+                continue
+            run_match = (
+                run_length,
+                candidate_run_starts[0],
+                [len(values) for values in per_anchor_vowels],
+            )
+            break
+
+        if run_match is None:
+            continue
+        run_length, run_token_start, run_counts = run_match
+        run_end = run_start + run_length - 1
+        for index, count in zip(range(run_start, run_end + 1), run_counts):
+            adjusted[index] = count
+        run_token_end = run_token_start + sum(run_counts)
+        trailing_anchor_indexes = list(range(run_end + 1, len(anchors)))
+        trailing_token_count = len(tokens) - run_token_end
+        if trailing_token_count and not trailing_anchor_indexes:
+            continue
+        if trailing_anchor_indexes:
+            trailing_counts = _allocate_vowels_to_anchors(
+                trailing_token_count,
+                [anchors[index] for index in trailing_anchor_indexes],
+            )
+            for index, count in zip(trailing_anchor_indexes, trailing_counts):
+                adjusted[index] = count
+        if sum(adjusted) != len(tokens):
+            continue
+
+        return adjusted, [
+            {
+                "anchor_index": kana_anchor_index,
+                "token_start": kana_token_start,
+                "token_end": kana_token_start + len(kana_vowels),
+                "kana_anchor_peak": 1,
+            },
+            {
+                "anchor_start_index": run_start,
+                "anchor_end_index": run_end,
+                "token_start": run_token_start,
+                "token_end": run_token_end,
+                "local_anchor_run": 1,
+            },
+        ]
+    return allocation, []
+
+
+def _is_reliable_anchor_text(text: str) -> bool:
+    if not text:
+        return False
+    if len(text) >= 2:
+        return True
+    codepoint = ord(text[0])
+    return (
+        0x3040 <= codepoint <= 0x309F
+        or 0x30A0 <= codepoint <= 0x30FF
+        or 0x3400 <= codepoint <= 0x4DBF
+        or 0x4E00 <= codepoint <= 0x9FFF
+        or 0xF900 <= codepoint <= 0xFAFF
+    )
+
+
+def _is_kana_anchor_text(text: str) -> bool:
+    return bool(text) and all(
+        0x3040 <= ord(char) <= 0x309F
+        or 0x30A0 <= ord(char) <= 0x30FF
+        or char == "ー"
+        for char in text
+    )
+
+
 def _timeline_has_non_positive_duration(timeline: Sequence[VowelTimelinePoint]) -> bool:
     return any(point.duration_sec <= 0 for point in timeline)
 
@@ -1170,9 +1941,31 @@ def _refine_timeline_intervals_with_observations(
     speech_end_sec: float,
     upper_limit: float,
     debug_trace: Any = None,
+    collect_transition_acoustics: bool = False,
 ) -> _ObservedTimelineBuildResult:
     if not timeline:
-        return _ObservedTimelineBuildResult(timeline=[], observations=[])
+        snapshot = None
+        if collect_transition_acoustics:
+            try:
+                source_before = sha256_file(wav_path)
+            except OSError:
+                source_before = None
+            try:
+                source_after = sha256_file(wav_path)
+            except OSError:
+                source_after = None
+            snapshot = build_transition_acoustic_snapshot(
+                rms_series=None,
+                source_sha256_before=source_before,
+                source_sha256_after=source_after,
+                duration_sec=None,
+                reason="empty_timeline",
+            )
+        return _ObservedTimelineBuildResult(
+            timeline=[],
+            observations=[],
+            transition_acoustic_snapshot=snapshot,
+        )
 
     clamped_upper_limit = max(0.0, upper_limit)
     initial_timeline = _repair_resolver_same_morph_boundaries(
@@ -1182,9 +1975,29 @@ def _refine_timeline_intervals_with_observations(
     )
     _debug_record(debug_trace, "record_timeline", "timeline_pre_rms", initial_timeline)
 
+    source_sha256_before = None
+    if collect_transition_acoustics:
+        try:
+            source_sha256_before = sha256_file(wav_path)
+        except OSError:
+            source_sha256_before = None
+
     try:
         rms_series = load_rms_series(str(wav_path), stereo_mode="average")
     except (ValueError, OSError, EOFError):
+        snapshot = None
+        if collect_transition_acoustics:
+            try:
+                source_sha256_after = sha256_file(wav_path)
+            except OSError:
+                source_sha256_after = None
+            snapshot = build_transition_acoustic_snapshot(
+                rms_series=None,
+                source_sha256_before=source_sha256_before,
+                source_sha256_after=source_sha256_after,
+                duration_sec=None,
+                reason="rms_unavailable",
+            )
         _debug_record(
             debug_trace,
             "record_stage",
@@ -1199,6 +2012,7 @@ def _refine_timeline_intervals_with_observations(
             speech_end_sec=speech_end_sec,
             upper_limit=clamped_upper_limit,
             fallback_reason="rms_unavailable",
+            debug_trace=debug_trace,
         )
         _debug_record(
             debug_trace,
@@ -1244,6 +2058,20 @@ def _refine_timeline_intervals_with_observations(
         return _ObservedTimelineBuildResult(
             timeline=timeline_with_peak_values,
             observations=observations,
+            transition_acoustic_snapshot=snapshot,
+        )
+
+    snapshot = None
+    if collect_transition_acoustics:
+        try:
+            source_sha256_after = sha256_file(wav_path)
+        except OSError:
+            source_sha256_after = None
+        snapshot = build_transition_acoustic_snapshot(
+            rms_series=rms_series,
+            source_sha256_before=source_sha256_before,
+            source_sha256_after=source_sha256_after,
+            duration_sec=rms_series.duration_sec,
         )
 
     rms_debug_payload = _debug_rms_payload(
@@ -1288,12 +2116,35 @@ def _refine_timeline_intervals_with_observations(
         debug_call_site="post_rms",
     )
     _debug_record(debug_trace, "record_timeline", "timeline_post_rms_raw", refined_timeline)
+    silence_intervals = (
+        rms_debug_payload.get("silence_intervals", [])
+        if isinstance(rms_debug_payload.get("silence_intervals", []), list)
+        else []
+    )
+    source_silence_intervals = tuple(
+        (
+            float(item["start_sec"]),
+            float(item["end_sec"]),
+            str(item.get("classification", "unknown")),
+            str(item.get("coverage_status", "unobserved")),
+            str(item.get("provenance_status", "unavailable")),
+        )
+        for item in silence_intervals
+        if isinstance(item, dict)
+        and isinstance(item.get("start_sec"), (int, float))
+        and isinstance(item.get("end_sec"), (int, float))
+        and math.isfinite(float(item["start_sec"]))
+        and math.isfinite(float(item["end_sec"]))
+        and float(item["end_sec"]) > float(item["start_sec"])
+    )
     timeline_with_peak_values = _apply_peak_values_to_timeline(
         timeline=refined_timeline,
         rms_series=rms_series,
         speech_start_sec=speech_start_sec,
         speech_end_sec=speech_end_sec,
         upper_limit=clamped_upper_limit,
+        silence_intervals=silence_intervals,
+        debug_trace=debug_trace,
     )
     _debug_record(
         debug_trace,
@@ -1308,16 +2159,14 @@ def _refine_timeline_intervals_with_observations(
         speech_start_sec=speech_start_sec,
         speech_end_sec=speech_end_sec,
         upper_limit=clamped_upper_limit,
-        silence_intervals=(
-            rms_debug_payload.get("silence_intervals", [])
-            if isinstance(rms_debug_payload.get("silence_intervals", []), list)
-            else []
-        ),
+        silence_intervals=silence_intervals,
     )
     _debug_record(debug_trace, "record_observations", observations)
     return _ObservedTimelineBuildResult(
         timeline=timeline_with_peak_values,
         observations=observations,
+        transition_acoustic_snapshot=snapshot,
+        source_silence_intervals=source_silence_intervals,
     )
 
 
@@ -1431,6 +2280,8 @@ def _apply_peak_values_to_timeline(
     speech_end_sec: float,
     upper_limit: float,
     fallback_reason: str | None = None,
+    silence_intervals: Sequence[dict] | None = None,
+    debug_trace: Any = None,
 ) -> list[VowelTimelinePoint]:
     evaluations = _build_peak_value_evaluations(
         timeline=timeline,
@@ -1439,11 +2290,73 @@ def _apply_peak_values_to_timeline(
         speech_end_sec=speech_end_sec,
         upper_limit=upper_limit,
         fallback_reason=fallback_reason,
+        silence_intervals=silence_intervals,
     )
-    return [
-        _with_peak_value(point=point, peak_value=evaluation.peak_value)
-        for point, evaluation in zip(timeline, evaluations)
-    ]
+    updated: list[VowelTimelinePoint] = []
+    assignment_records: list[dict[str, Any]] = []
+    for index, (point, evaluation) in enumerate(zip(timeline, evaluations)):
+        selection = _select_peak_sample_for_event(
+            times_sec=() if rms_series is None else rms_series.times_sec,
+            values=() if rms_series is None else rms_series.values,
+            source_time_sec=point.time_sec,
+            peak_window_start_sec=evaluation.peak_window_start_sec,
+            peak_window_end_sec=evaluation.peak_window_end_sec,
+            interval_start_sec=evaluation.interval_start_sec,
+            interval_end_sec=evaluation.interval_end_sec,
+            silence_intervals=silence_intervals,
+        )
+        peak_time_sec = point.time_sec
+        assignment_reason = selection.reason
+        if (
+            evaluation.peak_value > 0.0
+            and selection.source_frame_blocked
+            and selection.frame_no is not None
+        ):
+            previous_frame = (
+                None if index == 0 else _seconds_to_frame(timeline[index - 1].time_sec)
+            )
+            next_frame = (
+                None
+                if index + 1 >= len(timeline)
+                else _seconds_to_frame(timeline[index + 1].time_sec)
+            )
+            if (
+                (previous_frame is None or selection.frame_no >= previous_frame)
+                and (next_frame is None or selection.frame_no <= next_frame)
+            ):
+                peak_time_sec = selection.frame_no / VMD_FPS
+                assignment_reason = "rms_peak_frame"
+            else:
+                assignment_reason = "event_order_conflict"
+        elif evaluation.peak_value <= 0.0:
+            assignment_reason = evaluation.reason or "peak_value_not_positive"
+        elif selection.frame_no is not None:
+            assignment_reason = "source_frame_not_in_silence_core"
+        updated.append(
+            _with_peak_value(
+                point=point,
+                peak_value=evaluation.peak_value,
+                time_sec=peak_time_sec,
+            )
+        )
+        assignment_records.append(
+            {
+                "event_index": index,
+                "vowel": point.vowel,
+                "source_time_sec": point.time_sec,
+                "peak_sample_time_sec": selection.sample_time_sec,
+                "peak_frame": selection.frame_no,
+                "assigned_time_sec": peak_time_sec,
+                "reason": assignment_reason,
+            }
+        )
+    _debug_record(
+        debug_trace,
+        "record_stage",
+        "peak_time_assignment",
+        payload={"events": assignment_records},
+    )
+    return updated
 
 
 def _build_peak_value_evaluations(
@@ -1454,26 +2367,15 @@ def _build_peak_value_evaluations(
     speech_end_sec: float,
     upper_limit: float,
     fallback_reason: str | None = None,
+    silence_intervals: Sequence[dict] | None = None,
+    source_timeline: Sequence[VowelTimelinePoint] | None = None,
 ) -> list[PeakValueEvaluation]:
     if not timeline:
         return []
+    if source_timeline is not None and len(source_timeline) != len(timeline):
+        raise ValueError("source_timeline must have the same length as timeline.")
 
     clamped_upper_limit = max(0.0, upper_limit)
-    if clamped_upper_limit <= 0.0:
-        return [
-            PeakValueEvaluation(
-                interval_start_sec=interval_start_sec,
-                interval_end_sec=interval_end_sec,
-                peak_window_start_sec=interval_start_sec,
-                peak_window_end_sec=interval_end_sec,
-                local_peak=None,
-                peak_value=0.0,
-            )
-            for interval_start_sec, interval_end_sec in (
-                _event_interval(point) for point in timeline
-            )
-        ]
-
     if fallback_reason == "rms_unavailable":
         fallback_peak_value = round(clamped_upper_limit * _RMS_UNAVAILABLE_FALLBACK_RATIO, 4)
         return [
@@ -1538,17 +2440,41 @@ def _build_peak_value_evaluations(
             speech_start_sec=speech_start_sec,
             speech_end_sec=speech_end_sec,
         )
+        selection = _select_peak_sample_for_event(
+            times_sec=rms_series.times_sec,
+            values=rms_series.values,
+            source_time_sec=(
+                point.time_sec
+                if source_timeline is None
+                else source_timeline[index].time_sec
+            ),
+            peak_window_start_sec=peak_window_start_sec,
+            peak_window_end_sec=peak_window_end_sec,
+            interval_start_sec=interval_start_sec,
+            interval_end_sec=interval_end_sec,
+            silence_intervals=silence_intervals,
+        )
         window_samples = _rms_samples_in_window(
             times_sec=rms_series.times_sec,
             values=rms_series.values,
             start_sec=peak_window_start_sec,
             end_sec=peak_window_end_sec,
         )
-        local_peak = max(window_samples) if window_samples else None
-        zero_reason = _classify_peak_zero_reason(
-            local_peak=local_peak,
-            global_peak=global_peak,
-        )
+        if selection.source_frame_blocked and selection.frame_no is not None:
+            local_peak = selection.sample_value
+            zero_reason = _classify_peak_zero_reason(
+                local_peak=local_peak,
+                global_peak=global_peak,
+            )
+        elif selection.source_frame_blocked and selection.reason == "silence_core_only":
+            local_peak = selection.sample_value
+            zero_reason = "silence_core_precedence"
+        else:
+            local_peak = max(window_samples) if window_samples else None
+            zero_reason = _classify_peak_zero_reason(
+                local_peak=local_peak,
+                global_peak=global_peak,
+            )
         if zero_reason is None:
             normalized_peak = local_peak / global_peak
             peak_value = max(
@@ -1703,6 +2629,8 @@ def _build_peak_value_observations(
         speech_end_sec=speech_end_sec,
         upper_limit=upper_limit,
         fallback_reason=fallback_reason,
+        silence_intervals=silence_intervals,
+        source_timeline=initial_timeline,
     )
     global_peak = _observation_global_peak(
         rms_series=rms_series,
@@ -1897,6 +2825,111 @@ def _annotate_micro_gap_bridge_candidates(
             )
         )
     return annotated
+
+
+def reproject_peak_values_for_upper_limit(
+    timing_plan: VowelTimingPlan,
+    upper_limit: float,
+) -> VowelTimingPlan:
+    """Re-evaluate stored peak evidence without rerunning text or audio analysis."""
+    if not isinstance(timing_plan, VowelTimingPlan):
+        raise TypeError("timing_plan must be a VowelTimingPlan")
+    if isinstance(upper_limit, bool) or not isinstance(upper_limit, (int, float)):
+        raise ValueError("upper_limit must be a finite number between 0 and 10")
+    normalized_limit = float(upper_limit)
+    if not math.isfinite(normalized_limit) or not 0.0 <= normalized_limit <= 10.0:
+        raise ValueError("upper_limit must be a finite number between 0 and 10")
+    observations = timing_plan.observations
+    if observations is None or len(observations) != len(timing_plan.timeline):
+        raise ValueError("upper-independent peak observations are unavailable")
+
+    projected_timeline: list[VowelTimelinePoint] = []
+    projected_observations: list[PeakValueObservation] = []
+    for index, (point, observation) in enumerate(
+        zip(timing_plan.timeline, observations)
+    ):
+        if observation.event_index != index or observation.vowel != point.vowel:
+            raise ValueError("peak observations do not match source events")
+        evaluation = observation.evaluation
+        reason: str | None
+        if observation.fallback_reason == "rms_unavailable":
+            peak_value = round(
+                normalized_limit * _RMS_UNAVAILABLE_FALLBACK_RATIO,
+                4,
+            )
+            reason = "rms_unavailable"
+        else:
+            local_peak = evaluation.local_peak
+            global_peak = observation.global_peak
+            if global_peak is None or not math.isfinite(float(global_peak)):
+                raise ValueError(
+                    f"global peak evidence is unavailable for source event {index}"
+                )
+            normalized_global_peak = float(global_peak)
+            if normalized_global_peak < 0.0:
+                raise ValueError(
+                    f"global peak evidence is invalid for source event {index}"
+                )
+            if normalized_global_peak == 0.0:
+                reason = "global_peak_zero"
+                peak_value = 0.0
+            else:
+                reason = _classify_peak_zero_reason(
+                    local_peak=local_peak,
+                    global_peak=normalized_global_peak,
+                )
+                if reason is not None:
+                    peak_value = 0.0
+                else:
+                    normalized_peak = float(local_peak) / normalized_global_peak
+                    peak_value = max(
+                        0.0,
+                        min(
+                            normalized_limit,
+                            round(normalized_limit * normalized_peak, 4),
+                        ),
+                    )
+        updated_evaluation = replace(
+            evaluation,
+            peak_value=peak_value,
+            reason=reason,
+        )
+        updated_observation = replace(
+            observation,
+            peak_value=peak_value,
+            reason=reason,
+            evaluation=updated_evaluation,
+        )
+        projected_observations.append(updated_observation)
+        projected_timeline.append(
+            replace(point, value=peak_value, peak_value=peak_value)
+        )
+
+    silence_intervals = [
+        {
+            "start_sec": start_sec,
+            "end_sec": end_sec,
+            "classification": classification,
+            "coverage_status": coverage_status,
+            "provenance_status": provenance_status,
+        }
+        for (
+            start_sec,
+            end_sec,
+            classification,
+            coverage_status,
+            provenance_status,
+        ) in timing_plan.source_silence_intervals
+    ]
+    annotated = _annotate_micro_gap_bridge_candidates(
+        projected_observations,
+        silence_intervals=silence_intervals,
+    )
+    return replace(
+        timing_plan,
+        timeline=projected_timeline,
+        observations=annotated,
+    )
 
 
 def _resolve_observation_candidate_contract(
@@ -2601,9 +3634,14 @@ def _observation_global_peak(
     )
 
 
-def _with_peak_value(*, point: VowelTimelinePoint, peak_value: float) -> VowelTimelinePoint:
+def _with_peak_value(
+    *,
+    point: VowelTimelinePoint,
+    peak_value: float,
+    time_sec: float | None = None,
+) -> VowelTimelinePoint:
     return VowelTimelinePoint(
-        time_sec=point.time_sec,
+        time_sec=point.time_sec if time_sec is None else time_sec,
         vowel=point.vowel,
         value=peak_value,
         peak_value=peak_value,
@@ -2786,6 +3824,116 @@ def _rms_sample_pairs_in_window(
         for time_sec, value in zip(times_sec, values)
         if start_sec <= time_sec <= end_sec
     ]
+
+
+def _select_peak_sample_for_event(
+    *,
+    times_sec: Sequence[float],
+    values: Sequence[float],
+    source_time_sec: float,
+    peak_window_start_sec: float,
+    peak_window_end_sec: float,
+    interval_start_sec: float,
+    interval_end_sec: float,
+    silence_intervals: Sequence[dict] | None,
+) -> _PeakSampleSelection:
+    window_pairs = _rms_sample_pairs_in_window(
+        times_sec=times_sec,
+        values=values,
+        start_sec=peak_window_start_sec,
+        end_sec=peak_window_end_sec,
+    )
+    if not window_pairs:
+        return _PeakSampleSelection(None, None, None, "no_sample")
+
+    event_pairs = [
+        pair
+        for pair in window_pairs
+        if interval_start_sec <= pair[0] <= interval_end_sec
+    ]
+    if not event_pairs:
+        sample_time_sec, sample_value = max(
+            window_pairs,
+            key=lambda pair: (pair[1], -pair[0]),
+        )
+        return _PeakSampleSelection(
+            sample_time_sec,
+            sample_value,
+            None,
+            "window_halo",
+        )
+
+    span_start_frame = _seconds_to_frame(interval_start_sec)
+    span_end_frame = _seconds_to_frame(interval_end_sec)
+    if span_end_frame <= span_start_frame:
+        span_end_frame = span_start_frame + 1
+    silence_core_ranges, _ = _silence_frame_ranges_for_span(
+        silence_intervals,
+        span_start_frame=span_start_frame,
+        span_end_frame=span_end_frame,
+    )
+    # Match the frame quantization used when VMD keys are written.
+    source_frame = _seconds_to_frame(source_time_sec)
+    source_frame_blocked = any(
+        start_frame <= source_frame < end_frame
+        for start_frame, end_frame in silence_core_ranges
+    )
+
+    eligible: list[tuple[float, float, int]] = []
+    protected_event_samples: list[tuple[float, float]] = []
+    for sample_time_sec, sample_value in event_pairs:
+        # RMS samples are grouped into 30 fps frame bins. Use the bin number
+        # here, then express the selected center as an exact frame time below.
+        frame_no = math.floor(sample_time_sec * VMD_FPS)
+        frame_time_sec = frame_no / VMD_FPS
+        if not interval_start_sec <= frame_time_sec <= interval_end_sec:
+            continue
+        in_core_or_boundary = any(
+            start_frame <= frame_no < end_frame
+            for start_frame, end_frame in silence_core_ranges
+        )
+        if in_core_or_boundary:
+            protected_event_samples.append((sample_time_sec, sample_value))
+            continue
+        eligible.append((sample_time_sec, sample_value, frame_no))
+
+    if eligible:
+        sample_time_sec, sample_value, frame_no = max(
+            eligible,
+            key=lambda sample: (sample[1], -sample[0]),
+        )
+        return _PeakSampleSelection(
+            sample_time_sec,
+            sample_value,
+            frame_no,
+            "event_peak",
+            source_frame_blocked,
+        )
+
+    if protected_event_samples and len(protected_event_samples) == len(event_pairs):
+        sample_time_sec, sample_value = max(
+            protected_event_samples,
+            key=lambda pair: (pair[1], -pair[0]),
+        )
+        return _PeakSampleSelection(
+            sample_time_sec,
+            sample_value,
+            None,
+            "silence_core_only",
+            source_frame_blocked,
+        )
+
+    sample_time_sec, sample_value = max(
+        event_pairs,
+        key=lambda pair: (pair[1], -pair[0]),
+    )
+    return _PeakSampleSelection(
+        sample_time_sec,
+        sample_value,
+        None,
+        "frame_outside_interval",
+        source_frame_blocked,
+    )
 
 
 def _classify_peak_zero_reason(

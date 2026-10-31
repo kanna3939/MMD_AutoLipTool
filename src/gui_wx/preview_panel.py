@@ -4,14 +4,20 @@ import math
 from typing import Sequence
 
 from src.core.preview_hit_test import (
+    PreviewCurveHitRegion,
     PreviewEventHitRegion,
     PreviewHitTestInput,
     PreviewSelectionRequest,
+    collect_preview_curve_hit_regions,
     collect_preview_hit_regions,
     hit_test_preview_event,
 )
 from src.core.preview_transform import PreviewData, PREVIEW_ROW_VOWELS, empty_preview_data, PreviewSegment
 from gui_wx.theme import ThemeManager
+
+
+_PAN_DRAG_SCALE = 0.5
+
 
 @dataclass
 class PreviewModel:
@@ -24,6 +30,7 @@ class PreviewModel:
     viewport_end_sec: float = 0.0
     selected_source_event_index: int | None = None
     base_plan_identity_digest: str | None = None
+    final_output_binding: str | None = None
     render_revision: int = 0
 
     def set_data(self, data: PreviewData, duration_sec: float):
@@ -32,6 +39,7 @@ class PreviewModel:
         self.is_valid = True
         self.selected_source_event_index = None
         self.base_plan_identity_digest = None
+        self.final_output_binding = None
         self.render_revision += 1
         if self.viewport_start_sec == 0.0 and self.viewport_end_sec == 0.0:
             self.viewport_end_sec = duration_sec
@@ -41,15 +49,27 @@ class PreviewModel:
         data: PreviewData,
         duration_sec: float,
         base_plan_identity_digest: str,
+        final_output_binding: str | None = None,
     ) -> bool:
         """Replace canonical Preview data and preserve selection only for the same base."""
         if not isinstance(base_plan_identity_digest, str) or not base_plan_identity_digest:
             raise ValueError("base_plan_identity_digest must be a non-empty string")
+        if final_output_binding is not None and (
+            not isinstance(final_output_binding, str)
+            or not final_output_binding
+        ):
+            raise ValueError("final_output_binding must be non-empty text or None")
+        if (
+            data.final_output_binding is not None
+            and data.final_output_binding != final_output_binding
+        ):
+            raise ValueError("Preview data binding differs from the requested identity")
         data_changed = (
             not self.is_valid
             or self.data != data
             or self.duration_sec != duration_sec
             or self.base_plan_identity_digest != base_plan_identity_digest
+            or self.final_output_binding != final_output_binding
         )
         if not data_changed:
             return False
@@ -58,12 +78,18 @@ class PreviewModel:
         self.duration_sec = duration_sec
         self.is_valid = True
         self.base_plan_identity_digest = base_plan_identity_digest
+        self.final_output_binding = final_output_binding
         self.render_revision += 1
         if not same_identity:
             self.selected_source_event_index = None
         elif (
             self.selected_source_event_index is not None
-            and self.find_shape_by_source_event_index(self.selected_source_event_index) is None
+            and (
+                self.find_event_hit_region(self.selected_source_event_index) is None
+                if final_output_binding is not None
+                else self.find_shape_by_source_event_index(self.selected_source_event_index)
+                is None
+            )
         ):
             self.selected_source_event_index = None
         if self.viewport_start_sec == 0.0 and self.viewport_end_sec == 0.0:
@@ -83,6 +109,7 @@ class PreviewModel:
         self.viewport_end_sec = 0.0
         self.selected_source_event_index = None
         self.base_plan_identity_digest = None
+        self.final_output_binding = None
         self.render_revision += 1
 
     def set_playback_position(self, position_sec: float | None):
@@ -105,10 +132,28 @@ class PreviewModel:
                     return segment
                 if index in segment.source_event_indices:
                     return segment
+        region = next(
+            (
+                item
+                for item in self.get_event_hit_regions()
+                if item.base_event_index == index
+            ),
+            None,
+        )
+        if region is not None:
+            row = next((item for item in self.data.rows if item.vowel == region.vowel), None)
+            if row is not None:
+                for segment in row.segments:
+                    if (
+                        segment.frame_range is None
+                        or segment.frame_range[0] <= region.end_frame
+                        and region.start_frame <= segment.frame_range[1]
+                    ):
+                        return segment
         return None
 
     def find_event_hit_region(self, index: int) -> PreviewEventHitRegion | None:
-        for region in collect_preview_hit_regions(self.data.rows):
+        for region in self.get_event_hit_regions():
             if region.base_event_index == index:
                 return region
         return None
@@ -116,7 +161,14 @@ class PreviewModel:
     def get_event_hit_regions(self) -> tuple[PreviewEventHitRegion, ...]:
         if not self.is_valid:
             return ()
+        if self.data.selection_regions:
+            return tuple(self.data.selection_regions)
         return collect_preview_hit_regions(self.data.rows)
+
+    def get_curve_hit_regions(self):
+        if not self.is_valid:
+            return ()
+        return collect_preview_curve_hit_regions(self.data.rows)
 
 
 @dataclass
@@ -126,6 +178,7 @@ class _GestureState:
     last_x: int
     base_plan_identity_digest: str | None
     render_revision: int
+    final_output_binding: str | None = None
     dragging: bool = False
 
 
@@ -195,6 +248,12 @@ class PreviewRenderer:
     def _draw_lanes(self, gc: wx.GraphicsContext, rect: wx.Rect):
         palette = ThemeManager.get_palette()
         lane_height = rect.height / 5.0
+        selected_index = self.model.selected_source_event_index
+        selected_region = (
+            None
+            if selected_index is None
+            else self.model.find_event_hit_region(selected_index)
+        )
 
         for i, vowel in enumerate(PREVIEW_ROW_VOWELS):
             row_data = next((r for r in self.model.data.rows if r.vowel == vowel), None)
@@ -215,7 +274,6 @@ class PreviewRenderer:
                 if w <= 0:
                     continue
                 
-                selected_index = self.model.selected_source_event_index
                 is_selected = selected_index is not None and (
                     segment.source_event_index == selected_index
                     or selected_index in segment.source_event_indices
@@ -260,6 +318,55 @@ class PreviewRenderer:
                     path.CloseSubpath()
                     gc.FillPath(path, wx.WINDING_RULE)
                     gc.StrokePath(path)
+                    if selected_index is not None and segment.shape_kind == "shared_final_output":
+                        curve = PreviewCurveHitRegion(
+                            vowel,
+                            tuple((point.frame_no, point.value) for point in segment.control_points),
+                            tuple(point.source_event_indices for point in segment.control_points),
+                            requires_source_ownership=True,
+                        )
+                        gc.SetPen(wx.Pen(palette.text_fg, 2, wx.PENSTYLE_SOLID))
+                        for left, right in zip(segment.control_points, segment.control_points[1:]):
+                            if left.frame_no == right.frame_no or max(left.value, right.value) <= 0.0:
+                                continue
+                            midpoint = (left.frame_no + right.frame_no) / 2
+                            if curve.source_event_indices_at(midpoint) != (selected_index,):
+                                continue
+                            outline = gc.CreatePath()
+                            outline.MoveToPoint(
+                                self._time_to_x(left.time_sec, rect.width),
+                                base_y - max_h_lane * left.value,
+                            )
+                            outline.AddLineToPoint(
+                                self._time_to_x(right.time_sec, rect.width),
+                                base_y - max_h_lane * right.value,
+                            )
+                            gc.StrokePath(outline)
+
+            if selected_region is not None and selected_region.vowel == vowel:
+                selected_points = (
+                    point
+                    for segment in row_data.segments
+                    if segment.shape_kind == "shared_final_output"
+                    for point in segment.control_points
+                    if selected_index in point.source_event_indices
+                    and point.value > 0.0
+                    and self.model.viewport_start_sec <= point.time_sec <= self.model.viewport_end_sec
+                )
+                anchor = min(
+                    selected_points,
+                    key=lambda point: (
+                        -point.value,
+                        abs((point.frame_no or 0) - selected_region.base_peak_frame),
+                    ),
+                    default=None,
+                )
+                if anchor is not None:
+                    anchor_x = self._time_to_x(anchor.time_sec, rect.width)
+                    anchor_y = y_base + lane_height - 2 - (lane_height - 4) * anchor.value
+                    gc.SetBrush(wx.Brush(wx.Colour(color.Red(), color.Green(), color.Blue(), 255)))
+                    gc.SetPen(wx.Pen(palette.text_fg, 2, wx.PENSTYLE_SOLID))
+                    gc.DrawEllipse(anchor_x - 4, anchor_y - 4, 8, 8)
 
     def _draw_cursor(self, gc: wx.GraphicsContext, rect: wx.Rect):
         if self.model.playback_position_sec is None:
@@ -287,7 +394,8 @@ class PreviewPanel(wx.Panel):
     5母音固定5段レーンの確認用可視化を行う。
     """
     def __init__(self, parent):
-        super().__init__(parent, style=wx.BORDER_SIMPLE)
+        super().__init__(parent, style=wx.BORDER_NONE | wx.CLIP_CHILDREN)
+        self._ms33c_theme_border = True
         self.SetMinSize((-1, 150))
         self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
         self.SetDoubleBuffered(True)
@@ -295,6 +403,12 @@ class PreviewPanel(wx.Panel):
         self.model = PreviewModel()
         self.renderer = PreviewRenderer(self.model)
         self.placeholder_msg: str = "[Placeholder] Preview エリア"
+        self._loading_label = wx.StaticText(self, label="")
+        self._loading_label.Hide()
+        self._loading_step = 0
+        self._loading_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self._on_loading_timer, self._loading_timer)
+        self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
         
         self.Bind(wx.EVT_PAINT, self._on_paint)
         self.Bind(wx.EVT_SIZE, self._on_size)
@@ -312,6 +426,7 @@ class PreviewPanel(wx.Panel):
         """[MS15-B2] 解析成功時にプレビューデータをセットする"""
         self._cancel_gesture()
         self.model.set_data(data, duration_sec)
+        self._set_loading(False)
         self.Refresh()
 
     def set_identity_aware_preview_data(
@@ -319,28 +434,73 @@ class PreviewPanel(wx.Panel):
         data: PreviewData,
         duration_sec: float,
         base_plan_identity_digest: str,
+        final_output_binding: str | None = None,
     ):
         """Set canonical Preview data while retaining same-base selection."""
         changed = self.model.set_identity_aware_data(
             data,
             duration_sec,
             base_plan_identity_digest,
+            final_output_binding,
         )
         if changed:
             self._cancel_gesture()
-        self.Refresh()
+        was_loading = self._loading_label.IsShown()
+        self._set_loading(False)
+        if changed or was_loading:
+            self.Refresh()
 
     def set_placeholder(
         self,
         msg: str,
         *,
         output_morph_names: Sequence[str] = PREVIEW_ROW_VOWELS,
+        loading: bool = False,
     ):
         """[MS15-B2] 解析失敗時などにプレースホルダへ戻す"""
         self._cancel_gesture()
         self.model.clear(output_morph_names=output_morph_names)
         self.placeholder_msg = msg
+        self._set_loading(loading)
         self.Refresh()
+
+    def _set_loading(self, loading: bool):
+        self._loading_timer.Stop()
+        self._loading_step = 0
+        self._loading_label.Hide()
+        if loading:
+            self._loading_label.SetLabel(self.placeholder_msg)
+            self._loading_label.SetFont(self.GetFont())
+            self._layout_loading_label()
+            self._loading_label.Show()
+            self._loading_timer.Start(100)
+
+    def _layout_loading_label(self):
+        palette = ThemeManager.get_palette()
+        if self._loading_label.GetForegroundColour() != palette.muted_text:
+            self._loading_label.SetForegroundColour(palette.muted_text)
+        if self._loading_label.GetBackgroundColour() != palette.preview_lane_bg:
+            self._loading_label.SetBackgroundColour(palette.preview_lane_bg)
+        size = self._loading_label.GetBestSize()
+        rect = self.GetClientRect()
+        if self._loading_label.GetSize() != size:
+            self._loading_label.SetSize(size)
+        position = wx.Point(
+            max(0, (rect.width - size.width) // 2),
+            max(0, (rect.height - size.height) // 2),
+        )
+        if self._loading_label.GetPosition() != position:
+            self._loading_label.SetPosition(position)
+
+    def _on_loading_timer(self, event):
+        if self._loading_timer.IsRunning():
+            self._loading_step = (self._loading_step + 1) % 8
+            self.Refresh(False)
+
+    def _on_destroy(self, event):
+        if event.GetEventObject() is self:
+            self._loading_timer.Stop()
+        event.Skip()
 
     def set_playback_position_sec(self, position_sec: float | None):
         """[MS15-B2] 再生位置カーソルの受け口 API"""
@@ -364,6 +524,8 @@ class PreviewPanel(wx.Panel):
 
     def set_selected_source_event_index(self, index: int | None):
         """[MS16-B6] 選択されたイベントインデックスをセットする"""
+        if self.model.selected_source_event_index == index:
+            return
         self.model.selected_source_event_index = index
         self.Refresh()
 
@@ -402,6 +564,8 @@ class PreviewPanel(wx.Panel):
         return "\n".join(lines)
 
     def _on_size(self, event):
+        if self._loading_timer.IsRunning():
+            self._layout_loading_label()
         self.Refresh()
         event.Skip()
 
@@ -415,6 +579,7 @@ class PreviewPanel(wx.Panel):
             origin_y=position.y,
             last_x=position.x,
             base_plan_identity_digest=self.model.base_plan_identity_digest,
+            final_output_binding=self.model.final_output_binding,
             render_revision=self.model.render_revision,
         )
         if not self.HasCapture():
@@ -438,7 +603,7 @@ class PreviewPanel(wx.Panel):
                 span = self.model.viewport_end_sec - self.model.viewport_start_sec
                 rect_width = self.GetClientRect().width
                 if rect_width > 0:
-                    delta_sec = (dx / rect_width) * span
+                    delta_sec = (dx / rect_width) * span * _PAN_DRAG_SCALE
                     self.on_pan_callback(delta_sec)
         event.Skip()
 
@@ -453,10 +618,15 @@ class PreviewPanel(wx.Panel):
         if (
             gesture.base_plan_identity_digest is None
             or gesture.base_plan_identity_digest != self.model.base_plan_identity_digest
+            or gesture.final_output_binding != self.model.final_output_binding
             or gesture.render_revision != self.model.render_revision
         ):
             return
         rect = self.GetClientRect()
+        try:
+            curve_regions = self.model.get_curve_hit_regions()
+        except ValueError:
+            return
         selected_index = hit_test_preview_event(
             PreviewHitTestInput(
                 x=position.x,
@@ -466,6 +636,7 @@ class PreviewPanel(wx.Panel):
                 viewport_start_sec=self.model.viewport_start_sec,
                 viewport_end_sec=self.model.viewport_end_sec,
                 event_hit_regions=self.model.get_event_hit_regions(),
+                curve_hit_regions=curve_regions,
             )
         )
         if selected_index is None or self.on_selection_request_callback is None:
@@ -475,6 +646,7 @@ class PreviewPanel(wx.Panel):
                 base_event_index=selected_index,
                 base_plan_identity_digest=gesture.base_plan_identity_digest,
                 render_revision=gesture.render_revision,
+                final_output_binding=gesture.final_output_binding,
             )
         )
 
@@ -508,19 +680,47 @@ class PreviewPanel(wx.Panel):
             dc.SetTextForeground(palette.muted_text)
             font = self.GetFont()
             dc.SetFont(font)
-            # Center text
-            text_lines = self.placeholder_msg.split('\n')
-            total_h = sum(dc.GetTextExtent(line)[1] for line in text_lines)
-            y = max(0, (rect.height - total_h) // 2)
-            for line in text_lines:
-                tw, th = dc.GetTextExtent(line)
-                x = max(0, (rect.width - tw) // 2)
-                dc.DrawText(line, x, y)
-                y += th
+            if self._loading_timer.IsRunning():
+                # Use the same native text control as the rest of the GUI.
+                self._layout_loading_label()
+                y = self._loading_label.GetRect().GetBottom()
+                # Draw beneath the message using the current theme and DPI.
+                radius = self.FromDIP(8)
+                center_x = rect.width // 2
+                center_y = y + self.FromDIP(8) + radius
+                background = palette.preview_lane_bg
+                foreground = palette.muted_text
+                dc.SetPen(wx.TRANSPARENT_PEN)
+                for index in range(8):
+                    strength = 0.25 + 0.75 * ((index - self._loading_step) % 8) / 7
+                    colour = wx.Colour(*(
+                        round(bg + (fg - bg) * strength)
+                        for bg, fg in zip(background.Get(), foreground.Get())
+                    ))
+                    dc.SetBrush(wx.Brush(colour))
+                    angle = index * math.tau / 8
+                    dc.DrawCircle(
+                        round(center_x + radius * math.cos(angle)),
+                        round(center_y + radius * math.sin(angle)),
+                        max(1, self.FromDIP(2)),
+                    )
+            else:
+                # Center non-loading placeholder text.
+                text_lines = self.placeholder_msg.split('\n')
+                total_h = sum(dc.GetTextExtent(line)[1] for line in text_lines)
+                y = max(0, (rect.height - total_h) // 2)
+                for line in text_lines:
+                    tw, th = dc.GetTextExtent(line)
+                    x = max(0, (rect.width - tw) // 2)
+                    dc.DrawText(line, x, y)
+                    y += th
+            ThemeManager.draw_border(dc, rect, self)
             return
             
         gc = wx.GraphicsContext.Create(dc)
         if gc is None:
+            ThemeManager.draw_border(dc, rect, self)
             return
 
         self.renderer.render(gc, rect, self.GetFont())
+        ThemeManager.draw_border(gc, rect, self)

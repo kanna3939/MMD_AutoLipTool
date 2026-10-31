@@ -104,6 +104,171 @@ def _detail_lines(detail: str) -> list[str]:
     return [f"    {_single_line(line)}" for line in normalized.split("\n")]
 
 
+def _shared_final_output_lines(snapshot: OutputDiagnosticsSnapshot) -> list[str]:
+    identity = snapshot.shared_final_output_identity
+    if identity is None:
+        failure = next(
+            (
+                item
+                for item in snapshot.items
+                if item.code == "effective_writer_input_unavailable"
+                and item.detail.startswith("MS31 final output ")
+            ),
+            None,
+        )
+        if failure is not None:
+            return [
+                "Shared Final Output: failed",
+                f"Failure: {_single_line(failure.detail)}",
+            ]
+        return ["Shared Final Output: (not applicable)"]
+    input_identity = getattr(identity, "input_identity", None)
+    lines = [
+        f"Source Run ID: {_single_line(getattr(input_identity, 'source_run_id', None))}",
+        f"Job ID: {_single_line(getattr(input_identity, 'job_id', None))}",
+        f"Analysis Generation: {_single_line(getattr(input_identity, 'analysis_generation', None))}",
+        f"Manual Revision: {_single_line(getattr(input_identity, 'manual_revision', None))}",
+        f"Base Plan Digest: {_single_line(getattr(input_identity, 'base_plan_digest', None))}",
+        f"Effective Plan Digest: {_single_line(getattr(input_identity, 'effective_plan_digest', None))}",
+        f"Plan Schema ID: {_single_line(getattr(identity, 'plan_schema_id', None))}",
+        f"Curve Policy ID: {_single_line(getattr(identity, 'curve_policy_id', None))}",
+        f"Legacy Curve Policy ID: {_single_line(getattr(input_identity, 'curve_policy_id', None))}",
+        f"Final Semantic Digest: {_single_line(getattr(identity, 'semantic_digest', None))}",
+        f"Final Wire Digest: {_single_line(getattr(identity, 'wire_digest', None))}",
+        f"Binding Digest: {_single_line(getattr(identity, 'binding_digest', None))}",
+        "Restrictions:",
+    ]
+    restrictions = tuple(snapshot.shared_final_output_restrictions)
+    event_targets = tuple(
+        snapshot.shared_final_output_restriction_event_targets
+    )
+    if not restrictions:
+        lines.append(f"  {_NOT_AVAILABLE}")
+    for restriction in restrictions:
+        lines.append(
+            "  "
+            + " / ".join(
+                (
+                    _single_line(getattr(restriction, "semantic_morph", None)),
+                    f"frame {_single_line(getattr(restriction, 'frame_no', None))}",
+                    f"{_single_line(getattr(restriction, 'requested_value_hex', None))}"
+                    f" → {_single_line(getattr(restriction, 'effective_value_hex', None))}",
+                    _single_line(getattr(restriction, "reason", None)),
+                )
+            )
+        )
+        source_ids = tuple(getattr(restriction, "source_ids", ()))
+        lines.append(
+            "    Sources: "
+            + (
+                ", ".join(_single_line(source_id) for source_id in source_ids)
+                if source_ids
+                else _NOT_AVAILABLE
+            )
+        )
+        for target in event_targets:
+            if getattr(getattr(target, "restriction", None), "restriction_id", None) != getattr(
+                restriction, "restriction_id", None
+            ):
+                continue
+            event = target.event
+            lines.append(
+                "    Event: "
+                f"{_single_line(getattr(event, 'base_event_index', None))} / "
+                f"group {_single_line(getattr(event, 'group_event_indices', None))} / "
+                f"long {_single_line(getattr(event, 'long_vowel_role', None))} / "
+                f"frames {_single_line(getattr(event, 'start_frame', None))}–"
+                f"{_single_line(getattr(event, 'end_frame', None))}"
+            )
+    transition_summary = snapshot.transition_summary
+    if transition_summary is not None:
+        lines.extend(
+            (
+                "Transition Candidate Summary:",
+                f"  Schema: {_single_line(transition_summary.schema_id)}",
+                f"  Summary Digest: {_single_line(transition_summary.summary_digest)}",
+                f"  Input Digest: {_single_line(transition_summary.input_digest)}",
+                f"  Policy Digest: {_single_line(transition_summary.policy_digest)}",
+                f"  Acoustic Digest: {_single_line(transition_summary.acoustic_digest)}",
+                f"  Outer Plan: {_single_line(transition_summary.outer_plan_schema_id)} / "
+                f"{_single_line(transition_summary.outer_semantic_digest)} / "
+                f"{_single_line(transition_summary.outer_wire_digest)}",
+                "  Pairs:",
+            )
+        )
+        if not transition_summary.pairs:
+            lines.append(f"    {_NOT_AVAILABLE}")
+        for pair in transition_summary.pairs:
+            owner = (
+                pair.next_event_index
+                if pair.state == "applied"
+                else None
+            )
+            lines.append(
+                "    Pair "
+                f"{pair.previous_event_index}→{pair.next_event_index} / "
+                f"{_single_line(pair.previous_morph)}→{_single_line(pair.next_morph)} / "
+                f"{_single_line(pair.state)} / reason {_single_line(pair.reason)}"
+            )
+            lines.append(
+                "      Owner event: "
+                f"{_single_line(owner)} / "
+                f"start {pair.baseline_start_frame}→{pair.candidate_start_frame} "
+                f"(advance {pair.start_advance_frames}) / "
+                f"overlap {pair.baseline_overlap_width_frames:.6f}→"
+                f"{pair.candidate_overlap_width_frames:.6f} "
+                f"(delta {pair.overlap_width_delta_frames:.6f}) / "
+                f"positive frames {pair.baseline_positive_integer_frame_count}→"
+                f"{pair.candidate_positive_integer_frame_count} "
+                f"(delta {pair.positive_integer_frame_count_delta}) / "
+                f"local peak ratio {_single_line(pair.local_peak_ratio)}"
+            )
+    cleanup_summary = snapshot.cleanup_summary
+    if cleanup_summary is not None:
+        cleanup_heading = (
+            "Cleanup Default Summary:"
+            if cleanup_summary.application_origin == "adopted_default"
+            else "Cleanup Candidate Summary:"
+        )
+        lines.extend(
+            (
+                cleanup_heading,
+                f"  Schema: {_single_line(cleanup_summary.schema_id)}",
+                f"  Variant: {_single_line(cleanup_summary.variant)}",
+                f"  Summary Digest: {_single_line(cleanup_summary.summary_digest)}",
+                f"  Final Binding: {_single_line(cleanup_summary.final_binding)}",
+                f"  Event Policy Digest: {_single_line(cleanup_summary.policy_digests[0])}",
+                f"  Key Policy Digest: {_single_line(cleanup_summary.policy_digests[1])}",
+                f"  Source Events: {cleanup_summary.source_event_count}",
+                f"  Suppressed Events: {len(cleanup_summary.suppressed_event_ids)}",
+                f"  Final Keys: {cleanup_summary.input_key_count} → {cleanup_summary.final_key_count}",
+                f"  Reduced Keys: {len(cleanup_summary.removed_keys)}",
+                "  Event Decisions:",
+            )
+        )
+        if cleanup_summary.application_origin == "adopted_default":
+            lines.extend((
+                f"  Application Origin: {_single_line(cleanup_summary.application_origin)}",
+                f"  Event Component: {_single_line(cleanup_summary.event_component_state)}",
+                f"  Key Component: {_single_line(cleanup_summary.key_component_state)}",
+                f"  Selection Kind: {_single_line(cleanup_summary.selection_kind)}",
+                f"  Selection Reason: {_single_line(cleanup_summary.selection_reason)}",
+            ))
+        if not cleanup_summary.event_reasons:
+            lines.append(f"    {_NOT_AVAILABLE}")
+        for event_id, action, reasons in cleanup_summary.event_reasons:
+            lines.append(
+                f"    {_single_line(event_id)} / {_single_line(action)} / "
+                + (", ".join(_single_line(reason) for reason in reasons) if reasons else _NOT_AVAILABLE)
+            )
+        if cleanup_summary.removed_keys:
+            lines.append(
+                "  Removed Keys: "
+                + ", ".join(f"{morph}@{frame}" for frame, morph in cleanup_summary.removed_keys)
+            )
+    return lines
+
+
 def format_diagnostic_report(
     snapshot: OutputDiagnosticsSnapshot,
     *,
@@ -229,9 +394,26 @@ def format_diagnostic_report(
         f"Blocking Codes: {_display_codes(saveability.blocking_codes)}",
         f"Warning Codes: {_display_codes(saveability.warning_codes)}",
         f"Save State Fingerprint: {_single_line(snapshot.save_state_fingerprint)}",
-        "",
-        "[Diagnostics]",
     ]
+
+    has_shared_final_output_context = (
+        snapshot.shared_final_output_identity is not None
+        or any(
+            item.code == "effective_writer_input_unavailable"
+            and item.detail.startswith("MS31 final output ")
+            for item in snapshot.items
+        )
+    )
+    if has_shared_final_output_context:
+        lines.extend(
+            [
+                "",
+                "[Shared Final Output]",
+                *_shared_final_output_lines(snapshot),
+            ]
+        )
+
+    lines.extend(["", "[Diagnostics]"])
 
     if not snapshot.items:
         lines.append(_NOT_AVAILABLE)

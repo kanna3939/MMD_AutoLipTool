@@ -25,9 +25,15 @@ EDITABLE_FIELDS = (
     "softness_frames",
     "slope_ratio",
     "long_vowel_mode",
+    "manual_overlap_limit_override",
 )
-GESTURE_EDITABLE_FIELDS = EDITABLE_FIELDS[:-1]
+GESTURE_EDITABLE_FIELDS = tuple(
+    field
+    for field in EDITABLE_FIELDS
+    if field not in {"long_vowel_mode", "manual_overlap_limit_override"}
+)
 TAIL_FIELDS = ("hold_frames", "softness_frames", "slope_ratio")
+GROUP_SHARED_FIELDS = (*TAIL_FIELDS, "manual_overlap_limit_override")
 
 
 @dataclass(frozen=True)
@@ -38,12 +44,15 @@ class SelectedEventEditorState:
     editor_revision: int
     group_member_count: int
     is_group_tail: bool
+    group_tail_base_event_index: int
     long_vowel_mode_enabled: bool
     requested_long_vowel_mode: str | None
     effective_long_vowel_mode: str | None
     long_vowel_mode_overridden: bool
     long_vowel_mode_notice: str
     tail_controls_enabled: bool
+    manual_overlap_override_enabled: bool
+    requested_manual_overlap_limit_override: bool
     base_start_frame: int
     base_peak_frame: int
     base_end_frame: int
@@ -80,6 +89,8 @@ class SelectedEventEditorState:
     start_offset_max: int
     end_offset_min: int
     end_offset_max: int
+    end_offset_range_error: str
+    final_output_binding: str | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +101,7 @@ class SelectedEventEditRequest:
     field: str
     value: float | int | str | None
     coalescing_token: int | None = None
+    final_output_binding: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -116,6 +128,13 @@ class SelectedEventEditRequest:
             raise AdjustmentContractError(
                 "coalescing_token must be a non-negative int or None"
             )
+        if self.final_output_binding is not None and (
+            not isinstance(self.final_output_binding, str)
+            or not self.final_output_binding
+        ):
+            raise AdjustmentContractError(
+                "final_output_binding must be non-empty text or None"
+            )
 
 
 @dataclass(frozen=True)
@@ -124,6 +143,7 @@ class SelectedEventEditBoundaryRequest:
     base_identity_digest: str
     field: str
     coalescing_token: int
+    final_output_binding: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -152,6 +172,13 @@ class SelectedEventEditBoundaryRequest:
         ):
             raise AdjustmentContractError(
                 "coalescing_token must be a non-negative int"
+            )
+        if self.final_output_binding is not None and (
+            not isinstance(self.final_output_binding, str)
+            or not self.final_output_binding
+        ):
+            raise AdjustmentContractError(
+                "final_output_binding must be non-empty text or None"
             )
 
 
@@ -250,6 +277,8 @@ def build_selected_event_editor_state(
     expected_base_identity_digest: str,
     editor_revision: int,
     source_duration_frames: int,
+    adjustment_snapshot: AdjustmentLayerSnapshot | None = None,
+    final_output_binding: str | None = None,
 ) -> SelectedEventEditorState:
     if not isinstance(effective_plan, EffectiveShapePlan):
         raise AdjustmentContractError("effective_plan must be EffectiveShapePlan")
@@ -268,6 +297,24 @@ def build_selected_event_editor_state(
         or source_duration_frames < 0
     ):
         raise AdjustmentContractError("source_duration_frames must be a non-negative int")
+    if final_output_binding is not None and (
+        not isinstance(final_output_binding, str) or not final_output_binding
+    ):
+        raise AdjustmentContractError(
+            "final_output_binding must be non-empty text or None"
+        )
+    requested_snapshot = (
+        effective_plan.canonical_adjustment_snapshot
+        if adjustment_snapshot is None
+        else adjustment_snapshot
+    )
+    if (
+        not isinstance(requested_snapshot, AdjustmentLayerSnapshot)
+        or requested_snapshot.base_plan_identity != effective_plan.base_plan_identity
+    ):
+        raise AdjustmentContractError(
+            "selected event draft snapshot identity mismatch"
+        )
 
     base = _one_by_index(
         effective_plan.base_events,
@@ -292,21 +339,19 @@ def build_selected_event_editor_state(
     if shape.resolved_tail is None:
         raise AdjustmentContractError("selected shape is missing resolved tail metadata")
 
-    adjustment = next(
-        (
-            item
-            for item in effective_plan.canonical_adjustment_snapshot.adjustments
-            if item.base_event_index == selected_base_event_index
-        ),
-        None,
-    )
+    adjustments_by_index = {
+        item.base_event_index: item for item in requested_snapshot.adjustments
+    }
+    adjustment = adjustments_by_index.get(selected_base_event_index)
     tail = shape.resolved_tail
     is_tail = tail.tail_base_event_index == selected_base_event_index
+    tail_adjustment = adjustments_by_index.get(tail.tail_base_event_index)
     long_run = next(
         (
             item
             for item in effective_plan.long_vowel_runs
-            if selected_base_event_index in item.continuation_base_event_indices
+            if selected_base_event_index
+            in (item.source_base_event_index, *item.continuation_base_event_indices)
         ),
         None,
     )
@@ -336,24 +381,36 @@ def build_selected_event_editor_state(
     peak_override = adjustment is not None and adjustment.peak_value is not None
     start_override = adjustment is not None and adjustment.start_offset_frames != 0
     end_override = adjustment is not None and adjustment.end_offset_frames != 0
-    hold_override = adjustment is not None and adjustment.hold_frames is not None
+    hold_override = tail_adjustment is not None and tail_adjustment.hold_frames is not None
     softness_override = (
-        adjustment is not None and adjustment.softness_frames is not None
+        tail_adjustment is not None and tail_adjustment.softness_frames is not None
     )
-    slope_override = adjustment is not None and adjustment.slope_ratio is not None
-    slope_enabled = is_tail and tail.has_slope_midpoint
-    hold_is_limited = (
-        is_tail and tail.requested_hold_frames != tail.effective_hold_frames
+    slope_override = tail_adjustment is not None and tail_adjustment.slope_ratio is not None
+    slope_enabled = tail.has_slope_midpoint
+    requested_hold_frames = (
+        tail_adjustment.hold_frames
+        if tail_adjustment is not None and tail_adjustment.hold_frames is not None
+        else effective_plan.shape_parameters.closing_hold_frames
     )
+    requested_softness_frames = (
+        tail_adjustment.softness_frames
+        if tail_adjustment is not None and tail_adjustment.softness_frames is not None
+        else effective_plan.shape_parameters.closing_softness_frames
+    )
+    requested_slope_ratio = (
+        tail_adjustment.slope_ratio
+        if tail_adjustment is not None and tail_adjustment.slope_ratio is not None
+        else DEFAULT_SLOPE_RATIO
+    )
+    hold_is_limited = requested_hold_frames != tail.effective_hold_frames
     softness_is_limited = (
-        is_tail
-        and tail.requested_softness_frames != tail.effective_softness_frames
+        requested_softness_frames != tail.effective_softness_frames
     )
     effect_notice_header, effect_notice_lines, slope_helper_text = (
         _build_tail_effect_notice(
-            is_group_tail=is_tail,
-            requested_hold_frames=tail.requested_hold_frames,
-            requested_softness_frames=tail.requested_softness_frames,
+            is_group_tail=long_run is None or is_long_vowel_terminal,
+            requested_hold_frames=requested_hold_frames,
+            requested_softness_frames=requested_softness_frames,
             effective_hold_frames=tail.effective_hold_frames,
             effective_softness_frames=tail.effective_softness_frames,
             slope_enabled=slope_enabled,
@@ -369,6 +426,7 @@ def build_selected_event_editor_state(
         vowel=base.vowel,
         base_identity_digest=digest,
         editor_revision=editor_revision,
+        final_output_binding=final_output_binding,
         group_member_count=len(shape.real_base_event_indices),
         is_group_tail=is_tail,
         long_vowel_mode_enabled=is_long_vowel_terminal,
@@ -377,8 +435,15 @@ def build_selected_event_editor_state(
         long_vowel_mode_overridden=(requested_long_vowel_mode is not None),
         long_vowel_mode_notice=long_vowel_mode_notice,
         tail_controls_enabled=(
-            is_tail and effective_long_vowel_mode != LONG_VOWEL_MODE_DECAY
+            (long_run is None or is_long_vowel_terminal)
+            and effective_long_vowel_mode != LONG_VOWEL_MODE_DECAY
         ),
+        manual_overlap_override_enabled=long_run is None,
+        requested_manual_overlap_limit_override=bool(
+            tail_adjustment is not None
+            and tail_adjustment.manual_overlap_limit_override
+        ),
+        group_tail_base_event_index=tail.tail_base_event_index,
         base_start_frame=base.start_frame,
         base_peak_frame=base.peak_frame,
         base_end_frame=base.end_frame,
@@ -392,9 +457,9 @@ def build_selected_event_editor_state(
         requested_end_offset_frames=(
             adjustment.end_offset_frames if adjustment is not None else 0
         ),
-        requested_hold_frames=tail.requested_hold_frames,
-        requested_softness_frames=tail.requested_softness_frames,
-        requested_slope_ratio=tail.slope_ratio,
+        requested_hold_frames=requested_hold_frames,
+        requested_softness_frames=requested_softness_frames,
+        requested_slope_ratio=requested_slope_ratio,
         effective_start_frame=effective.start_frame,
         effective_peak_frame=effective.peak_frame,
         effective_end_frame=effective.end_frame,
@@ -424,11 +489,34 @@ def build_selected_event_editor_state(
             effective_plan,
             selected_base_event_index,
             source_duration_frames=source_duration_frames,
+            adjustment_snapshot=requested_snapshot,
+        ),
+        end_offset_range_error=(
+            "終了offsetが許容範囲外です。範囲内へ戻すか、制限を再解除してください。"
+            if adjustment is not None
+            and (
+                adjustment.end_offset_frames
+                < base.peak_frame - base.end_frame
+                or adjustment.end_offset_frames
+                > resolve_manual_crossfade_end_offset_max(
+                    effective_plan,
+                    selected_base_event_index,
+                    source_duration_frames=source_duration_frames,
+                    adjustment_snapshot=requested_snapshot,
+                )
+            )
+            else ""
         ),
     )
 
 
 def _validate_typed_value(field: str, value: object) -> float | int | str | None:
+    if field == "manual_overlap_limit_override":
+        if type(value) is not bool:
+            raise AdjustmentContractError(
+                "manual_overlap_limit_override must be bool"
+            )
+        return value
     if field == "long_vowel_mode":
         if value is None:
             return None
@@ -455,16 +543,31 @@ def _validate_typed_value(field: str, value: object) -> float | int | str | None
 def merge_selected_event_edit(
     snapshot: AdjustmentLayerSnapshot,
     request: SelectedEventEditRequest,
+    *,
+    adjustment_target_base_event_index: int | None = None,
 ) -> EventAdjustment:
     if snapshot.base_plan_identity.digest != request.base_identity_digest:
         raise AdjustmentContractError("edit request base identity mismatch")
+    target_index = (
+        request.base_event_index
+        if adjustment_target_base_event_index is None
+        else adjustment_target_base_event_index
+    )
+    if (
+        isinstance(target_index, bool)
+        or not isinstance(target_index, int)
+        or target_index < 0
+    ):
+        raise AdjustmentContractError(
+            "adjustment_target_base_event_index must be a non-negative int"
+        )
     current = next(
         (
             item
             for item in snapshot.adjustments
-            if item.base_event_index == request.base_event_index
+            if item.base_event_index == target_index
         ),
-        EventAdjustment(request.base_event_index),
+        EventAdjustment(target_index),
     )
     value = _validate_typed_value(request.field, request.value)
     return replace(current, **{request.field: value})
@@ -489,6 +592,7 @@ def display_slope_default() -> float:
 
 __all__ = [
     "EDITABLE_FIELDS",
+    "GROUP_SHARED_FIELDS",
     "TAIL_FIELDS",
     "SelectedEventEditRequest",
     "SelectedEventEditBoundaryRequest",

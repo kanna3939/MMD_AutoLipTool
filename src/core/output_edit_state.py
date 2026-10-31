@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 from .effective_shape_plan import BasePlanIdentity
 from .event_adjustment import AdjustmentContractError, AdjustmentLayerSnapshot
@@ -82,11 +83,12 @@ class GenerationState:
 
 @dataclass(frozen=True)
 class OutputEditState:
-    """Atomic base-bound output state used by the B4 history."""
+    """Atomic base-bound output state used by the output edit history."""
 
     base_plan_identity: BasePlanIdentity
     adjustment_snapshot: AdjustmentLayerSnapshot
     generation_state: GenerationState
+    morph_upper_limit: float = 0.9
 
     def __post_init__(self) -> None:
         identity = _require_identity(self.base_plan_identity, "base_plan_identity")
@@ -99,17 +101,30 @@ class OutputEditState:
                 "output edit adjustment snapshot base identity mismatch"
             )
         _require_generation_state(self.generation_state, "generation_state")
+        value = self.morph_upper_limit
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise AdjustmentContractError(
+                "morph_upper_limit must be a finite number between 0 and 10"
+            )
+        normalized = float(value)
+        if not math.isfinite(normalized) or not 0.0 <= normalized <= 10.0:
+            raise AdjustmentContractError(
+                "morph_upper_limit must be a finite number between 0 and 10"
+            )
+        object.__setattr__(self, "morph_upper_limit", normalized)
 
 
 def build_output_edit_state(
     base_plan_identity: BasePlanIdentity,
     adjustment_snapshot: AdjustmentLayerSnapshot,
     generation_state: GenerationState,
+    morph_upper_limit: float = 0.9,
 ) -> OutputEditState:
     return OutputEditState(
         base_plan_identity=base_plan_identity,
         adjustment_snapshot=adjustment_snapshot,
         generation_state=generation_state,
+        morph_upper_limit=morph_upper_limit,
     )
 
 

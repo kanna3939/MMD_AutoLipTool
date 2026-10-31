@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -22,6 +23,7 @@ from src.core import (
     GenerationState,
 )
 from src.core.generation_presets import GenerationSettings
+from src.core.event_adjustment import AdjustmentLayerSnapshot
 from src.core.morph_name_sets import (
     JAPANESE_OUTPUT_NAMES,
     get_builtin_morph_name_set,
@@ -36,6 +38,8 @@ from src.core.whisper_models import (
     MANIFEST_SCHEMA_VERSION,
     build_manifest_identity,
 )
+from src.core.transition_diagnostics import build_transition_diagnostic_summary
+from src.core.final_output_projection import shared_output_consumer_view
 from src.vmd_writer.effective_shape_adapter import (
     build_morph_frames_from_effective_shape_plan,
 )
@@ -393,6 +397,7 @@ def build_output_diagnostics_snapshot_from_ui_state(
     active_preset_display_name: str | None = None,
     output_morph_names: Sequence[str] = JAPANESE_OUTPUT_NAMES,
     projection_generation: int = 0,
+    shared_final_output_context: object | None = None,
 ) -> OutputDiagnosticsSnapshot:
     """Build the B2 diagnostics snapshot for the current wx workspace state."""
     normalized_output_morph_names = validate_output_morph_names(output_morph_names)
@@ -423,6 +428,37 @@ def build_output_diagnostics_snapshot_from_ui_state(
     base_plan_identity_digest: str | None = None
     resolved_effective_state = effective_writer_input_state
     resolved_failure_reason = effective_writer_input_failure_reason
+    shared_identity = None
+    shared_restrictions: tuple[object, ...] = ()
+    shared_restriction_event_targets: tuple[object, ...] = ()
+    if shared_final_output_context is not None:
+        candidate = getattr(shared_final_output_context, "candidate", None)
+        projection = getattr(shared_final_output_context, "projection", None)
+        identity = getattr(shared_final_output_context, "identity", None)
+        issuer_context = getattr(shared_final_output_context, "issuer_context", None)
+        if (
+            candidate is None
+            or getattr(candidate, "state", None) != "valid"
+            or getattr(candidate, "plan", None) is None
+            or projection is None
+            or identity is None
+            or issuer_context is None
+        ):
+            raise ValueError("shared final-output context is invalid")
+        legacy_context = issuer_context.legacy_context
+        effective_shape_plan = legacy_context.effective_plan_snapshot
+        if effective_shape_plan is None:
+            raise ValueError("shared final-output effective plan is missing")
+        expected_names = tuple(name for _, name in identity.input_identity.output_mapping)
+        if expected_names != normalized_output_morph_names:
+            raise ValueError("shared final-output mapping differs from diagnostics mapping")
+        shared_identity = identity
+        shared_restrictions = tuple(candidate.plan.restrictions)
+        shared_restriction_event_targets = tuple(
+            shared_final_output_context.restriction_event_targets
+        )
+        resolved_effective_state = "ready"
+        resolved_failure_reason = None
     if effective_shape_plan is not None:
         identity = getattr(effective_shape_plan, "base_plan_identity", None)
         base_plan_identity_digest = getattr(identity, "digest", None)
@@ -430,10 +466,20 @@ def build_output_diagnostics_snapshot_from_ui_state(
         try:
             if effective_shape_plan is None:
                 raise ValueError("effective_shape_plan is required for ready state")
-            morph_frames = build_morph_frames_from_effective_shape_plan(
-                effective_shape_plan,
-                output_morph_names=normalized_output_morph_names,
-            )
+            if shared_final_output_context is not None:
+                morph_frames = tuple(
+                    (
+                        int(point.frame_no),
+                        str(point.output_morph_name),
+                        float(point.binary32_value),
+                    )
+                    for point in shared_final_output_context.projection.wire_points
+                )
+            else:
+                morph_frames = build_morph_frames_from_effective_shape_plan(
+                    effective_shape_plan,
+                    output_morph_names=normalized_output_morph_names,
+                )
             tails: list[EffectiveTailInput] = []
             for shape_ordinal, shape in enumerate(effective_shape_plan.shapes):
                 tail = shape.resolved_tail
@@ -579,8 +625,278 @@ def build_output_diagnostics_snapshot_from_ui_state(
         ),
         whisper_summary=whisper_summary,
         projection_generation=projection_generation,
+        shared_final_output_identity=shared_identity,
+        shared_final_output_restrictions=shared_restrictions,
+        shared_final_output_restriction_event_targets=(
+            shared_restriction_event_targets
+        ),
     )
     return build_output_diagnostics_snapshot(snapshot_input)
+
+
+def capture_shared_output_diagnostics_seed(
+    state: UiState,
+    *,
+    vmd_model_name: str = "AutoLipTool",
+    closing_hold_frames: int = 0,
+    closing_softness_frames: int = 0,
+    generation_state: GenerationState | None = None,
+    timing_plan=None,
+    adjustment_snapshot: AdjustmentLayerSnapshot | None = None,
+    active_preset_display_name: str | None = None,
+    output_morph_names: Sequence[str] = JAPANESE_OUTPUT_NAMES,
+    projection_generation: int = 0,
+) -> DiagnosticSnapshotInput:
+    """Capture immutable diagnostic inputs before the B3 worker starts."""
+    normalized_names = validate_output_morph_names(output_morph_names)
+    name_set = next(
+        item
+        for item in (
+            get_builtin_morph_name_set("builtin:japanese-vowels"),
+            get_builtin_morph_name_set("builtin:latin-vowels"),
+        )
+        if item.output_names == normalized_names
+    )
+    resolved_generation_state = generation_state or state.generation_state
+    settings = resolved_generation_state.generation_settings
+    resolved_adjustment_snapshot = (
+        state.current_adjustment_snapshot
+        if adjustment_snapshot is None
+        else adjustment_snapshot
+    )
+    active_preset_id = resolved_generation_state.active_preset_id
+    if active_preset_id is not None and active_preset_display_name is None:
+        active_preset_id = None
+    return DiagnosticSnapshotInput(
+        input_mode=state.input_mode,
+        text_path=_optional_path(state.selected_text_path),
+        text_content_present=bool(state.selected_text_content),
+        source_audio_path=resolve_source_audio_path_from_ui_state(state),
+        effective_wav_path=_effective_wav_path(state),
+        analysis_text_present=bool(
+            state.analysis_text_content or state.transcription_text
+        ),
+        analysis_result_valid=state.analysis_result_valid,
+        analysis_pending_rebuild=state.analysis_pending_rebuild,
+        timing_plan=(
+            _diagnostic_timing_plan(state, analysis_in_progress=False)
+            if timing_plan is None
+            else timing_plan
+        ),
+        existing_vmd_save_ready=state.vmd_save_ready,
+        writer_parameters=VmdWriterParameters(
+            vmd_model_name=vmd_model_name,
+            closing_hold_frames=settings.closing_hold_frames,
+            closing_softness_frames=settings.closing_softness_frames,
+        ),
+        failure=state.current_diagnostic_failure,
+        analysis_cancelled=state.analysis_cancelled,
+        effective_writer_input_state="not_applicable",
+        effective_writer_input=None,
+        adjustment_present=bool(
+            resolved_adjustment_snapshot is not None
+            and resolved_adjustment_snapshot.adjustments
+        ),
+        adjusted_event_count=(
+            0
+            if resolved_adjustment_snapshot is None
+            else len(resolved_adjustment_snapshot.adjustments)
+        ),
+        active_long_vowel_mode=settings.long_vowel_mode,
+        active_preset_id=active_preset_id,
+        active_preset_display_name=(
+            active_preset_display_name if active_preset_id is not None else None
+        ),
+        long_vowel_mode_override_count=(
+            0
+            if adjustment_snapshot is None
+            else sum(
+                1
+                for item in adjustment_snapshot.adjustments
+                if item.long_vowel_mode is not None
+            )
+        ),
+        active_model_profile_id=state.model_profile_state.active_model_profile_id,
+        active_model_profile_display_name=state.active_model_profile_display_name,
+        active_profile_baseline_preset_id=(
+            state.model_profile_state.active_profile_baseline_preset_id
+        ),
+        baseline_preset_display_name=state.baseline_preset_display_name,
+        model_profile_resolution_status=(
+            state.model_profile_state.resolution_status.value
+        ),
+        model_profile_resolution_reason_code=(
+            state.model_profile_state.resolution_reason_code
+        ),
+        resolved_morph_name_set_id=name_set.set_id,
+        resolved_morph_name_set_display_name=name_set.display_name,
+        whisper_summary=build_whisper_diagnostics_summary(
+            state,
+            analysis_result_valid=state.analysis_result_valid,
+            analysis_pending_rebuild=state.analysis_pending_rebuild,
+            analysis_in_progress=False,
+            preview_projection_status=(
+                "analysis_required"
+                if state.analysis_pending_rebuild
+                else (
+                    "ready"
+                    if state.analysis_result_valid
+                    and state.current_timing_plan is not None
+                    else "unavailable"
+                )
+            ),
+        ),
+        projection_generation=projection_generation,
+    )
+
+
+def build_shared_output_diagnostics_snapshot(
+    seed: DiagnosticSnapshotInput,
+    shared_context: object,
+) -> OutputDiagnosticsSnapshot:
+    """Build B3 diagnostics from the validated shared wire projection."""
+    if not isinstance(seed, DiagnosticSnapshotInput):
+        raise TypeError("seed must be DiagnosticSnapshotInput")
+    consumer_view = shared_output_consumer_view(shared_context)
+    return _build_shared_output_diagnostics_snapshot_from_consumer_view(
+        seed,
+        shared_context,
+        consumer_view,
+    )
+
+
+def _build_shared_output_diagnostics_snapshot_from_consumer_view(
+    seed: DiagnosticSnapshotInput,
+    shared_context: object,
+    consumer_view: Any,
+) -> OutputDiagnosticsSnapshot:
+    candidate = consumer_view.candidate
+    projection = consumer_view.projection
+    identity = consumer_view.identity
+    issuer_context = getattr(shared_context, "issuer_context", None)
+    if (
+        candidate is None
+        or getattr(candidate, "state", None) != "valid"
+        or getattr(candidate, "plan", None) is None
+        or projection is None
+        or identity is None
+        or issuer_context is None
+    ):
+        raise ValueError("shared final-output context is invalid")
+    effective_plan = issuer_context.legacy_context.effective_plan_snapshot
+    if effective_plan is None:
+        raise ValueError("shared final-output effective plan is missing")
+    morph_frames = tuple(
+        EffectiveMorphFrameInput(
+            frame_no=point.frame_no,
+            morph_name=point.output_morph_name,
+            value=point.binary32_value,
+        )
+        for point in projection.wire_points
+    )
+    tails: list[EffectiveTailInput] = []
+    for shape_ordinal, shape in enumerate(effective_plan.shapes):
+        tail = shape.resolved_tail
+        if tail is None:
+            continue
+        tails.append(
+            EffectiveTailInput(
+                shape_ordinal=shape_ordinal,
+                vowel=shape.vowel,
+                effective_hold_frames=tail.effective_hold_frames,
+                effective_softness_frames=tail.effective_softness_frames,
+                effective_slope_ratio=tail.slope_ratio,
+                has_slope_midpoint=tail.has_slope_midpoint,
+            )
+        )
+    effective_input = EffectiveWriterInput(
+        shape_count=len(effective_plan.shapes),
+        morph_frames=morph_frames,
+        tails=tuple(tails),
+        allowed_morph_names=tuple(name for _, name in identity.input_identity.output_mapping),
+    )
+    transition_binding = consumer_view.transition_binding
+    cleanup_binding = consumer_view.cleanup_binding
+    transition_identity = identity
+    if transition_binding is not None and cleanup_binding is not None:
+        transition_upstream = getattr(cleanup_binding, "upstream_context", None)
+        if (
+            transition_upstream is None
+            or transition_upstream.transition_binding != transition_binding
+        ):
+            raise ValueError("cleanup transition source differs from its upstream context")
+        transition_identity = transition_upstream.identity
+    transition_summary = (
+        None
+        if transition_binding is None
+        else build_transition_diagnostic_summary(transition_binding, transition_identity)
+    )
+    snapshot_input = replace(
+        seed,
+        effective_writer_input_state="ready",
+        effective_writer_input=effective_input,
+        effective_writer_input_failure_reason=None,
+        base_plan_identity_digest=effective_plan.base_plan_identity.digest,
+        effective_long_vowel_hold_run_count=sum(
+            1 for run in effective_plan.long_vowel_runs if run.resolved_mode == "hold"
+        ),
+        effective_long_vowel_decay_run_count=sum(
+            1 for run in effective_plan.long_vowel_runs if run.resolved_mode == "decay"
+        ),
+        shared_final_output_identity=identity,
+        shared_final_output_restrictions=tuple(candidate.plan.restrictions),
+        shared_final_output_restriction_event_targets=tuple(
+            shared_context.restriction_event_targets
+        ),
+        transition_summary=transition_summary,
+        cleanup_summary=consumer_view.cleanup_summary,
+    )
+    return build_output_diagnostics_snapshot(snapshot_input)
+
+
+def build_shared_output_failure_diagnostics_snapshot(
+    seed: DiagnosticSnapshotInput,
+    *,
+    status: str,
+    issues: Sequence[Any],
+) -> OutputDiagnosticsSnapshot:
+    """Map a failed B2 candidate to the existing VMD-input ERROR contract."""
+    if not isinstance(seed, DiagnosticSnapshotInput):
+        raise TypeError("seed must be DiagnosticSnapshotInput")
+    if status not in {"invalid", "unavailable", "stale"}:
+        raise ValueError("status is not a shared-output failure")
+    issue_details = tuple(
+        f"{getattr(issue, 'reason_code', 'unknown')}"
+        + (
+            f" @ {getattr(issue, 'stage', 'unknown')}: {getattr(issue, 'detail', '')}"
+            if getattr(issue, "detail", "")
+            else ""
+        )
+        for issue in issues
+    )
+    failure_reason = f"MS31 final output {status}"
+    if issue_details:
+        failure_reason = f"{failure_reason}: " + "; ".join(issue_details)
+    snapshot = build_output_diagnostics_snapshot(
+        replace(
+            seed,
+            effective_writer_input_state="invalid",
+            effective_writer_input=None,
+            effective_writer_input_failure_reason=failure_reason,
+            shared_final_output_identity=None,
+            shared_final_output_restrictions=(),
+            shared_final_output_restriction_event_targets=(),
+        )
+    )
+    return replace(
+        snapshot,
+        items=tuple(
+            replace(item, detail=failure_reason)
+            if item.code == "effective_writer_input_unavailable"
+            else item
+            for item in snapshot.items
+        ),
+    )
 
 
 def _display_path(value: str | None) -> str:
@@ -617,6 +933,50 @@ def format_output_diagnostics_info(
     generation_summary = snapshot.generation_summary
     whisper_summary = snapshot.whisper_summary
     saveability = snapshot.saveability
+    cleanup_summary = snapshot.cleanup_summary
+    if cleanup_summary is None:
+        cleanup_lines = ("[自動整理候補]", "状態: 未使用")
+    elif cleanup_summary.application_origin == "adopted_default":
+        retained_reason_count = sum(len(reasons) for reasons in cleanup_summary.protected_reasons)
+        status_text = {
+            "cleanup": "通常適用（採択済み）",
+            "scope_excluded": "自動整理対象外（現在の入力は採択条件外）",
+            "no_applicable": "適用対象なし",
+        }.get(cleanup_summary.selection_kind, "通常状態不明")
+        reason_text = {
+            "exact_collinear_key_reduction_adopted": "曲線を厳密に保つキー整理を採択済み",
+            "input_mode_outside_adopted_scope": "現在の入力形式は採択対象外",
+            "no_applicable_cleanup_component": "現在の入力に適用できる整理項目がありません",
+        }.get(cleanup_summary.selection_reason, "採択条件を確認できません")
+        key_text = {
+            "applied": "曲線を変えずに省略したキー",
+            "not_applied": "scope外のため保持したキー",
+            "not_applicable": "対象外のキー",
+        }.get(cleanup_summary.key_component_state, "キー")
+        cleanup_lines = (
+            "[自動整理]",
+            f"状態: {status_text}",
+            "イベント整理: 対象なし（適用するイベントがありません）",
+            f"キー数: {cleanup_summary.input_key_count} → {cleanup_summary.final_key_count} 件",
+            f"{key_text}: {len(cleanup_summary.removed_keys)} 件",
+            f"理由: {reason_text}",
+            f"保護理由の記録: {retained_reason_count} 件",
+        )
+    else:
+        decision_counts: dict[str, int] = {}
+        for _event_id, action, _reasons in cleanup_summary.event_reasons:
+            decision_counts[action] = decision_counts.get(action, 0) + 1
+        decision_text = "、".join(
+            f"{action} {count}件" for action, count in sorted(decision_counts.items())
+        ) or "イベント判定なし"
+        cleanup_lines = (
+            "[自動整理候補]",
+            f"状態: 比較候補（{cleanup_summary.variant}）",
+            f"整理イベント: {len(cleanup_summary.suppressed_event_ids)} 件",
+            f"キー数: {cleanup_summary.input_key_count} → {cleanup_summary.final_key_count} 件",
+            f"削減キー: {len(cleanup_summary.removed_keys)} 件",
+            f"イベント判定: {decision_text}",
+        )
     input_mode = {
         "text_audio": "TEXT + 音声",
         "voice_only": "音声のみ",
@@ -669,6 +1029,8 @@ def format_output_diagnostics_info(
             f"{generation_summary.effective_long_vowel_decay_run_count if generation_summary.effective_long_vowel_decay_run_count is not None else '(未算出)'}",
             f"診断schema: {generation_summary.fingerprint_schema_version}",
             "",
+            *cleanup_lines,
+            "",
             "[保存可否]",
             f"VMD保存: {'可能' if saveability.vmd_save_allowed else '不可'}",
             f"保存禁止診断数: {len(saveability.blocking_codes)} 件",
@@ -682,6 +1044,9 @@ __all__ = [
     "build_diagnostic_failure_input",
     "build_whisper_diagnostics_summary",
     "build_output_diagnostics_snapshot_from_ui_state",
+    "build_shared_output_failure_diagnostics_snapshot",
+    "capture_shared_output_diagnostics_seed",
+    "build_shared_output_diagnostics_snapshot",
     "resolve_source_audio_path_from_ui_state",
     "format_output_diagnostics_info",
 ]

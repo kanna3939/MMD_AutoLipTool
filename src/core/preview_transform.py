@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import math
+import struct
 from typing import Any, Protocol, Sequence
 
 from src.core.preview_hit_test import PreviewEventHitRegion
@@ -73,6 +74,7 @@ class PreviewControlPoint:
     value: float
     point_kind: str = "control"
     frame_no: int | None = None
+    source_event_indices: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,8 @@ class PreviewRow:
 @dataclass(frozen=True)
 class PreviewData:
     rows: list[PreviewRow]
+    selection_regions: tuple[PreviewEventHitRegion, ...] = ()
+    final_output_binding: str | None = None
 
 
 def _display_name_for_vowel(
@@ -279,6 +283,254 @@ def build_preview_data_from_effective_shape_plan(
     for row in rows.values():
         row.segments.sort(key=lambda segment: (segment.start_sec, segment.end_sec))
     return PreviewData(rows=[rows[vowel] for vowel in PREVIEW_ROW_VOWELS])
+
+
+def build_preview_data_from_shared_final_output(context: Any) -> PreviewData:
+    """Build curve geometry and event selection metadata from one B2 context."""
+    from src.core.final_output_projection import shared_output_consumer_view
+
+    view = shared_output_consumer_view(context)
+    return _build_preview_data_from_validated_consumer_view(context, view)
+
+
+def _build_preview_data_from_validated_consumer_view(
+    context: Any,
+    view: Any,
+) -> PreviewData:
+    from src.vmd_writer.final_morph_closure_adapter import candidate_closure_value
+
+    identity = view.identity
+    candidate = view.candidate
+    if (
+        identity is None
+        or candidate is None
+        or getattr(candidate, "state", None) != "valid"
+        or getattr(candidate, "plan", None) is None
+    ):
+        raise ValueError("a valid shared final-output context is required")
+    binding = getattr(identity, "binding_digest", None)
+    if not isinstance(binding, str) or not binding:
+        raise ValueError("shared final-output identity is invalid")
+    output_mapping = tuple(
+        output_name
+        for _, output_name in getattr(identity.input_identity, "output_mapping", ())
+    )
+    normalized_names = validate_output_morph_names(output_mapping)
+    rows = {
+        row.vowel: row
+        for row in empty_preview_data(output_morph_names=normalized_names).rows
+    }
+    plan = candidate.plan
+    issuer_evidence = getattr(
+        getattr(getattr(context, "issuer_context", None), "legacy_context", None),
+        "issuer_evidence",
+        None,
+    )
+    if issuer_evidence is None:
+        raise ValueError("shared Preview requires source selection evidence")
+    source_events_by_index = {
+        event.base_event_index: event for event in view.source_events
+    }
+    if len(source_events_by_index) != len(view.source_events):
+        raise ValueError("shared Preview source event indices are duplicated")
+    source_events_by_id: dict[str, tuple[int, ...]] = {
+        f"source:event:{event_index}": (event_index,)
+        for event_index in source_events_by_index
+    }
+    source_point_kinds_by_id: dict[str, str] = {}
+    transition_owner_by_point: dict[tuple[str, int], int] = {}
+    transition_binding = view.transition_binding
+    if transition_binding is not None:
+        for decision in transition_binding.resolution.decisions:
+            if decision.state != "applied":
+                continue
+            key = (decision.next_morph, decision.candidate_start_frame)
+            if key in transition_owner_by_point:
+                raise ValueError("shared Preview transition point has ambiguous event ownership")
+            transition_owner_by_point[key] = decision.next_event_index
+    for shape in issuer_evidence.shapes:
+        shape_events = tuple(
+            source_events_by_index[event_index]
+            for event_index in shape.base_event_indices
+            if event_index in source_events_by_index
+        )
+        if (
+            not shape_events
+            or len(shape_events) != len(shape.base_event_indices)
+            or len(set(shape.base_event_indices)) != len(shape.base_event_indices)
+            or any(event.vowel != shape.semantic_morph for event in shape_events)
+        ):
+            raise ValueError("shared Preview shape ownership is incomplete")
+        shape_source_id = f"source:shape:{shape.shape_ordinal}"
+        if shape_source_id in source_events_by_id:
+            raise ValueError("shared Preview shape ownership is duplicated")
+        source_events_by_id[shape_source_id] = tuple(shape.base_event_indices)
+        tail_event_index = shape.terminal_base_event_index
+        ordered_events = tuple(
+            sorted(shape_events, key=lambda event: (event.peak_frame, event.base_event_index))
+        )
+        for point in shape.points:
+            source_id = (
+                f"source:shape:{shape.shape_ordinal}:"
+                f"point:{point.point_ordinal}"
+            )
+            if source_id in source_events_by_id:
+                raise ValueError("shared Preview shape point ownership is duplicated")
+            source_point_kinds_by_id[source_id] = point.point_kind
+            matching_events = ()
+            if point.point_kind == "silence_core_zero":
+                pass
+            elif len(shape_events) == 1:
+                matching_events = shape_events
+            elif point.point_kind == "top":
+                matching_events = tuple(
+                    event
+                    for event in shape_events
+                    if event.peak_frame == point.frame_no
+                )
+                if not matching_events:
+                    matching_events = tuple(
+                        event
+                        for event in shape_events
+                        if event.end_frame == point.frame_no
+                    )
+            elif point.point_kind == "start_zero":
+                matching_events = tuple(
+                    event
+                    for event in ordered_events[:1]
+                    if event.start_frame == point.frame_no
+                )
+            elif point.point_kind == "valley":
+                for left_event, right_event in zip(ordered_events, ordered_events[1:]):
+                    if left_event.peak_frame <= point.frame_no <= right_event.peak_frame:
+                        matching_events = (left_event, right_event)
+                        break
+            elif point.point_kind in {"hold", "slope_mid", "end_zero"}:
+                matching_events = tuple(
+                    event
+                    for event in shape_events
+                    if event.base_event_index == tail_event_index
+                )
+            # Several source events can legitimately share a frame or a shape
+            # point. Keep every explicit match; the hit test declines a click
+            # whose point ownership cannot be narrowed to one event.
+            source_events_by_id[source_id] = tuple(
+                sorted(event.base_event_index for event in matching_events)
+            )
+    for vowel in PREVIEW_ROW_VOWELS:
+        cleanup_points = tuple(
+            point for point in view.final_points if point.semantic_morph == vowel
+        )
+        key_points = (
+            cleanup_points
+            if view.cleanup_binding is not None
+            else tuple(point for point in plan.points if point.semantic_morph == vowel)
+        )
+        if not key_points:
+            continue
+        first_frame = key_points[0].frame_no
+        last_frame = key_points[-1].frame_no
+        control_points: list[PreviewControlPoint] = []
+        for key_point in key_points:
+            frame_no = key_point.frame_no
+            if view.cleanup_binding is not None:
+                value = struct.unpack("<f", bytes.fromhex(key_point.binary32_hex))[0]
+            else:
+                value = candidate_closure_value(plan, vowel, frame_no)
+            if value is None:
+                raise ValueError("shared final key lies outside its closed domain")
+            source_ids = tuple(key_point.source_ids)
+            missing_shape_points = () if view.cleanup_binding is not None else tuple(
+                source_id for source_id in source_ids
+                if source_id.startswith("source:shape:")
+                and ":point:" in source_id
+                and source_id not in source_events_by_id
+            )
+            transition_owner = transition_owner_by_point.get(
+                (vowel, key_point.frame_no)
+            )
+            if missing_shape_points and transition_owner is None:
+                raise ValueError("shared Preview source point is missing")
+            source_event_indices = (
+                tuple(key_point.source_event_indices)
+                if view.cleanup_binding is not None
+                else (transition_owner,)
+                if transition_owner is not None
+                else tuple(
+                    sorted(
+                        {
+                            event_index
+                            for source_id in source_ids
+                            for event_index in source_events_by_id.get(source_id, ())
+                        }
+                    )
+                )
+            )
+            source_point_kinds = (
+                set(key_point.point_kinds)
+                if view.cleanup_binding is not None
+                else {
+                    source_point_kinds_by_id[source_id]
+                    for source_id in source_ids
+                    if source_id in source_point_kinds_by_id
+                }
+            )
+            if "top" in source_point_kinds and float(value) > MORPH_FRAME_OPEN_EPSILON:
+                point_kind = "top"
+            elif len(source_point_kinds) == 1:
+                point_kind = next(iter(source_point_kinds))
+            else:
+                point_kind = "shared_final_curve"
+            control_points.append(
+                PreviewControlPoint(
+                    time_sec=frame_no / VMD_FPS,
+                    value=float(value),
+                    point_kind=point_kind,
+                    frame_no=frame_no,
+                    source_event_indices=source_event_indices,
+                )
+            )
+        values = tuple(point.value for point in control_points)
+        rows[vowel].segments.append(
+            PreviewSegment(
+                start_sec=control_points[0].time_sec,
+                end_sec=control_points[-1].time_sec,
+                duration_sec=max(
+                    control_points[-1].time_sec - control_points[0].time_sec,
+                    0.0,
+                ),
+                intensity=max(values),
+                vowel=vowel,
+                shape_kind="shared_final_output",
+                control_points=tuple(control_points),
+                frame_range=(first_frame, last_frame),
+                value_range=(min(values), max(values)),
+                is_zero_peak=max(values) <= MORPH_FRAME_OPEN_EPSILON,
+                is_short_span=(last_frame - first_frame) <= 1,
+                display_name=_display_name_for_vowel(vowel, normalized_names),
+            )
+        )
+    selection_regions = tuple(
+        PreviewEventHitRegion(
+            base_event_index=event.base_event_index,
+            vowel=event.vowel,
+            start_frame=event.start_frame,
+            base_peak_frame=event.peak_frame,
+            end_frame=event.end_frame,
+            peak_value=event.peak_value,
+            group_event_indices=event.group_event_indices,
+            shape_internal_source_tokens=event.shape_internal_source_tokens,
+            long_vowel_source_event_index=event.long_vowel_source_event_index,
+            long_vowel_role=event.long_vowel_role,
+            long_vowel_mode=event.long_vowel_mode,
+        )
+        for event in view.source_events
+    )
+    return PreviewData(
+        rows=[rows[vowel] for vowel in PREVIEW_ROW_VOWELS],
+        selection_regions=selection_regions,
+        final_output_binding=binding,
+    )
 
 
 def build_preview_data(
@@ -806,4 +1058,5 @@ __all__ = [
     "empty_preview_data",
     "build_preview_data",
     "build_preview_data_from_effective_shape_plan",
+    "build_preview_data_from_shared_final_output",
 ]

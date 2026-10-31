@@ -1081,7 +1081,7 @@ def write_morph_frames_vmd(
         for frame_no, vowel, value in prepared_frames:
             fp.write(_encode_shift_jis_fixed(vowel, 15))
             fp.write(struct.pack("<I", frame_no))
-            fp.write(struct.pack("<f", _finalize_morph_value(value)))
+            fp.write(struct.pack("<f", vmd_wire_morph_value(value)))
 
         # Camera / Light / Self-shadow / IK keyframe counts: all 0.
         fp.write(struct.pack("<I", 0))
@@ -3367,6 +3367,11 @@ def _finalize_morph_value(value: float) -> float:
     if abs(value - rounded) <= 1e-12:
         return float(value)
     return rounded
+
+
+def vmd_wire_morph_value(value: float) -> float:
+    """Return the stored float32 value after the VMD writer's 4-decimal finalization."""
+    return struct.unpack("<f", struct.pack("<f", _finalize_morph_value(value)))[0]
 
 
 def _sec_to_frame(time_sec: float) -> int:

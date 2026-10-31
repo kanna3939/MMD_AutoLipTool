@@ -761,6 +761,7 @@ def normalize_output_edit_history_state(
             base_plan_identity=output_state.base_plan_identity,
             adjustment_snapshot=output_state.adjustment_snapshot,
             generation_state=normalized,
+            morph_upper_limit=output_state.morph_upper_limit,
         )
 
     settled = finish_current_output_edit_coalescing(state)

@@ -1,5 +1,10 @@
 import wx
 from gui_wx.theme import ThemeManager
+
+
+_SCRUB_DRAG_SCALE = 1.0
+
+
 class WaveformPanel(wx.Panel):
     """
     [MS15-B1] 波形表示用の wx.Panel.
@@ -8,7 +13,8 @@ class WaveformPanel(wx.Panel):
     再生(B3)の受け口として playback_position_sec をサポートする。
     """
     def __init__(self, parent):
-        super().__init__(parent, style=wx.BORDER_SIMPLE)
+        super().__init__(parent, style=wx.BORDER_NONE)
+        self._ms33c_theme_border = True
         self.SetMinSize((-1, 140))
         self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
         self.SetDoubleBuffered(True)
@@ -23,12 +29,21 @@ class WaveformPanel(wx.Panel):
         self.Bind(wx.EVT_PAINT, self._on_paint)
         self.Bind(wx.EVT_SIZE, self._on_size)
         
-        self.on_pan_callback = None
+        self.on_scrub_start_callback = None
+        self.on_scrub_update_callback = None
+        self.on_scrub_end_callback = None
+        self.on_seek_callback = None
         self._drag_start_x = None
+        self._drag_start_y = None
+        self._drag_start_position_sec = None
+        self._last_pointer_x = None
+        self._scrub_active = False
+        self._scrub_rejected = False
+        self._last_scrub_position_sec = None
         self.Bind(wx.EVT_LEFT_DOWN, self._on_mouse_down)
         self.Bind(wx.EVT_MOTION, self._on_mouse_motion)
         self.Bind(wx.EVT_LEFT_UP, self._on_mouse_up)
-        self.Bind(wx.EVT_LEAVE_WINDOW, self._on_mouse_up)
+        self.Bind(wx.EVT_MOUSE_CAPTURE_LOST, self._on_mouse_capture_lost)
 
     def set_waveform_data(self, samples: list[float], duration_sec: float):
         self._samples = samples
@@ -67,29 +82,127 @@ class WaveformPanel(wx.Panel):
         event.Skip()
 
     def _on_mouse_down(self, event):
-        self._drag_start_x = event.GetPosition().x
-        if not self.HasCapture():
+        self._reset_drag()
+        if self._duration_sec > 0 and self._viewport_end_sec > self._viewport_start_sec:
+            position = event.GetPosition()
+            self._drag_start_x = position.x
+            self._drag_start_y = position.y
+            self._drag_start_position_sec = self._position_for_x(position.x)
+            self._last_pointer_x = position.x
+            self._scrub_active = False
+            self._scrub_rejected = False
+            self._last_scrub_position_sec = None
+        if self._drag_start_x is not None and not self.HasCapture():
             self.CaptureMouse()
         event.Skip()
-        
+
     def _on_mouse_motion(self, event):
         if event.Dragging() and event.LeftIsDown() and self._drag_start_x is not None:
-            dx = self._drag_start_x - event.GetPosition().x
-            if dx != 0 and self.on_pan_callback:
-                span = self._viewport_end_sec - self._viewport_start_sec
-                rect_width = self.GetClientRect().width
-                if rect_width > 0:
-                    delta_sec = (dx / rect_width) * span
-                    self.on_pan_callback(delta_sec)
-                    self._drag_start_x = event.GetPosition().x
+            position = event.GetPosition()
+            threshold = max(1, int(self.FromDIP(4)))
+            dx = position.x - self._drag_start_x
+            dy = position.y - self._drag_start_y
+            if not self._scrub_active and not self._scrub_rejected:
+                if dx * dx + dy * dy < threshold * threshold:
+                    event.Skip()
+                    return
+                scrub_position = self._scrub_position_for_pointer_x(position.x)
+                if self.on_scrub_start_callback is None:
+                    self._scrub_rejected = True
+                else:
+                    callback_result = self.on_scrub_start_callback(scrub_position)
+                    if callback_result is False:
+                        self._scrub_rejected = True
+                    else:
+                        self._scrub_active = True
+                        self._last_scrub_position_sec = scrub_position
+            elif self._scrub_active:
+                scrub_position = self._scrub_position_for_pointer_x(position.x)
+                self._last_scrub_position_sec = scrub_position
+                if self.on_scrub_update_callback:
+                    self.on_scrub_update_callback(scrub_position)
         event.Skip()
 
     def _on_mouse_up(self, event):
-        if self._drag_start_x is not None:
-            self._drag_start_x = None
-            if self.HasCapture():
-                self.ReleaseMouse()
+        if self._scrub_active:
+            final_position = self._scrub_position_for_pointer_x(
+                event.GetPosition().x
+            )
+            if (
+                final_position != self._last_scrub_position_sec
+                and self.on_scrub_update_callback
+            ):
+                self.on_scrub_update_callback(final_position)
+            self._finish_scrub(final_position)
+        elif self._drag_start_x is not None and not self._scrub_rejected:
+            if self.on_seek_callback:
+                self.on_seek_callback(
+                    self._position_for_x(event.GetPosition().x)
+                )
+            self._reset_drag()
+        else:
+            self._reset_drag()
+        if self.HasCapture():
+            self.ReleaseMouse()
         event.Skip()
+
+    def _on_mouse_capture_lost(self, event):
+        if self._scrub_active:
+            self._finish_scrub(self._last_scrub_position_sec)
+        else:
+            self._reset_drag()
+        event.Skip()
+
+    def _position_for_x(self, x: int) -> float:
+        rect_width = self.GetClientRect().width
+        if rect_width <= 0:
+            return max(0.0, min(self._duration_sec, self._viewport_start_sec))
+        bounded_x = max(0, min(rect_width, int(x)))
+        ratio = bounded_x / rect_width
+        position = self._viewport_start_sec + (
+            (self._viewport_end_sec - self._viewport_start_sec) * ratio
+        )
+        return max(0.0, min(self._duration_sec, position))
+
+    def _scrub_position_for_pointer_x(self, x: int) -> float:
+        rect_width = self.GetClientRect().width
+        if rect_width <= 0:
+            position = self._last_scrub_position_sec
+            if position is None:
+                position = self._drag_start_position_sec
+            return 0.0 if position is None else position
+
+        if self._last_scrub_position_sec is None:
+            base_position = self._drag_start_position_sec
+            base_x = self._drag_start_x
+        else:
+            base_position = self._last_scrub_position_sec
+            base_x = self._last_pointer_x
+        if base_position is None or base_x is None:
+            return self._position_for_x(x)
+
+        span = self._viewport_end_sec - self._viewport_start_sec
+        delta_sec = ((int(x) - int(base_x)) / rect_width) * span
+        self._last_pointer_x = int(x)
+        position = base_position + delta_sec * _SCRUB_DRAG_SCALE
+        return max(0.0, min(self._duration_sec, position))
+
+    def _finish_scrub(self, position_sec: float | None):
+        final_position = (
+            self._last_scrub_position_sec if position_sec is None else position_sec
+        )
+        if self.on_scrub_end_callback and final_position is not None:
+            self.on_scrub_end_callback(final_position)
+        self._reset_drag()
+
+    def _reset_drag(self):
+        self._drag_start_x = None
+        self._drag_start_y = None
+        self._drag_start_position_sec = None
+        self._last_pointer_x = None
+        self._scrub_active = False
+        self._scrub_rejected = False
+        self._last_scrub_position_sec = None
 
     def _on_paint(self, event):
         rect = self.GetClientRect()
@@ -107,16 +220,19 @@ class WaveformPanel(wx.Panel):
         
         if not self._samples or self._duration_sec <= 0.0:
             self._draw_placeholder(dc, rect)
+            ThemeManager.draw_border(dc, rect, self)
             return
             
         gc = wx.GraphicsContext.Create(dc)
         if gc is None:
+            ThemeManager.draw_border(dc, rect, self)
             return
             
         self._draw_grid(gc, rect)
         self._draw_waveform(gc, rect)
         self._draw_labels(gc, rect)
         self._draw_cursor(gc, rect)
+        ThemeManager.draw_border(gc, rect, self)
         
     def _draw_placeholder(self, dc: wx.DC, rect: wx.Rect):
         palette = ThemeManager.get_palette()

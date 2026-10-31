@@ -14,6 +14,7 @@ class AudioWorkerKind(str, Enum):
     PROBE = "probe"
     ANALYSIS_WAV = "analysis_wav"
     MMD_WAV = "mmd_wav"
+    VERIFIED_VMD_SAVE = "verified_vmd_save"
     DELIVERY_PACKAGE = "delivery_package"
 
 

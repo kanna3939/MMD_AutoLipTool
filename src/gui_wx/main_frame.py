@@ -1,9 +1,10 @@
 import math
 import os
 import uuid
+import copy
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import wx
 
@@ -28,6 +29,7 @@ from gui_wx.right_pane import (
     PresetSelectRequest,
     PresetUpdateRequest,
     RightPane,
+    CleanupEventSelectionRequest,
     WhisperModelPanelItem,
     WhisperModelPanelState,
     WhisperModelCancelRequest,
@@ -52,10 +54,22 @@ from gui_wx.analysis_rollback import (
     can_restore_analysis_rollback,
     is_rollback_forbidden_failure_class,
 )
+from gui_wx.final_output_sync import (
+    FinalOutputRequest,
+    FinalOutputSyncCoordinator,
+    apply_shared_final_output_result,
+    request_shared_final_output,
+)
+from gui_wx.output_edit_draft_worker import (
+    OutputEditDraftProjectionCoordinator,
+    OutputEditDraftProjectionRequest,
+    OutputEditDraftProjectionResult,
+)
 from gui_wx.output_diagnostics_adapter import (
     build_diagnostic_failure_input,
     build_whisper_diagnostics_summary,
     build_output_diagnostics_snapshot_from_ui_state,
+    capture_shared_output_diagnostics_seed,
     resolve_source_audio_path_from_ui_state,
 )
 from gui_wx.playback_context import build_playback_info_context
@@ -69,14 +83,25 @@ from src.core.effective_shape_plan import (
     apply_adjustment_update,
     build_base_plan_identity,
     resolve_effective_shape_plan,
+    resolve_manual_crossfade_end_offset_max,
     source_duration_frames_from_seconds,
 )
 from src.core.effective_shape_diagnostics import (
     ResolverDiagnosticsCollector,
 )
-from src.core.event_adjustment import AdjustmentContractError, empty_adjustment_snapshot
+from src.core.event_adjustment import (
+    AdjustmentContractError,
+    AdjustmentLayerSnapshot,
+    canonicalize_adjustment_snapshot,
+    empty_adjustment_snapshot,
+)
 from src.core.event_adjustment_history import AdjustmentCoalescingKey
 from src.core.output_edit_state import GenerationState, OutputEditState
+from src.core.output_edit_draft import (
+    rebase_output_edit_history,
+    source_event_keys,
+)
+from src.core.pipeline import reproject_peak_values_for_upper_limit
 from src.core.generation_presets import BUILTIN_PRESETS, GenerationSettings
 from src.core.model_profiles import ProfileGenerationOverrides
 from src.core.morph_name_sets import get_builtin_morph_name_set
@@ -87,6 +112,18 @@ from src.core.model_profile_state import (
     validate_active_profile_direct_edit,
 )
 from src.core.preview_hit_test import PreviewSelectionRequest
+from src.core.final_morph_closure_plan import ClosureContract
+from src.core.transition_evaluation import TransitionEvaluationRequest
+from src.core.cleanup_evaluation import CleanupEvaluationRequest
+from src.core.transition_default_policy import (
+    build_adopted_transition_binding,
+    resolve_default_transition_selection,
+)
+from src.core.cleanup_default_policy import (
+    build_adopted_cleanup_binding,
+    resolve_default_cleanup_selection,
+)
+from src.core.morph_name_sets import SEMANTIC_VOWEL_ORDER
 from src.core.text_processing import TextProcessingError, text_to_hiragana, hiragana_to_vowel_string, _validate_and_clean_text
 from src.core.audio_processing import analyze_wav_file, WavAnalysisResult, load_waveform_preview
 from src.core.preview_transform import (
@@ -100,25 +137,34 @@ from src.core.analysis_debug_trace import (
     build_debug_trace,
 )
 from src.core.mmd_wav_export import MMD_WAV_SPEC
-from src.core.output_diagnostics import VmdWriterParameters
+from src.core.output_diagnostics import (
+    VmdWriterParameters,
+    shared_warning_confirmation_matches,
+)
 from src.vmd_writer.effective_shape_adapter import (
     build_morph_frames_from_effective_shape_plan,
 )
+from src.vmd_writer.writer import vmd_wire_morph_value
 from src.core.delivery_package import (
     DeliveryStartGateResult,
     evaluate_delivery_start_gate,
 )
 from gui_wx.selected_event_editor import (
+    GROUP_SHARED_FIELDS,
     SelectedEventEditBoundaryRequest,
     SelectedEventEditRequest,
     build_selected_event_editor_state,
     merge_selected_event_edit,
     reset_selected_event_adjustment,
 )
-from gui_wx.theme import ThemeManager, ThemeMode
+from gui_wx.theme import ThemeButton, ThemeManager, ThemeMode
 from gui_wx.help_about_dialogs import AboutDialog, HelpDialog
+from gui_wx.vmd_save_progress_dialog import ProgressState, VmdSaveProgressDialog
 from src.core import DiagnosticSeverity, OutputDiagnosticsSnapshot
-from src.core.whisper_model_runtime import WhisperModelRuntimeError
+from src.core.whisper_model_runtime import (
+    VerifiedAnalysisModelRequest,
+    WhisperModelRuntimeError,
+)
 
 
 _UNSET = object()
@@ -352,6 +398,8 @@ _DEBUG_EXECUTION_REASONS = frozenset(
         "preview_model_unavailable",
         "writer_attempted",
         "writer_adapter_failed",
+        "effective_plan_not_applicable",
+        "analysis_rebuild_pending",
         "save_action_not_observed",
         "save_request_pending",
         "save_action_succeeded",
@@ -1169,7 +1217,7 @@ class AnalysisProgressDialog(wx.Dialog):
         sizer.Add(self.warning_text, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 15)
         
         btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.btn_cancel = wx.Button(self, label="分析中止")
+        self.btn_cancel = ThemeButton(self, label="分析中止")
         self.Bind(wx.EVT_BUTTON, self._on_cancel, self.btn_cancel)
         btn_sizer.AddStretchSpacer()
         btn_sizer.Add(self.btn_cancel, 0, wx.ALL, 10)
@@ -1243,7 +1291,7 @@ class DeliveryDestinationDialog(wx.Dialog):
             style=wx.TE_READONLY,
         )
         form_sizer.Add(self.parent_text, 1, wx.EXPAND)
-        self.browse_button = wx.Button(self, label="参照...")
+        self.browse_button = ThemeButton(self, label="参照...")
         form_sizer.Add(self.browse_button, 0)
 
         form_sizer.Add(
@@ -1454,6 +1502,78 @@ def _format_whisper_model_size(size_bytes: int) -> str:
         value /= 1024
 
 
+_DEBUG_PROJECTION_VALUE_TOLERANCE = 1e-9
+
+
+def _compare_debug_projection_points(
+    preview_lookup: dict[tuple[int, str], float],
+    writer_lookup: dict[tuple[int, str], float],
+) -> tuple[str, str | None, dict[str, Any]]:
+    def to_wire_value(value: float) -> float:
+        scalar = float(value)
+        return vmd_wire_morph_value(scalar) if math.isfinite(scalar) else scalar
+
+    wire_preview_lookup = {
+        key: to_wire_value(value) for key, value in preview_lookup.items()
+    }
+    wire_writer_lookup = {
+        key: to_wire_value(value) for key, value in writer_lookup.items()
+    }
+    common_keys = sorted(set(wire_preview_lookup).intersection(wire_writer_lookup))
+    comparison_points: list[dict[str, Any]] = []
+    differences: list[float] = []
+    for frame_no, vowel in common_keys:
+        preview_value = wire_preview_lookup[(frame_no, vowel)]
+        writer_value = wire_writer_lookup[(frame_no, vowel)]
+        if math.isfinite(preview_value) and math.isfinite(writer_value):
+            difference = abs(preview_value - writer_value)
+            differences.append(difference)
+            comparison_points.append(
+                {
+                    "frame_no": frame_no,
+                    "vowel": vowel,
+                    "preview_value": preview_value,
+                    "writer_value": writer_value,
+                    "abs_diff": difference,
+                    "within_tolerance": difference
+                    <= _DEBUG_PROJECTION_VALUE_TOLERANCE,
+                }
+            )
+    missing_preview_keys = sorted(
+        set(wire_writer_lookup).difference(wire_preview_lookup)
+    )
+    missing_writer_keys = sorted(
+        set(wire_preview_lookup).difference(wire_writer_lookup)
+    )
+    max_abs_diff = max(differences) if differences else None
+    if not common_keys:
+        status = "not_evaluable"
+        reason_code = "no_common_control_points"
+    elif differences and max_abs_diff > _DEBUG_PROJECTION_VALUE_TOLERANCE:
+        status = "contract_violation"
+        reason_code = "projection_value_mismatch"
+    else:
+        status = "completed"
+        reason_code = None
+    return status, reason_code, {
+        "common_point_count": len(common_keys),
+        "finite_point_count": len(differences),
+        "max_abs_diff": max_abs_diff,
+        "within_tolerance": bool(differences)
+        and max_abs_diff <= _DEBUG_PROJECTION_VALUE_TOLERANCE,
+        "tolerance": _DEBUG_PROJECTION_VALUE_TOLERANCE,
+        "comparison_basis": (
+            "common_preview_and_writer_vmd_wire_values"
+            "+sampled_silence_core_frames"
+        ),
+        "points": comparison_points,
+        "missing_preview_count": len(missing_preview_keys),
+        "missing_writer_count": len(missing_writer_keys),
+        "missing_preview_keys": missing_preview_keys,
+        "missing_writer_keys": missing_writer_keys,
+    }
+
+
 class MainFrame(wx.Frame):
     """
     MMD_AutoLipTool のメインフレーム。
@@ -1461,7 +1581,17 @@ class MainFrame(wx.Frame):
     - 上中下3領域へレイアウトする最小骨格の上に、
     - 最小メニューバー、主要ボタン、ステータス表示の受け口を配置。
     """
-    def __init__(self, *args, **kw):
+    def __init__(self, *args, transition_evaluation_request=None, cleanup_evaluation_request=None, **kw):
+        if transition_evaluation_request is not None and not isinstance(
+            transition_evaluation_request, TransitionEvaluationRequest
+        ):
+            raise TypeError("transition_evaluation_request must be typed or None")
+        if cleanup_evaluation_request is not None and not isinstance(
+            cleanup_evaluation_request, CleanupEvaluationRequest
+        ):
+            raise TypeError("cleanup_evaluation_request must be typed or None")
+        if cleanup_evaluation_request is not None and transition_evaluation_request is not None:
+            raise ValueError("cleanup and explicit transition evaluations cannot be combined")
         if 'title' not in kw:
             kw['title'] = "MMD AutoLipTool"
         if 'size' not in kw:
@@ -1470,16 +1600,23 @@ class MainFrame(wx.Frame):
         super().__init__(*args, **kw)
         
         self.controller = None
+        self._transition_evaluation_request = transition_evaluation_request
+        self._cleanup_evaluation_request = cleanup_evaluation_request
+        self._adopted_transition_binding = build_adopted_transition_binding()
+        self._adopted_cleanup_binding = build_adopted_cleanup_binding()
         self.ui_state = UiState()
         self._current_job_id = 0
         self._cancel_requested = False
         self._progress_dialog = None
+        self._vmd_save_progress_dialog: VmdSaveProgressDialog | None = None
+        self._vmd_save_progress_operation_id: int | None = None
         self._timeout_timer = None
         self._worker = None
         self._analysis_info_in_progress = False
         self._active_analysis_job_id = None
         self._analysis_parameter_snapshot = None
         self._analysis_rollback_snapshot = None
+        self._analysis_operation_handles: dict[int, object] = {}
         self._selected_event_notice = ""
         self._current_ui_sync_context: UiSyncContext | None = None
         self._current_ui_sync_output_state: OutputEditState | None = None
@@ -1506,12 +1643,39 @@ class MainFrame(wx.Frame):
         self._active_debug_trace: AnalysisDebugTrace | None = None
         self._accepted_debug_trace: AnalysisDebugTrace | None = None
         self._debug_save_operation_id: str | None = None
+        self._debug_operation_handles: dict[str, object] = {}
+        self._debug_operation_log_state = "stopped"
+        self._debug_operation_log_error: str | None = None
+        self._debug_operation_log_path: Path | None = None
+        self._exit_prepared = False
+        self._pending_exit_operation_handle = None
+        self._pending_output_apply: dict[str, object] | None = None
+        self._draft_projection_ticket = 0
+        self._latest_draft_preview_request: OutputEditDraftProjectionRequest | None = None
+        self._pending_selected_event_projection: dict[str, object] | None = None
         self._about_dialog: AboutDialog | None = None
         self._about_job_id = 0
+        self._final_output_sync_coordinator = FinalOutputSyncCoordinator(
+            self._on_shared_final_output_result
+        )
+        self._output_edit_draft_projection_coordinator = (
+            OutputEditDraftProjectionCoordinator(
+                self._on_output_edit_draft_projection_result
+            )
+        )
+        self._shared_final_output_diagnostics: OutputDiagnosticsSnapshot | None = None
+        self._accepted_output_preview_cache: tuple[
+            object, float, str, str, tuple[object, ...]
+        ] | None = None
+        self._latest_shared_final_output_request: FinalOutputRequest | None = None
         
         self._init_icon()
         self._init_menu()
         self._init_ui()
+        self._refresh_transition_application_status()
+        self.right_pane.on_closure_restriction_selection = (
+            self._on_closure_restriction_selection
+        )
         self.Bind(wx.EVT_CLOSE, self._on_close)
         self.Bind(wx.EVT_CHAR_HOOK, self._on_history_shortcut)
         
@@ -1588,7 +1752,7 @@ class MainFrame(wx.Frame):
         self.mi_debug_mode = view_menu.AppendCheckItem(
             wx.ID_ANY,
             "デバッグモード",
-            "解析後の中間状態とPreview/Writer投影をdebugフォルダへ記録します（セッション限定）",
+            "解析traceと操作順・変更・処理結果をdebugフォルダへ記録します（セッション限定）",
         )
         self.mi_debug_mode.Check(False)
         
@@ -1657,7 +1821,7 @@ class MainFrame(wx.Frame):
         
         self.Bind(wx.EVT_MENU, self._on_mi_help, self.mi_help)
         self.Bind(wx.EVT_MENU, self._on_mi_about, self.mi_about)
-        self.Bind(wx.EVT_MENU, self._on_close, self.mi_exit)
+        self.Bind(wx.EVT_MENU, self._on_menu_exit, self.mi_exit)
         self.mi_help.Enable(True)
         self.mi_about.Enable(True)
 
@@ -1665,6 +1829,147 @@ class MainFrame(wx.Frame):
         enabled = bool(event.IsChecked())
         self.ui_state.debug_mode_enabled = enabled
         self.mi_debug_mode.Check(enabled)
+        if self.controller:
+            state = self.controller.set_debug_operation_recording(
+                enabled,
+                state_snapshot=(self._debug_operation_state_snapshot() if enabled else None),
+            )
+            recorder = self.controller.operation_recorder
+            self.update_debug_operation_log_state(
+                state,
+                recorder.last_error_code,
+                recorder.path,
+            )
+        else:
+            state = "unavailable" if enabled else "paused"
+            self.update_debug_operation_log_state(
+                state,
+                "controller_unavailable" if enabled else None,
+                None,
+            )
+        self.update_status(
+            "デバッグ操作ログを記録中" if enabled else "デバッグ操作ログを一時停止しました"
+        )
+
+    def _debug_operation_state_snapshot(self) -> dict[str, Any]:
+        state = self.ui_state
+        generation_settings = state.generation_state.generation_settings
+        final_output_state = state.final_output_state
+        accepted_origin = final_output_state.accepted_origin
+        selected_model = getattr(state.whisper_model_selection, "selected_model_key", None)
+        selected_path = state.selected_text_path
+        if state.selected_audio_input is not None:
+            selected_path = getattr(state.selected_audio_input, "source_path", selected_path)
+        profile_state = state.model_profile_state
+        return {
+            "input_mode": state.input_mode,
+            "has_text_input": bool(state.selected_text_path and state.selected_text_content),
+            "has_audio_input": bool(state.selected_audio_input or state.selected_wav_path),
+            "file_basename": Path(selected_path).name if selected_path else None,
+            "analysis_result_valid": bool(state.analysis_result_valid),
+            "analysis_pending_rebuild": bool(state.analysis_pending_rebuild),
+            "busy": bool(state.is_busy),
+            "is_playing": bool(state.is_playing),
+            "morph_upper_limit": state.resolved_morph_upper_limit,
+            "closing_hold_frames": generation_settings.closing_hold_frames,
+            "closing_softness_frames": generation_settings.closing_softness_frames,
+            "long_vowel_mode": generation_settings.long_vowel_mode,
+            "selected_event_index": state.selected_source_event_index,
+            "preset_id": self._selected_preset_id,
+            "profile_id": getattr(profile_state, "active_model_profile_id", None),
+            "model_key": selected_model,
+            "theme_mode": state.theme_mode,
+            "analysis_run_id": getattr(accepted_origin, "source_run_id", None),
+            "analysis_result_id": getattr(accepted_origin, "analysis_result_id", None),
+        }
+
+    def _begin_debug_operation(
+        self,
+        action: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        entry: str | None = None,
+        source: str = "user",
+        analysis_run_id: str | None = None,
+        analysis_result_id: str | None = None,
+        capture_current_origin: bool = True,
+    ):
+        if not self.controller:
+            return None
+        return self.controller.begin_debug_operation(
+            action,
+            payload=payload,
+            source=source,
+            entry=entry,
+            analysis_run_id=analysis_run_id,
+            analysis_result_id=analysis_result_id,
+            capture_current_origin=capture_current_origin,
+        )
+
+    def _mark_debug_operation_started(
+        self,
+        handle,
+        *,
+        job_kind: str,
+        job_id: int,
+        analysis_run_id: str | None = None,
+        analysis_result_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ):
+        if not self.controller:
+            return handle
+        return self.controller.mark_debug_operation_started(
+            handle,
+            job_kind=job_kind,
+            job_id=job_id,
+            analysis_run_id=analysis_run_id,
+            analysis_result_id=analysis_result_id,
+            payload=payload,
+        )
+
+    def _finish_debug_operation(
+        self,
+        handle,
+        status: str,
+        *,
+        reason_code: str | None = None,
+        payload: dict[str, Any] | None = None,
+        accepted_origin: object | None = None,
+    ) -> bool:
+        if not self.controller:
+            return False
+        return self.controller.finish_debug_operation(
+            handle,
+            status,
+            reason_code=reason_code,
+            payload=payload,
+            accepted_origin=accepted_origin,
+        )
+
+    def update_debug_operation_log_state(
+        self,
+        state: str,
+        error_code: str | None,
+        path: Path | None,
+    ) -> None:
+        self._debug_operation_log_state = state
+        self._debug_operation_log_error = error_code
+        self._debug_operation_log_path = path
+        suffix = f"保存先: debug/operations/{path.name}" if path else "保存先: 未確定"
+        help_text = (
+            "解析traceと操作順・変更・完了結果をdebugフォルダへ記録します（セッション限定）。"
+            f" 状態: {state}。{suffix}"
+        )
+        if error_code:
+            help_text += f"。理由: {error_code}"
+        try:
+            self.mi_debug_mode.SetHelp(help_text)
+        except (AttributeError, RuntimeError):
+            pass
+        if state in {"unavailable", "degraded"}:
+            self.update_status(
+                f"デバッグ操作ログは不完全です ({error_code or state})"
+            )
 
     def _debug_trace_for_current_projection(self) -> AnalysisDebugTrace | None:
         if not self.ui_state.debug_mode_enabled:
@@ -1673,6 +1978,15 @@ class MainFrame(wx.Frame):
         if trace is None or self._analysis_info_in_progress:
             return None
         if not self.ui_state.analysis_result_valid or self.ui_state.analysis_pending_rebuild:
+            return None
+        accepted_origin = self.ui_state.final_output_state.accepted_origin
+        if (
+            accepted_origin is None
+            or getattr(accepted_origin, "source_run_id", None)
+            != trace.analysis_run_id
+            or getattr(accepted_origin, "analysis_result_id", None)
+            != trace.analysis_result_id
+        ):
             return None
         return trace
 
@@ -1801,6 +2115,20 @@ class MainFrame(wx.Frame):
                 "vmd_save": "not_attempted",
             }
 
+        plan_skip_reason = self._debug_plan_skip_reason(sync_context)
+        if plan_skip_reason is not None:
+            return {
+                "diagnostics_snapshot": "completed",
+                "effective_shape": "skipped",
+                "preview_projection": "skipped",
+                "writer_projection": "skipped",
+                "vmd_save": (
+                    "completed"
+                    if bool(getattr(self.ui_state, "vmd_save_ready", False))
+                    else "skipped"
+                ),
+            }
+
         preview_model = getattr(
             getattr(getattr(self, "placeholder_container", None), "pnl_preview", None),
             "model",
@@ -1823,6 +2151,17 @@ class MainFrame(wx.Frame):
             if bool(getattr(self.ui_state, "vmd_save_ready", False))
             else "skipped",
         }
+
+    def _debug_plan_skip_reason(self, sync_context: UiSyncContext | None) -> str | None:
+        if bool(getattr(self.ui_state, "analysis_pending_rebuild", False)):
+            return "analysis_rebuild_pending"
+        if (
+            sync_context is not None
+            and hasattr(sync_context, "effective_plan")
+            and sync_context.effective_plan is None
+        ):
+            return "effective_plan_not_applicable"
+        return None
 
     @staticmethod
     def _debug_execution_operation(
@@ -1861,6 +2200,7 @@ class MainFrame(wx.Frame):
         resolver = self._current_ui_sync_diagnostic.get("resolver_diagnostics")
         attempts = resolver.get("attempts", []) if isinstance(resolver, dict) else []
         last_attempt = attempts[-1] if isinstance(attempts, list) and attempts else {}
+        plan_skip_reason = self._debug_plan_skip_reason(sync_context)
         if sync_context is not None:
             plan_origin = last_attempt.get("plan_origin", "resolved")
             effective = self._debug_execution_operation(
@@ -1882,6 +2222,12 @@ class MainFrame(wx.Frame):
             effective = self._debug_execution_operation(
                 "not_attempted", "not_evaluable", "not_attempted"
             )
+        if plan_skip_reason is not None:
+            effective = self._debug_execution_operation(
+                "skipped",
+                "not_applicable",
+                plan_skip_reason,
+            )
 
         diagnostics_operation = (
             self._debug_execution_operation(
@@ -1892,32 +2238,43 @@ class MainFrame(wx.Frame):
                 "not_attempted", "not_evaluable", "diagnostics_snapshot_unavailable"
             )
         )
-        preview_operation = (
-            self._debug_execution_operation(
+        if plan_skip_reason is not None and preview_result is None:
+            preview_operation = self._debug_execution_operation(
+                "skipped",
+                "not_applicable",
+                plan_skip_reason,
+            )
+        elif preview_result is not None:
+            preview_operation = self._debug_execution_operation(
                 "attempted",
                 "success" if preview_result == "succeeded" else "failed",
                 "preview_attempted"
                 if preview_result == "succeeded"
                 else "preview_model_unavailable",
             )
-            if preview_result is not None
-            else self._debug_execution_operation(
+        else:
+            preview_operation = self._debug_execution_operation(
                 "not_attempted", "not_evaluable", "not_attempted"
             )
-        )
-        writer_operation = (
-            self._debug_execution_operation(
+
+        if plan_skip_reason is not None and writer_result is None:
+            writer_operation = self._debug_execution_operation(
+                "skipped",
+                "not_applicable",
+                plan_skip_reason,
+            )
+        elif writer_result is not None:
+            writer_operation = self._debug_execution_operation(
                 "attempted",
                 "success" if writer_result == "succeeded" else "failed",
                 "writer_attempted"
                 if writer_result == "succeeded"
                 else "writer_adapter_failed",
             )
-            if writer_result is not None
-            else self._debug_execution_operation(
+        else:
+            writer_operation = self._debug_execution_operation(
                 "not_attempted", "not_evaluable", "not_attempted"
             )
-        )
         save_operation = (
             self._debug_execution_operation(
                 "attempted",
@@ -2169,6 +2526,7 @@ class MainFrame(wx.Frame):
         payload: dict | None = None,
         status: str = "completed",
     ) -> None:
+        self._record_operation_from_trace_action(action, payload, status)
         trace = self._debug_trace_for_current_projection()
         if trace is None:
             return
@@ -2229,6 +2587,123 @@ class MainFrame(wx.Frame):
             status=status,
             save_operation_id=save_operation_id,
         )
+
+    def _record_operation_from_trace_action(
+        self,
+        action: str,
+        payload: dict | None,
+        status: str,
+    ) -> None:
+        group = (
+            str((payload or {}).get("operation_kind"))
+            if action.startswith("generation_settings_")
+            and (payload or {}).get("operation_kind") in {
+                "generation_settings",
+                "preset_apply",
+            }
+            else "generation_settings"
+            if action.startswith("generation_settings_")
+            else "vmd_save"
+            if action.startswith("vmd_save_")
+            else None
+        )
+        if group is None or self.controller is None:
+            return
+        safe_payload = dict(payload or {})
+        reason = safe_payload.pop("reason", None) or safe_payload.pop(
+            "error_code", None
+        )
+        raw_path = safe_payload.pop("path", None)
+        if isinstance(raw_path, str):
+            safe_payload["file_basename"] = Path(raw_path).name
+        operation_status = {
+            "requested": "requested",
+            "started": "started",
+            "accepted": "completed",
+            "succeeded": "completed",
+            "completed": "completed",
+            "failed": "failed",
+            "cancelled": "cancelled",
+            "rejected": "rejected",
+            "blocked": "rejected",
+            "noop": "noop",
+        }.get(status, "completed")
+        if action in {"generation_settings_request", "vmd_save_request"}:
+            operation_handle = self._begin_debug_operation(
+                group,
+                payload=safe_payload,
+                entry="controller",
+            )
+            if operation_handle is not None:
+                self._debug_operation_handles[group] = operation_handle
+            if status == "started":
+                self.controller.record_debug_operation_phase(
+                    operation_handle,
+                    action,
+                    "started",
+                    payload=safe_payload,
+                )
+            return
+        operation_handle = self._debug_operation_handles.get(group)
+        if action == "vmd_save_writing":
+            operation_handle = self.controller.mark_debug_operation_started(
+                operation_handle,
+                job_kind=(
+                    safe_payload.get("worker_kind")
+                    if isinstance(safe_payload.get("worker_kind"), str)
+                    else "verified_vmd_save"
+                ),
+                job_id=(
+                    safe_payload.get("job_id")
+                    if type(safe_payload.get("job_id")) is int
+                    else None
+                ),
+                payload={
+                    key: value
+                    for key, value in safe_payload.items()
+                    if key != "job_id"
+                },
+            )
+            if operation_handle is not None:
+                self._debug_operation_handles[group] = operation_handle
+            return
+        if action in {
+            "generation_settings_accepted",
+            "generation_settings_rejected",
+            "generation_settings_noop",
+            "vmd_save_completed",
+            "vmd_save_failed",
+            "vmd_save_cancelled",
+            "vmd_save_blocked",
+        }:
+            self._debug_operation_handles.pop(group, None)
+            self._finish_debug_operation(
+                operation_handle,
+                operation_status,
+                reason_code=(
+                    reason
+                    if isinstance(reason, str)
+                    else action.removesuffix("_accepted").removesuffix("_completed")
+                ),
+                payload=safe_payload,
+            )
+            return
+        if operation_handle is not None:
+            self.controller.record_debug_operation_phase(
+                operation_handle,
+                action,
+                operation_status,
+                payload=safe_payload,
+                reason_code=reason if isinstance(reason, str) else None,
+            )
+        else:
+            self.controller.record_debug_operation_event(
+                action,
+                operation_status,
+                payload=safe_payload,
+                source="system",
+                reason_code=reason if isinstance(reason, str) else None,
+            )
 
     def _shutdown_debug_store(self) -> None:
         self._debug_store.flush(timeout=5.0)
@@ -2540,6 +3015,49 @@ class MainFrame(wx.Frame):
             return
 
         effective_plan = sync_context.effective_plan
+        plan_skip_reason = self._debug_plan_skip_reason(sync_context)
+        if plan_skip_reason is not None:
+            trace.record_stage(
+                "effective_shape",
+                status="skipped",
+                reason_code=plan_skip_reason,
+                payload={"projection_revision": revision},
+            )
+            trace.record_stage(
+                "preview_projection",
+                status="skipped",
+                reason_code=plan_skip_reason,
+                payload={"projection_revision": revision},
+            )
+            trace.record_stage(
+                "writer_projection",
+                status="skipped",
+                reason_code=plan_skip_reason,
+                payload={"projection_revision": revision},
+            )
+            terminal_execution = self._debug_execution_diagnostics(
+                sync_context=sync_context,
+                diagnostics_snapshot=diagnostics_snapshot,
+                effective_writer_input_state=effective_writer_input_state,
+                snapshot_point="projection_complete",
+            )
+            trace.record_stage(
+                "silence_observations",
+                status="not_evaluable",
+                reason_code=plan_skip_reason,
+                payload={"projection_revision": revision, "observations": []},
+            )
+            trace.record_stage(
+                "projection_comparison",
+                status="not_evaluable",
+                reason_code=plan_skip_reason,
+                payload={
+                    "projection_revision": revision,
+                    "execution_diagnostics": terminal_execution,
+                },
+            )
+            return
+
         trace.record_stage(
             "effective_shape",
             payload={
@@ -2769,27 +3287,11 @@ class MainFrame(wx.Frame):
             },
         )
 
-        common_keys = sorted(set(preview_lookup).intersection(writer_lookup))
-        comparison_points = []
-        differences = []
-        for frame_no, vowel in common_keys:
-            preview_value = preview_lookup[(frame_no, vowel)]
-            writer_value = writer_lookup[(frame_no, vowel)]
-            if math.isfinite(preview_value) and math.isfinite(writer_value):
-                difference = abs(preview_value - writer_value)
-                differences.append(difference)
-                comparison_points.append(
-                    {
-                        "frame_no": frame_no,
-                        "vowel": vowel,
-                        "preview_value": preview_value,
-                        "writer_value": writer_value,
-                        "abs_diff": difference,
-                        "within_tolerance": difference <= 1e-9,
-                    }
-                )
-        missing_preview_keys = sorted(set(writer_lookup).difference(preview_lookup))
-        missing_writer_keys = sorted(set(preview_lookup).difference(writer_lookup))
+        (
+            comparison_status,
+            comparison_reason_code,
+            comparison_payload,
+        ) = _compare_debug_projection_points(preview_lookup, writer_lookup)
         terminal_execution = self._debug_execution_diagnostics(
             sync_context=sync_context,
             diagnostics_snapshot=diagnostics_snapshot,
@@ -2803,42 +3305,17 @@ class MainFrame(wx.Frame):
         ] = preview_status == "ready"
         trace.record_stage(
             "projection_comparison",
-            status=(
-                "not_evaluable"
-                if not common_keys
-                else (
-                    "contract_violation"
-                    if differences and max(differences) > 1e-9
-                    else "completed"
-                )
-            ),
-            reason_code=(
-                "no_common_control_points"
-                if not common_keys
-                else ("projection_value_mismatch" if differences and max(differences) > 1e-9 else None)
-            ),
+            status=comparison_status,
+            reason_code=comparison_reason_code,
             payload={
                 "projection_revision": revision,
-                "common_point_count": len(common_keys),
-                "finite_point_count": len(differences),
-                "max_abs_diff": max(differences) if differences else None,
-                "within_tolerance": bool(differences) and max(differences) <= 1e-9,
-                "tolerance": 1e-9,
-                "comparison_basis": (
-                    "common_raw_preview_and_normalized_writer_points"
-                    "+sampled_silence_core_frames"
-                ),
+                **comparison_payload,
                 "silence_policy": getattr(
                     effective_plan,
                     "silence_policy",
                     "not_available",
                 ),
                 "silence_core_curve_comparison": silence_curve_comparison,
-                "points": comparison_points,
-                "missing_preview_count": len(missing_preview_keys),
-                "missing_writer_count": len(missing_writer_keys),
-                "missing_preview_keys": missing_preview_keys,
-                "missing_writer_keys": missing_writer_keys,
                 "execution_diagnostics": terminal_execution,
             },
         )
@@ -2864,7 +3341,7 @@ class MainFrame(wx.Frame):
         
         self.sync_ui_state()
 
-    def _set_button_icon(self, button: wx.Button, icon_filename: str, is_dark: bool):
+    def _set_button_icon(self, button: ThemeButton, icon_filename: str, is_dark: bool):
         from resource_utils import get_resource_path
         icon_path = get_resource_path(f"assets/icons/toolbar/{icon_filename}")
         if icon_path.is_file():
@@ -2875,6 +3352,7 @@ class MainFrame(wx.Frame):
                     img.Replace(255, 255, 255, 0, 0, 0)
                 img = img.Scale(24, 24, wx.IMAGE_QUALITY_HIGH)
                 button.SetBitmap(wx.Bitmap(img))
+                return
 
     def update_theme_icons(self, is_dark: bool):
         if not hasattr(self, '_button_icons'):
@@ -2886,21 +3364,42 @@ class MainFrame(wx.Frame):
         self.top_panel = wx.Panel(self.root_panel)
         top_sizer = wx.BoxSizer(wx.HORIZONTAL)
         
-        self.btn_open_text = wx.Button(self.top_panel, label="TEXT 読込")
-        self.btn_open_wav = wx.Button(self.top_panel, label="音声 読込")
-        self.btn_process = wx.Button(self.top_panel, label="解析実行")
-        self.btn_save_vmd = wx.Button(self.top_panel, label="VMD 保存")
-        self.btn_export_mmd_wav = wx.Button(self.top_panel, label="MMD用WAV出力")
+        self.btn_open_text = ThemeButton(self.top_panel, label="TEXT 読込")
+        self.btn_open_wav = ThemeButton(self.top_panel, label="音声 読込")
+        self.btn_process = ThemeButton(self.top_panel, label="解析実行")
+        self.btn_save_vmd = ThemeButton(self.top_panel, label="VMD 保存")
+        self.btn_export_mmd_wav = ThemeButton(self.top_panel, label="MMD用WAV出力")
         self.btn_export_mmd_wav.SetToolTip("MMDで読み込ませるためのWAVファイルを出力します。")
-        self.btn_cancel_audio_worker = wx.Button(self.top_panel, label="キャンセル")
+        self.btn_cancel_audio_worker = ThemeButton(self.top_panel, label="キャンセル")
         self.btn_cancel_audio_worker.SetToolTip("音声変換・出力処理をキャンセルします。")
         
-        self.btn_play = wx.Button(self.top_panel, label="Play")
-        self.btn_stop = wx.Button(self.top_panel, label="Stop")
+        self.btn_play = ThemeButton(self.top_panel, label="")
+        self.btn_play.SetToolTip("再生")
+        self.btn_pause = ThemeButton(self.top_panel, label="")
+        self.btn_pause.SetToolTip("一時停止")
+        self.btn_stop = ThemeButton(self.top_panel, label="")
+        self.btn_stop.SetToolTip("停止して先頭へ戻る")
         
-        self.btn_zoom_in = wx.Button(self.top_panel, label="Zoom In")
-        self.btn_zoom_out = wx.Button(self.top_panel, label="Zoom Out")
-        self.btn_zoom_reset = wx.Button(self.top_panel, label="Reset Zoom")
+        self.btn_zoom_in = ThemeButton(self.top_panel, label="")
+        self.btn_zoom_in.SetToolTip("拡大")
+        self.btn_zoom_out = ThemeButton(self.top_panel, label="")
+        self.btn_zoom_out.SetToolTip("縮小")
+        self.btn_zoom_reset = ThemeButton(self.top_panel, label="")
+        self.btn_zoom_reset.SetToolTip("表示範囲を全体へ戻す")
+
+        self._icon_only_buttons = (
+            self.btn_play,
+            self.btn_pause,
+            self.btn_stop,
+            self.btn_zoom_in,
+            self.btn_zoom_out,
+            self.btn_zoom_reset,
+        )
+        icon_button_size = self.FromDIP((32, 32))
+        for button in self._icon_only_buttons:
+            button.SetMinSize(icon_button_size)
+            button.SetMaxSize(icon_button_size)
+            button.SetSize(icon_button_size)
         
         self._button_icons = {
             self.btn_open_text: "textfileopen.png",
@@ -2908,9 +3407,11 @@ class MainFrame(wx.Frame):
             self.btn_process: "execute.png",
             self.btn_save_vmd: "vmdsave.png",
             self.btn_play: "play.png",
+            self.btn_pause: "pause.png",
             self.btn_stop: "stop.png",
             self.btn_zoom_in: "zoomin.png",
-            self.btn_zoom_out: "zoomout.png"
+            self.btn_zoom_out: "zoomout.png",
+            self.btn_zoom_reset: "zoomreset.png",
         }
         
         from gui_wx.theme import ThemeManager
@@ -2927,7 +3428,8 @@ class MainFrame(wx.Frame):
         
         top_sizer.AddSpacer(20)
         top_sizer.Add(self.btn_play, 0, flags_btn, 5)
-        top_sizer.Add(self.btn_stop, 0, flags_btn | wx.RIGHT, 5)
+        top_sizer.Add(self.btn_pause, 0, flags_btn, 5)
+        top_sizer.Add(self.btn_stop, 0, flags_btn, 5)
         
         top_sizer.AddSpacer(20)
         top_sizer.Add(self.btn_zoom_in, 0, flags_btn, 5)
@@ -2950,6 +3452,18 @@ class MainFrame(wx.Frame):
         )
         self.placeholder_container = PlaceholderContainer(self.center_panel)
         self.placeholder_container.on_pan_callback = self._on_pan_request
+        self.placeholder_container.on_scrub_start_callback = (
+            self._on_playback_scrub_start_request
+        )
+        self.placeholder_container.on_scrub_update_callback = (
+            self._on_playback_scrub_update_request
+        )
+        self.placeholder_container.on_scrub_end_callback = (
+            self._on_playback_scrub_end_request
+        )
+        self.placeholder_container.on_seek_callback = (
+            self._on_playback_seek_request
+        )
         self.placeholder_container.on_selection_request_callback = (
             self._on_preview_selection_request
         )
@@ -2965,6 +3479,9 @@ class MainFrame(wx.Frame):
         )
         self.right_pane.on_selected_event_mode_callback = (
             self._on_selected_event_edit_request
+        )
+        self.right_pane.on_cleanup_event_select_callback = (
+            self._on_cleanup_event_selection_request
         )
         self.right_pane.on_preset_select_callback = self._on_preset_select_request
         self.right_pane.on_preset_apply_callback = self._on_preset_apply_request
@@ -3014,14 +3531,71 @@ class MainFrame(wx.Frame):
         if self.controller:
             self.controller.request_pan(delta_sec)
 
+    def _on_playback_scrub_start_request(self, position_sec: float) -> bool:
+        if not self.controller:
+            return False
+        return self.controller.request_playback_scrub_start(position_sec)
+
+    def _on_playback_scrub_update_request(self, position_sec: float):
+        if self.controller:
+            self.controller.request_playback_scrub_update(position_sec)
+
+    def _on_playback_scrub_end_request(self, position_sec: float):
+        if self.controller:
+            self.controller.request_playback_scrub_end(position_sec)
+
+    def _on_playback_seek_request(self, position_sec: float) -> bool:
+        if not self.controller:
+            return False
+        return self.controller.request_playback_seek(position_sec)
+
     def _init_bottom_panel(self):
         self.bottom_panel = wx.Panel(self.root_panel)
         bottom_sizer = wx.BoxSizer(wx.HORIZONTAL)
         
         self.st_status_main = wx.StaticText(self.bottom_panel, label="準備完了 (WX Mode)")
-        bottom_sizer.Add(self.st_status_main, 1, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        bottom_sizer.Add(self.st_status_main, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        self.gauge_output_edit_progress = wx.Gauge(
+            self.bottom_panel,
+            range=100,
+            size=(100, -1),
+            style=wx.GA_HORIZONTAL,
+        )
+        self.gauge_output_edit_progress.Hide()
+        self._output_edit_progress_timer = wx.Timer(self.bottom_panel)
+        self.bottom_panel.Bind(
+            wx.EVT_TIMER,
+            self._on_output_edit_progress_timer,
+            self._output_edit_progress_timer,
+        )
+        bottom_sizer.Add(
+            self.gauge_output_edit_progress,
+            0,
+            wx.ALIGN_CENTER_VERTICAL | wx.LEFT | wx.RIGHT,
+            8,
+        )
+        bottom_sizer.AddStretchSpacer(1)
         
         self.bottom_panel.SetSizer(bottom_sizer)
+
+    def start_output_edit_progress(self) -> None:
+        if not self.gauge_output_edit_progress.IsShown():
+            self.gauge_output_edit_progress.Show()
+            self.bottom_panel.Layout()
+        if not self._output_edit_progress_timer.IsRunning():
+            self._output_edit_progress_timer.Start(100)
+        self.gauge_output_edit_progress.Pulse()
+
+    def stop_output_edit_progress(self) -> None:
+        if self._output_edit_progress_timer.IsRunning():
+            self._output_edit_progress_timer.Stop()
+        if self.gauge_output_edit_progress.IsShown():
+            self.gauge_output_edit_progress.Hide()
+            self.bottom_panel.Layout()
+
+    def _on_output_edit_progress_timer(self, event) -> None:
+        if self.gauge_output_edit_progress.IsShown():
+            self.gauge_output_edit_progress.Pulse()
 
     def _bind_button_events(self):
         self.Bind(wx.EVT_BUTTON, self._on_btn_open_text, self.btn_open_text)
@@ -3031,11 +3605,17 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self._on_btn_export_mmd_wav, self.btn_export_mmd_wav)
         self.Bind(wx.EVT_BUTTON, self._on_btn_cancel_audio_worker, self.btn_cancel_audio_worker)
         self.Bind(wx.EVT_BUTTON, self._on_btn_play, self.btn_play)
+        self.Bind(wx.EVT_BUTTON, self._on_btn_pause, self.btn_pause)
         self.Bind(wx.EVT_BUTTON, self._on_btn_stop, self.btn_stop)
         
         self.Bind(wx.EVT_BUTTON, self._on_btn_zoom_in, self.btn_zoom_in)
         self.Bind(wx.EVT_BUTTON, self._on_btn_zoom_out, self.btn_zoom_out)
         self.Bind(wx.EVT_BUTTON, self._on_btn_zoom_reset, self.btn_zoom_reset)
+        self.Bind(
+            wx.EVT_BUTTON,
+            self._on_apply_output_edits,
+            self.param_panel.btn_apply_output_edits,
+        )
 
     def sync_ui_state(
         self,
@@ -3044,6 +3624,18 @@ class MainFrame(wx.Frame):
         adjustment_only: bool = False,
     ):
         """[MS15-B5] 統合UI状態同期メソッド"""
+        self._invalidate_stale_shared_final_output_request()
+        if self.ui_state.output_edit_draft_dirty:
+            self._sync_output_edit_draft_view(
+                adjustment_only=adjustment_only,
+                effective_plan_hint=effective_plan_hint,
+            )
+            return
+        self.param_panel.btn_apply_output_edits.SetLabel("変更を適用")
+        self.param_panel.btn_apply_output_edits.Enable(False)
+        self.param_panel.set_output_edit_status(
+            self.ui_state.output_edit_apply_status or ""
+        )
         sync_context = self._build_current_ui_sync_context(
             effective_plan_hint=effective_plan_hint,
         )
@@ -3053,6 +3645,11 @@ class MainFrame(wx.Frame):
             effective_plan,
             failure_reason,
         ) = self.prepare_current_effective_output(sync_context=sync_context)
+        if not self.ui_state.output_edit_draft_dirty:
+            self._restore_accepted_output_preview_if_current(
+                effective_plan,
+                self._selected_audio_duration_sec() or 0.0,
+            )
         diagnostics_snapshot = self.build_and_store_output_diagnostics_snapshot(
             effective_shape_plan=effective_plan,
             effective_writer_input_state=writer_state,
@@ -3084,10 +3681,6 @@ class MainFrame(wx.Frame):
             self.right_pane.clear_selected_event()
             pass # _update_preview_display() handles this now, or we can handle placeholder logic there
 
-        self._update_preview_display(
-            sync_context=sync_context,
-            diagnostics_snapshot=diagnostics_snapshot,
-        )
         self._record_debug_projection(
             sync_context=sync_context,
             diagnostics_snapshot=diagnostics_snapshot,
@@ -3099,9 +3692,1522 @@ class MainFrame(wx.Frame):
         self.placeholder_container.set_selected_source_event_index(self.ui_state.selected_source_event_index)
         self.update_selected_event_display(sync_context=sync_context)
 
+        if not self.ui_state.is_busy and not self._analysis_info_in_progress:
+            request_started = self.request_shared_final_output_context()
+            shared_context = self.ui_state.final_output_state.current_context
+            shared_snapshot = self._shared_final_output_diagnostics
+            if shared_context is not None and shared_snapshot is not None:
+                self.update_action_states(shared_snapshot, sync_context=sync_context)
+                self.right_pane.set_info_snapshot(shared_snapshot)
+                self.right_pane.set_warning_snapshot(shared_snapshot)
+                self.update_status_display(shared_snapshot)
+            else:
+                self.btn_save_vmd.Enable(False)
+                self.mi_vmd_save.Enable(False)
+                self.mi_diagnostic_report_save.Enable(False)
+                self.mi_mmd_delivery_export.Enable(False)
+                if not request_started:
+                    self._clear_shared_final_output_view(
+                        "解析が必要です"
+                    )
+                    if isinstance(diagnostics_snapshot, OutputDiagnosticsSnapshot):
+                        self.right_pane.set_info_snapshot(diagnostics_snapshot)
+                        self.right_pane.set_warning_snapshot(diagnostics_snapshot)
+                        self.update_status_display(diagnostics_snapshot)
+        else:
+            self.btn_save_vmd.Enable(False)
+            self.mi_vmd_save.Enable(False)
+            self.mi_diagnostic_report_save.Enable(False)
+            self.mi_mmd_delivery_export.Enable(False)
+
         if not adjustment_only:
             self.placeholder_container.Refresh()
             self.param_panel.Refresh()
+
+    def _sync_output_edit_draft_view(
+        self,
+        *,
+        adjustment_only: bool,
+        effective_plan_hint: EffectiveShapePlan | None = None,
+    ) -> None:
+        """Project draft geometry without requesting or replacing final output."""
+        state = self.ui_state
+        self.param_panel.btn_apply_output_edits.SetLabel(
+            "適用結果を破棄"
+            if self._pending_output_apply is not None
+            else "変更を適用"
+        )
+        base_input = self._build_current_base_timing_plan_input()
+        snapshot = state.current_adjustment_snapshot
+        sync_context = None
+        if base_input is not None and snapshot is not None:
+            try:
+                sync_context = build_ui_sync_context(
+                    base_input,
+                    snapshot,
+                    effective_plan_hint=effective_plan_hint,
+                    defer_resolution=effective_plan_hint is None,
+                )
+            except (AdjustmentContractError, TypeError, ValueError):
+                state.output_edit_draft_error = "編集タイムラインを更新できません。"
+            if effective_plan_hint is None and state.output_edit_draft_error is None:
+                self._request_output_edit_draft_preview(base_input, snapshot)
+        if sync_context is not None and sync_context.effective_plan is not None:
+            self._current_ui_sync_context = sync_context
+            self._update_preview_display(sync_context=sync_context)
+            self.placeholder_container.set_selected_source_event_index(
+                state.selected_source_event_index
+            )
+        self.update_selected_event_display(sync_context=sync_context)
+        # While a draft is pending or invalid, keep the last valid Preview
+        # model visible. Replacing it with a placeholder clears its zoom range.
+        self.param_panel.set_output_edit_status(
+            state.output_edit_apply_status
+            or (
+                "変更未適用（編集表示）"
+                if state.output_edit_draft_error is None
+                else state.output_edit_draft_error
+            )
+        )
+        self.update_status_display()
+        can_apply = bool(
+            state.analysis_result_valid
+            and not state.analysis_pending_rebuild
+            and not state.is_busy
+            and state.output_edit_draft_error is None
+            and self._latest_draft_preview_request is None
+            and self._pending_selected_event_projection is None
+            and state.current_output_edit_state is not None
+            and not self._selected_event_editor_has_uncommitted_input()
+        )
+        self.param_panel.btn_apply_output_edits.Enable(can_apply)
+        self._sync_preset_panel()
+        self._sync_model_profile_panel()
+        if sync_context is not None and sync_context.effective_plan is not None:
+            self.update_action_states(
+                state.current_output_diagnostics_snapshot,
+                sync_context=sync_context,
+                busy_override=state.is_busy,
+            )
+        elif sync_context is not None:
+            history_ready = bool(
+                not state.is_busy
+                and state.current_adjustment_snapshot is not None
+                and state.current_adjustment_snapshot.base_plan_identity
+                == sync_context.base_plan_identity
+            )
+            self.mi_adjustment_undo.Enable(
+                history_ready and state.can_undo_adjustment
+            )
+            self.mi_adjustment_redo.Enable(
+                history_ready and state.can_redo_adjustment
+            )
+        self.btn_save_vmd.Enable(False)
+        self.mi_vmd_save.Enable(False)
+        self.mi_diagnostic_report_save.Enable(False)
+        self.mi_mmd_delivery_export.Enable(False)
+        diagnostics_snapshot = self._shared_final_output_diagnostics
+        if not isinstance(diagnostics_snapshot, OutputDiagnosticsSnapshot):
+            diagnostics_snapshot = state.current_output_diagnostics_snapshot
+        if isinstance(diagnostics_snapshot, OutputDiagnosticsSnapshot):
+            self.right_pane.set_info_snapshot(
+                diagnostics_snapshot,
+                pending_edits=True,
+            )
+        else:
+            self.right_pane.set_info_text(
+                "保存前に「変更を適用」してください。",
+                pending_edits=True,
+                pending_diagnostics=False,
+            )
+        self.right_pane.set_selected_event_editor_revision(
+            state.selected_event_editor_revision
+        )
+        if not adjustment_only and sync_context is not None and sync_context.effective_plan is not None:
+            self._sync_playback_context()
+
+    def _request_output_edit_draft_preview(
+        self,
+        base_input: BaseTimingPlanInput,
+        snapshot,
+    ) -> None:
+        state = self.ui_state
+        identity = build_base_plan_identity(base_input)
+        current = self._latest_draft_preview_request
+        if (
+            current is not None
+            and current.source_revision == state.output_edit_source_revision
+            and current.draft_revision == state.output_edit_draft_revision
+            and current.base_plan_identity_digest == identity.digest
+        ):
+            return
+        self._draft_projection_ticket += 1
+        request = OutputEditDraftProjectionRequest(
+            ticket=self._draft_projection_ticket,
+            source_revision=state.output_edit_source_revision,
+            draft_revision=state.output_edit_draft_revision,
+            base_plan_identity_digest=identity.digest,
+            purpose="draft_preview",
+            compute=lambda: resolve_effective_shape_plan(base_input, snapshot),
+        )
+        self._latest_draft_preview_request = request
+        state.output_edit_apply_status = "編集タイムラインを更新中…"
+        if not self._output_edit_draft_projection_coordinator.request(request):
+            self._latest_draft_preview_request = None
+            state.output_edit_apply_status = None
+            state.output_edit_draft_error = "編集タイムラインを開始できません。"
+
+    def _queue_selected_event_projection(
+        self,
+        *,
+        purpose: str,
+        base_input: BaseTimingPlanInput,
+        snapshot,
+        compute: Callable[[], object],
+        operation_handle,
+        payload: dict[str, object],
+    ) -> bool:
+        if self._pending_selected_event_projection is not None:
+            return False
+        state = self.ui_state
+        identity = build_base_plan_identity(base_input)
+        self._draft_projection_ticket += 1
+        request = OutputEditDraftProjectionRequest(
+            ticket=self._draft_projection_ticket,
+            source_revision=state.output_edit_source_revision,
+            draft_revision=state.output_edit_draft_revision,
+            base_plan_identity_digest=identity.digest,
+            purpose=purpose,
+            compute=compute,
+            payload=payload,
+        )
+        self._pending_selected_event_projection = {
+            "request": request,
+            "operation_handle": operation_handle,
+            "payload": payload,
+        }
+        self.update_status("編集表示を計算中…")
+        self.param_panel.btn_apply_output_edits.Enable(False)
+        self.btn_save_vmd.Enable(False)
+        self.mi_vmd_save.Enable(False)
+        self.mi_diagnostic_report_save.Enable(False)
+        self.mi_mmd_delivery_export.Enable(False)
+        self._set_selected_event_projection_controls_enabled(False)
+        if not self._output_edit_draft_projection_coordinator.request(request):
+            self._pending_selected_event_projection = None
+            self._set_selected_event_projection_controls_enabled(True)
+            self.update_status_display()
+            return False
+        return True
+
+    def _set_selected_event_projection_controls_enabled(self, enabled: bool) -> None:
+        if self.ui_state.is_busy:
+            enabled = False
+        for control in getattr(self.right_pane, "_selected_editor_controls", {}).values():
+            control.Enable(enabled)
+        overlap_override = getattr(
+            self.right_pane, "chk_manual_overlap_limit_override", None
+        )
+        editor_state = getattr(self.right_pane, "_selected_editor_state", None)
+        if overlap_override is not None:
+            overlap_override.Enable(
+                bool(
+                    enabled
+                    and editor_state is not None
+                    and editor_state.manual_overlap_override_enabled
+                )
+            )
+        reset_button = getattr(self.right_pane, "btn_reset_selected_event", None)
+        if reset_button is not None:
+            reset_button.Enable(
+                bool(enabled and editor_state is not None and editor_state.reset_enabled)
+            )
+
+    def _output_edit_snapshot_range_error(
+        self,
+        effective_plan: EffectiveShapePlan,
+        snapshot: AdjustmentLayerSnapshot,
+    ) -> str | None:
+        base_input = self._build_current_base_timing_plan_input()
+        if base_input is None:
+            return None
+        base_events = {
+            event.base_event_index: event for event in effective_plan.base_events
+        }
+        for adjustment in snapshot.adjustments:
+            if adjustment.end_offset_frames == 0:
+                continue
+            base_event = base_events.get(adjustment.base_event_index)
+            if base_event is None:
+                continue
+            minimum = base_event.peak_frame - base_event.end_frame
+            maximum = resolve_manual_crossfade_end_offset_max(
+                effective_plan,
+                adjustment.base_event_index,
+                source_duration_frames=base_input.source_duration_frames,
+                adjustment_snapshot=snapshot,
+            )
+            if adjustment.end_offset_frames < minimum or adjustment.end_offset_frames > maximum:
+                return (
+                    f"Event {adjustment.base_event_index}の終了offsetが許容範囲外です。"
+                    f"範囲は {minimum}〜{maximum} です。"
+                )
+        return None
+
+    def _finish_selected_event_projection(
+        self,
+        request: OutputEditDraftProjectionRequest,
+        result: OutputEditDraftProjectionResult,
+    ) -> None:
+        pending = self._pending_selected_event_projection
+        if pending is None or pending.get("request") != request:
+            return
+        self._pending_selected_event_projection = None
+        self._set_selected_event_projection_controls_enabled(True)
+        self.right_pane.clear_selected_event_edit_pending()
+        payload = pending["payload"]
+        operation_handle = pending["operation_handle"]
+        state = self.ui_state
+        current_editor_revision = payload["editor_revision"]
+        if (
+            state.output_edit_source_revision != request.source_revision
+            or state.output_edit_draft_revision != request.draft_revision
+            or state.current_timing_plan is not payload["timing_plan"]
+            or state.current_adjustment_snapshot != payload["snapshot"]
+            or state.selected_source_event_index != payload["event_index"]
+            or state.selected_event_editor_revision != current_editor_revision
+        ):
+            self._finish_debug_operation(
+                operation_handle,
+                "ignored",
+                reason_code="stale_selected_event_projection",
+            )
+            self.update_status_display()
+            return
+        if result.error is not None:
+            requested_snapshot = payload.get("requested_snapshot")
+            if (
+                request.purpose == "selected_event_edit"
+                and getattr(result.error, "safe_code", None)
+                == "manual_crossfade_limit_exceeded"
+                and isinstance(requested_snapshot, AdjustmentLayerSnapshot)
+                and state.commit_adjustment_snapshot(
+                    requested_snapshot,
+                    expected_base_plan_identity_digest=(
+                        request.base_plan_identity_digest
+                    ),
+                    coalesce_key=payload.get("coalescing_key"),
+                )
+            ):
+                state.output_edit_draft_error = (
+                    "制限OFFでは終了offsetが許容範囲外です。"
+                    "終了offsetを範囲内へ戻すか、制限を再解除してください。"
+                )
+                self._selected_event_notice = "範囲外の値を編集draftに保持しています。"
+                self.sync_ui_state(adjustment_only=True)
+                self._finish_debug_operation(
+                    operation_handle,
+                    "completed",
+                    reason_code="out_of_range_draft_retained",
+                    payload={
+                        "event_index": payload["event_index"],
+                        "field": payload["field"],
+                        "draft_retained": True,
+                        "apply_blocked": True,
+                    },
+                )
+                return
+            message = (
+                "補正をリセットできません。"
+                if request.purpose == "selected_event_reset"
+                else "補正を適用できません。"
+            )
+            self.update_selected_event_display(
+                sync_context=self._current_ui_sync_context
+            )
+            self.right_pane.set_selected_event_editor_error(message)
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=(
+                    "reset_contract_rejected"
+                    if request.purpose == "selected_event_reset"
+                    else "edit_contract_rejected"
+                ),
+                payload={"event_index": payload["event_index"]},
+            )
+            self.update_status_display()
+            return
+        update_result = result.value
+        if not hasattr(update_result, "canonical_snapshot") or not hasattr(
+            update_result, "effective_plan"
+        ):
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="draft_projection_result_invalid",
+            )
+            self.update_status_display()
+            return
+        if update_result.canonical_snapshot == payload["snapshot"]:
+            self.sync_ui_state(
+                effective_plan_hint=update_result.effective_plan,
+                adjustment_only=True,
+            )
+            self._finish_debug_operation(
+                operation_handle,
+                "noop",
+                reason_code="same_value",
+                payload={"event_index": payload["event_index"], "changed": False},
+            )
+            return
+        if not state.commit_adjustment_snapshot(
+            update_result.canonical_snapshot,
+            expected_base_plan_identity_digest=request.base_plan_identity_digest,
+            coalesce_key=payload.get("coalescing_key"),
+        ):
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="edit_not_committed",
+                payload={"event_index": payload["event_index"]},
+            )
+            self.update_status_display()
+            return
+        state.output_edit_draft_error = self._output_edit_snapshot_range_error(
+            update_result.effective_plan,
+            update_result.canonical_snapshot,
+        )
+        if (
+            request.purpose == "selected_event_reset"
+            and not state.output_edit_draft_dirty
+        ):
+            state.require_output_edit_apply_for_current_state()
+        if request.purpose == "selected_event_reset":
+            notices = ["選択イベントの出力編集をリセットしました。"]
+            if update_result.removed_tail_override_event_indices:
+                notices.append("group変更により他イベントの末尾補正も解除しました。")
+            if state.has_event_adjustments:
+                notices.append(
+                    "他イベントの編集も保持しています。VMDへの反映は「変更を適用」後です。"
+                )
+            self._selected_event_notice = "\n".join(notices)
+            action = "selected_event_reset"
+            reason_code = "event_adjustment_reset"
+        else:
+            notices = []
+            if update_result.removed_tail_override_event_indices:
+                indices = ", ".join(
+                    str(index)
+                    for index in update_result.removed_tail_override_event_indices
+                )
+                notices.append(f"group変更によりEvent {indices}の末尾補正を解除しました。")
+            if update_result.removed_slope_override_event_indices:
+                indices = ", ".join(
+                    str(index)
+                    for index in update_result.removed_slope_override_event_indices
+                )
+                notices.append(
+                    "閉口スムーズが反映されなくなったため、"
+                    f"Event {indices}の閉口傾斜比を解除しました。"
+                )
+            notices.append(
+                "編集表示へ反映しました。VMDへの反映は「変更を適用」後です。"
+                if state.output_edit_draft_dirty
+                else "適用済みの値へ戻しました。"
+            )
+            self._selected_event_notice = "\n".join(notices)
+            action = "selected_event_edit"
+            reason_code = "edit_applied"
+        self.sync_ui_state(
+            effective_plan_hint=update_result.effective_plan,
+            adjustment_only=True,
+        )
+        self._finish_debug_operation(
+            operation_handle,
+            "completed",
+            reason_code=reason_code,
+            payload={
+                "event_index": payload["event_index"],
+                "field": payload.get("field"),
+                "changed": True,
+                **(
+                    {"before": payload.get("before_value"), "after": payload.get("after_value")}
+                    if action == "selected_event_edit"
+                    else {}
+                ),
+            },
+        )
+
+    def _on_output_edit_draft_projection_result(
+        self,
+        request: OutputEditDraftProjectionRequest,
+        result: OutputEditDraftProjectionResult,
+    ) -> None:
+        if request.purpose == "draft_preview":
+            if self._latest_draft_preview_request != request:
+                return
+            self._latest_draft_preview_request = None
+            state = self.ui_state
+            if (
+                state.output_edit_source_revision != request.source_revision
+                or state.output_edit_draft_revision != request.draft_revision
+                or not state.output_edit_draft_dirty
+            ):
+                return
+            state.output_edit_apply_status = None
+            if result.error is not None or not isinstance(result.value, EffectiveShapePlan):
+                state.output_edit_draft_error = "編集タイムラインを更新できません。"
+                self._sync_output_edit_draft_view(adjustment_only=True)
+                return
+            snapshot = state.current_adjustment_snapshot
+            state.output_edit_draft_error = (
+                None
+                if snapshot is None
+                else self._output_edit_snapshot_range_error(
+                    result.value,
+                    snapshot,
+                )
+            )
+            self._sync_output_edit_draft_view(
+                adjustment_only=True,
+                effective_plan_hint=result.value,
+            )
+            return
+        self._finish_selected_event_projection(request, result)
+
+    def _capture_final_output_lifecycle_signature(
+        self,
+        *,
+        output_state: OutputEditState | None = None,
+        timing_plan=None,
+        model_profile_state: ModelProfileState | None = None,
+    ) -> tuple[object, ...]:
+        state = self.ui_state
+        applied_state = output_state or state.applied_output_edit_state
+        if applied_state is None:
+            applied_state = state.current_output_edit_state
+        applied_profile = model_profile_state or (
+            state.output_edit_draft_baseline.model_profile_state
+            if state.output_edit_draft_baseline is not None
+            else state.model_profile_state
+        )
+        applied_generation = (
+            state.generation_state
+            if applied_state is None
+            else applied_state.generation_state
+        )
+        signature_plan = timing_plan or state.current_timing_plan
+        applied_upper_limit = (
+            state.resolved_morph_upper_limit
+            if applied_state is None
+            else applied_state.morph_upper_limit
+        )
+        applied_adjustment_snapshot = (
+            state.current_adjustment_snapshot
+            if applied_state is None
+            else applied_state.adjustment_snapshot
+        )
+        applied_output_names = get_builtin_morph_name_set(
+            applied_generation.resolved_morph_name_set_id
+        ).output_names
+        selected_analysis_wav = (
+            None
+            if state.selected_analysis_wav is None
+            else getattr(state.selected_analysis_wav, "analysis_wav_path", None)
+        )
+        profile = applied_profile
+        evaluation_request = getattr(self, "_transition_evaluation_request", None)
+        transition_request_binding = (
+            None
+            if evaluation_request is None
+            else (
+                evaluation_request.policy.policy_digest,
+                evaluation_request.b1_contract_sha256,
+                evaluation_request.evaluation_session_id,
+                evaluation_request.input_manifest_sha256,
+            )
+        )
+        default_selection = self._current_default_transition_selection()
+        cleanup_request = getattr(self, "_cleanup_evaluation_request", None)
+        acoustic_snapshot = getattr(
+            signature_plan,
+            "transition_acoustic_snapshot",
+            None,
+        )
+        transition_acoustic_digest = getattr(
+            acoustic_snapshot,
+            "content_digest",
+            None,
+        )
+        return (
+            state.input_mode,
+            state.selected_text_path,
+            state.selected_wav_path,
+            selected_analysis_wav,
+            state.selected_text_content,
+            state.analysis_text_content,
+            state.transcription_text,
+            id(signature_plan),
+            state.analysis_result_valid,
+            state.analysis_pending_rebuild,
+            applied_adjustment_snapshot,
+            applied_generation,
+            profile.active_model_profile_id,
+            profile.active_profile_baseline_preset_id,
+            profile.resolution_status,
+            profile.resolution_reason_code,
+            applied_upper_limit,
+            applied_output_names,
+            applied_generation.generation_settings.closing_hold_frames,
+            applied_generation.generation_settings.closing_softness_frames,
+            transition_request_binding,
+            None if default_selection is None else default_selection.selection_digest,
+            (
+                None
+                if self._current_default_cleanup_selection() is None
+                else self._current_default_cleanup_selection().selection_digest
+            ),
+            transition_acoustic_digest,
+            None if cleanup_request is None else cleanup_request.request_digest,
+        )
+
+    def _invalidate_stale_shared_final_output_request(self) -> None:
+        signature = self._capture_final_output_lifecycle_signature()
+        lifecycle = self.ui_state.final_output_state
+        pending = self._latest_shared_final_output_request
+        pending_apply = self._pending_output_apply
+        if (
+            pending is not None
+            and pending_apply is not None
+            and pending_apply.get("request") == pending
+        ):
+            # The candidate apply has its own lifecycle. Keep the last accepted
+            # applied context intact until the candidate succeeds or fails.
+            return
+        if (
+            pending is not None
+            and pending.snapshot.lifecycle_signature != signature
+        ):
+            lifecycle.invalidate_context()
+            self._latest_shared_final_output_request = None
+            self.right_pane.clear_shared_final_output_restrictions()
+            self.right_pane.clear_transition_summary()
+            self.right_pane.clear_cleanup_event_choices()
+        current = lifecycle.current_context
+        if current is None and self._shared_final_output_diagnostics is not None:
+            self._shared_final_output_diagnostics = None
+            self.right_pane.clear_transition_summary()
+            self.right_pane.clear_cleanup_event_choices()
+        if (
+            current is not None
+            and getattr(current, "lifecycle_signature", None) != signature
+        ):
+            lifecycle.invalidate_context()
+            self._shared_final_output_diagnostics = None
+            self.right_pane.clear_shared_final_output_restrictions()
+            self.right_pane.clear_transition_summary()
+            self.right_pane.clear_cleanup_event_choices()
+
+    def _remember_accepted_output_preview(
+        self,
+        context,
+        preview_data,
+        duration_sec: float,
+    ) -> None:
+        lifecycle_signature = getattr(context, "lifecycle_signature", None)
+        input_identity = getattr(context, "input_identity", None)
+        identity = getattr(context, "identity", None)
+        if (
+            not isinstance(lifecycle_signature, tuple)
+            or input_identity is None
+            or identity is None
+        ):
+            self._accepted_output_preview_cache = None
+            return
+        self._accepted_output_preview_cache = (
+            preview_data,
+            duration_sec,
+            input_identity.base_plan_digest,
+            identity.binding_digest,
+            lifecycle_signature,
+        )
+
+    def _restore_accepted_output_preview_if_current(
+        self,
+        effective_plan,
+        duration_sec: float,
+    ) -> bool:
+        state = self.ui_state
+        context = state.final_output_state.current_context
+        cache = self._accepted_output_preview_cache
+        current_output = state.current_output_edit_state
+        applied_output = state.applied_output_edit_state
+        if (
+            state.output_edit_draft_dirty
+            or context is None
+            or cache is None
+            or current_output is None
+            or current_output != applied_output
+        ):
+            return False
+        preview_data, cached_duration, base_digest, binding, lifecycle_signature = (
+            cache
+        )
+        identity = context.identity
+        expected_signature = self._capture_final_output_lifecycle_signature()
+        if (
+            context.lifecycle_signature != lifecycle_signature
+            or lifecycle_signature != expected_signature
+            or context.input_identity.base_plan_digest != base_digest
+            or identity.binding_digest != binding
+            or getattr(
+                getattr(effective_plan, "base_plan_identity", None),
+                "digest",
+                None,
+            )
+            != base_digest
+            or cached_duration != duration_sec
+        ):
+            return False
+        self.placeholder_container.set_identity_aware_preview_data(
+            preview_data,
+            cached_duration,
+            base_digest,
+            final_output_binding=binding,
+        )
+        preview_model = self.placeholder_container.pnl_preview.model
+        selected_index = state.selected_source_event_index
+        if (
+            selected_index is not None
+            and state.selected_base_plan_identity_digest == base_digest
+            and preview_model.find_event_hit_region(selected_index) is not None
+        ):
+            self.placeholder_container.set_selected_source_event_index(
+                selected_index
+            )
+        return True
+
+    def _clear_shared_final_output_view(self, message: str) -> None:
+        self._shared_final_output_diagnostics = None
+        self._accepted_output_preview_cache = None
+        self.btn_save_vmd.Enable(False)
+        self.mi_vmd_save.Enable(False)
+        self.mi_diagnostic_report_save.Enable(False)
+        self.mi_mmd_delivery_export.Enable(False)
+        self.placeholder_container.set_preview_placeholder_text(message)
+        self.right_pane.clear_shared_final_output_restrictions()
+        self.right_pane.clear_transition_summary()
+        self.right_pane.clear_cleanup_event_choices()
+        self.right_pane.set_info_text(message)
+        self.right_pane.clear_warnings()
+
+    def request_shared_final_output_context(
+        self,
+        *,
+        closure_contract: ClosureContract | None = None,
+    ) -> bool:
+        """Request the shared producer used by Preview, diagnostics, and saves."""
+        state = self.ui_state
+        if (
+            state.output_edit_draft_dirty
+            or self._pending_output_apply is not None
+            or self._pending_selected_event_projection is not None
+        ):
+            return False
+        self._refresh_transition_application_status()
+        had_shared_context = state.final_output_state.current_context is not None
+        current_context = state.final_output_state.current_context
+        current_identity = getattr(current_context, "identity", None)
+        if (
+            current_context is not None
+            and getattr(current_context, "lifecycle_signature", None)
+            == self._capture_final_output_lifecycle_signature()
+            and current_identity is not None
+            and self._shared_final_output_diagnostics is not None
+            and self._shared_final_output_diagnostics.shared_final_output_identity
+            == current_identity
+            and self.placeholder_container.pnl_preview.model.final_output_binding
+            == current_identity.binding_digest
+        ):
+            return True
+        sync_context = self._build_current_ui_sync_context()
+        adjustment_snapshot = state.current_adjustment_snapshot
+        if sync_context is None or adjustment_snapshot is None:
+            state.final_output_state.invalidate_context()
+            if had_shared_context:
+                self._clear_shared_final_output_view(
+                    "共有最終出力を現在条件で採用できません。"
+                )
+            return False
+        try:
+            diagnostics_seed = capture_shared_output_diagnostics_seed(
+                state,
+                generation_state=state.generation_state,
+                active_preset_display_name=self._active_preset_display_name,
+                output_morph_names=self._resolved_output_morph_names(),
+                projection_generation=self._diagnostics_projection_generation,
+            )
+        except (AttributeError, TypeError, ValueError):
+            state.final_output_state.invalidate_context()
+            if had_shared_context:
+                self._clear_shared_final_output_view(
+                    "共有最終出力を現在条件で採用できません。"
+                )
+            return False
+        analysis_wav_path = (
+            None
+            if state.selected_analysis_wav is None
+            else getattr(state.selected_analysis_wav, "analysis_wav_path", None)
+        )
+        request = request_shared_final_output(
+            lifecycle=state.final_output_state,
+            coordinator=self._final_output_sync_coordinator,
+            input_mode=state.input_mode,
+            base_input=sync_context.base_input,
+            adjustment_snapshot=adjustment_snapshot,
+            effective_plan=sync_context.effective_plan,
+            resolved_profile_id=state.model_profile_state.active_model_profile_id,
+            output_morph_names=self._resolved_output_morph_names(),
+            source_audio_path=state.selected_wav_path,
+            analysis_wav_path=analysis_wav_path,
+            text_path=state.selected_text_path,
+            analysis_result_valid=state.analysis_result_valid,
+            analysis_pending_rebuild=state.analysis_pending_rebuild,
+            is_busy=state.is_busy or self._analysis_info_in_progress,
+            closure_contract=closure_contract,
+            lifecycle_signature=self._capture_final_output_lifecycle_signature(),
+            diagnostics_seed=diagnostics_seed,
+            transition_evaluation_request=self._transition_evaluation_request,
+            default_transition_selection=self._current_default_transition_selection(),
+            cleanup_evaluation_request=self._cleanup_evaluation_request,
+            default_cleanup_selection=self._current_default_cleanup_selection(),
+            transition_acoustic_snapshot=(
+                getattr(state.current_timing_plan, "transition_acoustic_snapshot", None)
+                if (
+                    self._transition_evaluation_request is not None
+                    or self._bounded_candidate_enabled()
+                )
+                else None
+            ),
+        )
+        self._latest_shared_final_output_request = request
+        if request is not None:
+            self._shared_final_output_diagnostics = None
+            self.btn_save_vmd.Enable(False)
+            self.mi_vmd_save.Enable(False)
+            self.mi_diagnostic_report_save.Enable(False)
+            self.mi_mmd_delivery_export.Enable(False)
+            self.placeholder_container.set_preview_placeholder_text(
+                "解析結果出力を準備中", loading=True
+            )
+            self.right_pane.clear_shared_final_output_restrictions()
+            self.right_pane.clear_transition_summary()
+            self.right_pane.clear_cleanup_event_choices()
+            self.right_pane.set_info_text(
+                "共有最終出力: 検証中。診断と保存可否は未確定です。"
+            )
+            self.right_pane.clear_warnings()
+        elif had_shared_context:
+            self._clear_shared_final_output_view(
+                "共有最終出力を現在条件で採用できません。"
+            )
+        return request is not None
+
+    def shared_final_output_warning_confirmation_matches(self) -> bool:
+        """Check the B3 warning acknowledgement without touching legacy save state."""
+        state = self.ui_state
+        context = state.final_output_state.current_context
+        snapshot = self._shared_final_output_diagnostics
+        if (
+            state.is_busy
+            or state.analysis_pending_rebuild
+            or context is None
+            or getattr(context, "lifecycle_signature", None)
+            != self._capture_final_output_lifecycle_signature()
+            or snapshot is None
+            or snapshot.shared_final_output_identity != context.identity
+        ):
+            return False
+        return shared_warning_confirmation_matches(
+            snapshot,
+            state.confirmed_shared_warning_fingerprint,
+        )
+
+    def _matches_current_shared_final_output_binding(
+        self,
+        requested_binding: str | None,
+        *,
+        coalescing_token: int | None = None,
+    ) -> bool:
+        if self.ui_state.output_edit_draft_dirty:
+            return requested_binding is None
+        context = self.ui_state.final_output_state.current_context
+        if context is None:
+            if requested_binding is None:
+                return True
+            active_gesture = self.right_pane._selected_editor_active_gesture
+            return (
+                coalescing_token is not None
+                and active_gesture is not None
+                and active_gesture.coalescing_token == coalescing_token
+                and active_gesture.final_output_binding == requested_binding
+            )
+        identity = getattr(context, "identity", None)
+        return (
+            identity is not None
+            and requested_binding == identity.binding_digest
+            and getattr(context, "lifecycle_signature", None)
+            == self._capture_final_output_lifecycle_signature()
+        )
+
+    def _on_apply_output_edits(self, event) -> None:
+        event.Skip()
+        state = self.ui_state
+        if self._pending_output_apply is not None:
+            self._pending_output_apply["cancelled"] = True
+            self._final_output_sync_coordinator.cancel(
+                self._pending_output_apply["request"]
+            )
+            state.output_edit_apply_status = "適用結果を破棄しています…"
+            self.param_panel.btn_apply_output_edits.Enable(False)
+            self.param_panel.set_output_edit_status(
+                state.output_edit_apply_status
+            )
+            return
+        if (
+            state.is_busy
+            or self._pending_selected_event_projection is not None
+            or not state.output_edit_draft_dirty
+            or state.output_edit_draft_error is not None
+            or not state.analysis_result_valid
+            or state.analysis_pending_rebuild
+            or self._selected_event_editor_has_uncommitted_input()
+            or self._pending_output_apply is not None
+        ):
+            return
+        state.finish_current_output_edit_coalescing()
+        draft_output = state.current_output_edit_state
+        draft_plan = self._current_output_edit_draft_timing_plan()
+        draft_profile = state.draft_model_profile_state
+        if draft_output is None or draft_plan is None:
+            self.param_panel.set_output_edit_status("変更を適用できません。解析結果を確認してください。")
+            return
+        base_input = self._build_base_timing_plan_input_for_plan(
+            draft_plan,
+            generation_state=draft_output.generation_state,
+        )
+        if base_input is None or not self._rebase_output_edit_draft(base_input):
+            self.param_panel.set_output_edit_status("編集内容を解析イベントへ対応付けできません。")
+            return
+        draft_output = state.current_output_edit_state
+        history = state.output_edit_history_state
+        if draft_output is None or history is None:
+            self.param_panel.set_output_edit_status("編集履歴を利用できません。")
+            return
+        operation_handle = self._begin_debug_operation(
+            "output_edit_apply",
+            payload={
+                "source_revision": state.output_edit_source_revision,
+                "draft_revision": state.output_edit_draft_revision,
+            },
+            entry="parameter_panel",
+        )
+        try:
+            candidate_identity = build_base_plan_identity(base_input)
+            if draft_output.adjustment_snapshot.base_plan_identity != candidate_identity:
+                raise AdjustmentContractError("draft adjustment identity differs from apply base")
+            candidate_lifecycle = copy.deepcopy(state.final_output_state)
+            accepted_origin = candidate_lifecycle.accepted_origin
+            if accepted_origin is None:
+                raise AdjustmentContractError("accepted analysis origin is unavailable")
+            candidate_lifecycle.accepted_origin = replace(
+                accepted_origin,
+                base_plan_digest=candidate_identity.digest,
+            )
+            candidate_lifecycle.manual_snapshot = draft_output.adjustment_snapshot
+            candidate_lifecycle.manual_snapshot_known = True
+            candidate_lifecycle.manual_snapshot_base_digest = (
+                candidate_identity.digest
+            )
+            candidate_lifecycle.manual_revision = (
+                0 if candidate_lifecycle.manual_revision is None
+                else candidate_lifecycle.manual_revision + 1
+            )
+            candidate_lifecycle.unavailable_reason = None
+            candidate_lifecycle.invalidate_context()
+            output_names = get_builtin_morph_name_set(
+                draft_output.generation_state.resolved_morph_name_set_id
+            ).output_names
+            diagnostics_seed = capture_shared_output_diagnostics_seed(
+                state,
+                generation_state=draft_output.generation_state,
+                timing_plan=draft_plan,
+                adjustment_snapshot=draft_output.adjustment_snapshot,
+                active_preset_display_name=self._active_preset_display_name,
+                output_morph_names=output_names,
+                projection_generation=self._diagnostics_projection_generation,
+            )
+            lifecycle_signature = self._capture_final_output_lifecycle_signature(
+                output_state=draft_output,
+                timing_plan=draft_plan,
+                model_profile_state=draft_profile,
+            )
+            request = request_shared_final_output(
+                lifecycle=candidate_lifecycle,
+                coordinator=self._final_output_sync_coordinator,
+                input_mode=state.input_mode,
+                base_input=base_input,
+                adjustment_snapshot=draft_output.adjustment_snapshot,
+                effective_plan=None,
+                resolved_profile_id=draft_profile.active_model_profile_id,
+                output_morph_names=output_names,
+                source_audio_path=state.selected_wav_path,
+                analysis_wav_path=(
+                    None
+                    if state.selected_analysis_wav is None
+                    else getattr(state.selected_analysis_wav, "analysis_wav_path", None)
+                ),
+                text_path=state.selected_text_path,
+                analysis_result_valid=state.analysis_result_valid,
+                analysis_pending_rebuild=state.analysis_pending_rebuild,
+                is_busy=False,
+                lifecycle_signature=lifecycle_signature,
+                diagnostics_seed=diagnostics_seed,
+                transition_evaluation_request=self._transition_evaluation_request,
+                default_transition_selection=self._current_default_transition_selection(),
+                cleanup_evaluation_request=self._cleanup_evaluation_request,
+                default_cleanup_selection=self._current_default_cleanup_selection(),
+                resolve_effective_plan_in_worker=True,
+                transition_acoustic_snapshot=(
+                    getattr(state.current_timing_plan, "transition_acoustic_snapshot", None)
+                    if (
+                        self._transition_evaluation_request is not None
+                        or self._bounded_candidate_enabled()
+                    )
+                    else None
+                ),
+            )
+        except (AdjustmentContractError, AttributeError, TypeError, ValueError, RuntimeError):
+            request = None
+        if request is None:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="apply_request_unavailable",
+            )
+            self.param_panel.set_output_edit_status("変更を適用できませんでした。編集内容は保持されています。")
+            self.right_pane.set_info_text("共有最終出力を開始できませんでした。編集内容は保持されています。")
+            return
+        self._pending_output_apply = {
+            "request": request,
+            "lifecycle": candidate_lifecycle,
+            "output_state": draft_output,
+            "timing_plan": draft_plan,
+            "model_profile_state": draft_profile,
+            "history": history,
+            "source_revision": state.output_edit_source_revision,
+            "draft_revision": state.output_edit_draft_revision,
+            "previous_status_key": (
+                StatusKey.ANALYSIS_READY
+                if state.status_key == StatusKey.BUSY
+                else state.status_key
+            ),
+            "operation_handle": operation_handle,
+            "cancelled": False,
+        }
+        self._latest_shared_final_output_request = request
+        state.output_edit_apply_status = "変更を適用中…"
+        state.set_busy(True, preserve_final_output_context=True)
+        self.sync_ui_state(adjustment_only=True)
+        self.param_panel.btn_apply_output_edits.SetLabel("適用結果を破棄")
+        self.param_panel.btn_apply_output_edits.Enable(True)
+        self.param_panel.set_output_edit_status("変更を適用中…")
+        self.start_output_edit_progress()
+        self.right_pane.set_info_text("変更を適用中です。")
+
+    def _finish_output_edit_apply(self, request, result) -> None:
+        pending = self._pending_output_apply
+        if pending is None or pending.get("request") != request:
+            return
+        state = self.ui_state
+        same_draft = (
+            pending.get("source_revision") == state.output_edit_source_revision
+            and pending.get("draft_revision") == state.output_edit_draft_revision
+        )
+        lifecycle = pending.get("lifecycle")
+        try:
+            current_apply_signature = self._capture_final_output_lifecycle_signature(
+                output_state=pending.get("output_state"),
+                timing_plan=pending.get("timing_plan"),
+                model_profile_state=pending.get("model_profile_state"),
+            )
+        except (AttributeError, TypeError, ValueError):
+            current_apply_signature = None
+        was_cancelled = bool(pending.get("cancelled"))
+        lifecycle_signature_matches = (
+            current_apply_signature == request.snapshot.lifecycle_signature
+        )
+        result_status = getattr(result, "status", None)
+        result_context_present = getattr(result, "context", None) is not None
+        result_preview_present = getattr(result, "preview_data", None) is not None
+        result_diagnostics_valid = isinstance(
+            getattr(result, "diagnostics_snapshot", None),
+            OutputDiagnosticsSnapshot,
+        )
+        result_issues = getattr(result, "issues", ())
+        first_issue = (
+            result_issues[0]
+            if isinstance(result_issues, (tuple, list)) and result_issues
+            else None
+        )
+        apply_diagnostic_payload = {
+            "same_draft": same_draft,
+            "cancelled": was_cancelled,
+            "lifecycle_signature_matches": lifecycle_signature_matches,
+            "result_status": result_status,
+            "result_context_present": result_context_present,
+            "result_preview_present": result_preview_present,
+            "result_diagnostics_valid": result_diagnostics_valid,
+            "issue_count": (
+                len(result_issues)
+                if isinstance(result_issues, (tuple, list))
+                else None
+            ),
+            "issue_reason_code": getattr(first_issue, "reason_code", None),
+            "issue_stage": getattr(first_issue, "stage", None),
+        }
+        acceptance_preconditions = bool(
+            same_draft
+            and not was_cancelled
+            and lifecycle_signature_matches
+            and result_status == "valid"
+            and result_context_present
+            and result_preview_present
+            and result_diagnostics_valid
+            and lifecycle is not None
+        )
+        shared_result_accepted = bool(
+            acceptance_preconditions
+            and apply_shared_final_output_result(
+                lifecycle=lifecycle,
+                request=request,
+                result=result,
+                current_lifecycle_signature=current_apply_signature,
+            )
+        )
+        apply_diagnostic_payload["shared_result_accepted"] = (
+            shared_result_accepted if acceptance_preconditions else None
+        )
+        accepted = acceptance_preconditions and shared_result_accepted
+        if was_cancelled:
+            apply_failure_reason = "output_edit_apply_discarded"
+        elif not same_draft:
+            apply_failure_reason = "output_edit_apply_stale"
+        elif not lifecycle_signature_matches:
+            apply_failure_reason = "output_edit_lifecycle_signature_mismatch"
+        elif result_status != "valid":
+            apply_failure_reason = (
+                f"output_edit_result_{result_status}"
+                if result_status in {"invalid", "unavailable", "stale"}
+                else "output_edit_result_status_unknown"
+            )
+        elif not result_context_present:
+            apply_failure_reason = "output_edit_result_context_missing"
+        elif not result_preview_present:
+            apply_failure_reason = "output_edit_result_preview_missing"
+        elif not result_diagnostics_valid:
+            apply_failure_reason = "output_edit_result_diagnostics_invalid"
+        elif lifecycle is None:
+            apply_failure_reason = "output_edit_result_lifecycle_missing"
+        else:
+            apply_failure_reason = "output_edit_result_contract_rejected"
+        if accepted:
+            state.final_output_state = lifecycle
+            state.current_timing_plan = pending["timing_plan"]
+            output_state = pending["output_state"]
+            state.generation_state = output_state.generation_state
+            state.resolved_morph_upper_limit = output_state.morph_upper_limit
+            state.model_profile_state = pending["model_profile_state"]
+            state.output_edit_history_state = pending["history"]
+            state._sync_legacy_adjustment_history()
+            state.set_busy(False, preserve_final_output_context=True)
+            if state.status_key == StatusKey.BUSY:
+                state.status_key = pending.get("previous_status_key", StatusKey.IDLE)
+            state.clear_output_edit_draft()
+            state.initialize_output_edit_draft_baseline()
+            if state.selected_source_event_index is not None:
+                state.selected_base_plan_identity_digest = output_state.base_plan_identity.digest
+            self._shared_final_output_diagnostics = result.diagnostics_snapshot
+            duration_sec = self._selected_audio_duration_sec() or 0.0
+            self._remember_accepted_output_preview(
+                result.context,
+                result.preview_data,
+                duration_sec,
+            )
+            self.placeholder_container.set_identity_aware_preview_data(
+                result.preview_data,
+                duration_sec,
+                result.context.input_identity.base_plan_digest,
+                final_output_binding=result.context.identity.binding_digest,
+            )
+            preview_model = self.placeholder_container.pnl_preview.model
+            if (
+                state.selected_source_event_index is not None
+                and preview_model.find_event_hit_region(
+                    state.selected_source_event_index
+                ) is not None
+            ):
+                self.placeholder_container.set_selected_source_event_index(
+                    state.selected_source_event_index
+                )
+            else:
+                state.clear_selection()
+            self.right_pane.set_info_snapshot(result.diagnostics_snapshot)
+            self.right_pane.set_warning_snapshot(result.diagnostics_snapshot)
+            self._update_cleanup_event_choices(result.context)
+            self._selected_preset_id = state.generation_state.active_preset_id
+            self._selected_model_profile_id = state.model_profile_state.active_model_profile_id
+            self._project_generation_controls()
+            if self.controller:
+                self.controller.request_settings_save()
+            self.param_panel.set_output_edit_status("")
+            self._finish_debug_operation(
+                pending.get("operation_handle"),
+                "completed",
+                reason_code="output_edit_apply_succeeded",
+                payload=apply_diagnostic_payload,
+            )
+        else:
+            state.set_busy(False, preserve_final_output_context=True)
+            if state.status_key == StatusKey.BUSY:
+                state.status_key = pending.get("previous_status_key", StatusKey.IDLE)
+            state.output_edit_apply_status = (
+                "適用結果を破棄しました。編集内容は保持されています。"
+                if was_cancelled
+                else "適用に失敗しました。編集内容は保持されています。"
+            )
+            self.param_panel.set_output_edit_status(
+                state.output_edit_apply_status
+            )
+            self.right_pane.set_info_text(
+                state.output_edit_apply_status
+                if was_cancelled
+                else "変更を適用できませんでした。編集内容を確認して再試行してください。"
+            )
+            self._finish_debug_operation(
+                pending.get("operation_handle"),
+                "cancelled" if was_cancelled else "failed" if same_draft else "ignored",
+                reason_code=apply_failure_reason,
+                payload=apply_diagnostic_payload,
+            )
+        effective_plan_hint = None
+        if accepted:
+            legacy_context = getattr(
+                getattr(result.context, "issuer_context", None),
+                "legacy_context",
+                None,
+            )
+            candidate_plan = getattr(
+                legacy_context,
+                "effective_plan_snapshot",
+                None,
+            )
+            if isinstance(candidate_plan, EffectiveShapePlan):
+                effective_plan_hint = candidate_plan
+        self._pending_output_apply = None
+        self.stop_output_edit_progress()
+        if self._latest_shared_final_output_request == request:
+            self._latest_shared_final_output_request = None
+        self.sync_ui_state(effective_plan_hint=effective_plan_hint)
+
+    def _on_shared_final_output_result(
+        self,
+        request: FinalOutputRequest,
+        result,
+    ) -> None:
+        if request == self._latest_shared_final_output_request:
+            self._latest_shared_final_output_request = None
+        pending_apply = self._pending_output_apply
+        if pending_apply is not None and pending_apply.get("request") == request:
+            self._finish_output_edit_apply(request, result)
+            return
+        if pending_apply is not None:
+            lifecycle = self.ui_state.final_output_state
+            current_signature = self._capture_final_output_lifecycle_signature()
+            if (
+                result.status == "valid"
+                and result.context is not None
+                and request.snapshot.lifecycle_signature == current_signature
+                and lifecycle.is_current_request(
+                    request.snapshot.ticket,
+                    request.snapshot.lifecycle_epoch,
+                )
+            ):
+                apply_shared_final_output_result(
+                    lifecycle=lifecycle,
+                    request=request,
+                    result=result,
+                    current_lifecycle_signature=current_signature,
+                )
+            return
+        if self.ui_state.output_edit_draft_dirty:
+            lifecycle = self.ui_state.final_output_state
+            current_signature = self._capture_final_output_lifecycle_signature()
+            if (
+                result.status == "valid"
+                and result.context is not None
+                and request.snapshot.lifecycle_signature == current_signature
+                and lifecycle.is_current_request(
+                    request.snapshot.ticket,
+                    request.snapshot.lifecycle_epoch,
+                )
+            ):
+                apply_shared_final_output_result(
+                    lifecycle=lifecycle,
+                    request=request,
+                    result=result,
+                    current_lifecycle_signature=current_signature,
+                )
+            return
+        if result.status != "valid" or result.context is None:
+            lifecycle = self.ui_state.final_output_state
+            if (
+                lifecycle.is_current_request(
+                    request.snapshot.ticket,
+                    request.snapshot.lifecycle_epoch,
+                )
+                and request.snapshot.lifecycle_signature
+                == self._capture_final_output_lifecycle_signature()
+            ):
+                detail = ", ".join(
+                    issue.reason_code for issue in result.issues
+                ) or result.status
+                self._clear_shared_final_output_view(
+                    "共有最終出力を生成できませんでした。"
+                )
+                if isinstance(result.diagnostics_snapshot, OutputDiagnosticsSnapshot):
+                    self.right_pane.set_info_snapshot(result.diagnostics_snapshot)
+                    self.right_pane.set_warning_snapshot(result.diagnostics_snapshot)
+                else:
+                    self.right_pane.set_info_text(
+                        f"共有最終出力を利用できません: {detail}"
+                    )
+                self.btn_save_vmd.Enable(False)
+                self.mi_vmd_save.Enable(False)
+                self.mi_diagnostic_report_save.Enable(False)
+                self.mi_mmd_delivery_export.Enable(False)
+            return
+        context = result.context
+        current_signature = self._capture_final_output_lifecycle_signature()
+        if (
+            request.snapshot.lifecycle_signature != current_signature
+            or not self.ui_state.final_output_state.is_current_request(
+                request.snapshot.ticket,
+                request.snapshot.lifecycle_epoch,
+            )
+        ):
+            if self.ui_state.final_output_state.is_current_request(
+                request.snapshot.ticket,
+                request.snapshot.lifecycle_epoch,
+            ):
+                self.ui_state.final_output_state.invalidate_context()
+                self._clear_shared_final_output_view(
+                    "共有最終出力の要求時状態が変わったため、結果を破棄しました。"
+                )
+            return
+        preview_data = result.preview_data
+        diagnostics_snapshot = result.diagnostics_snapshot
+        if (
+            preview_data is None
+            or not isinstance(diagnostics_snapshot, OutputDiagnosticsSnapshot)
+        ):
+            self.ui_state.final_output_state.invalidate_context()
+            self._clear_shared_final_output_view(
+                "共有最終出力を生成できませんでした。"
+            )
+            return
+        if not apply_shared_final_output_result(
+            lifecycle=self.ui_state.final_output_state,
+            request=request,
+            result=result,
+            current_lifecycle_signature=self._capture_final_output_lifecycle_signature(),
+        ):
+            if self.ui_state.final_output_state.is_current_request(
+                request.snapshot.ticket,
+                request.snapshot.lifecycle_epoch,
+            ):
+                self.ui_state.final_output_state.invalidate_context()
+                self._clear_shared_final_output_view(
+                    "共有最終出力を現在条件で採用できません。"
+                )
+            return
+        self._shared_final_output_diagnostics = diagnostics_snapshot
+        duration_sec = self._selected_audio_duration_sec() or 0.0
+        self._remember_accepted_output_preview(
+            context,
+            preview_data,
+            duration_sec,
+        )
+        try:
+            self.placeholder_container.set_identity_aware_preview_data(
+                preview_data,
+                duration_sec,
+                context.input_identity.base_plan_digest,
+                final_output_binding=context.identity.binding_digest,
+            )
+            preview_model = self.placeholder_container.pnl_preview.model
+            selected_index = self.ui_state.selected_source_event_index
+            if (
+                selected_index is not None
+                and self.ui_state.selected_base_plan_identity_digest
+                == context.input_identity.base_plan_digest
+                and preview_model.find_event_hit_region(selected_index) is not None
+            ):
+                self.placeholder_container.set_selected_source_event_index(
+                    selected_index
+                )
+            self.right_pane.set_info_snapshot(
+                diagnostics_snapshot,
+                transition_label=(
+                    "自動整理：比較候補"
+                    if context.cleanup_binding is not None
+                    else "自動母音遷移"
+                    if context.default_selection is not None
+                    else "候補遷移"
+                ),
+            )
+            self.right_pane.set_warning_snapshot(diagnostics_snapshot)
+            self.update_action_states(diagnostics_snapshot)
+            self.update_selected_event_display()
+            self._update_cleanup_event_choices(context)
+            self.placeholder_container.Refresh()
+        except Exception:
+            self.ui_state.final_output_state.invalidate_context()
+            self._clear_shared_final_output_view(
+                "共有最終出力の表示を更新できませんでした。"
+            )
+
+    def _update_cleanup_event_choices(self, context) -> None:
+        cleanup = getattr(context, "cleanup_binding", None)
+        if cleanup is None:
+            self.right_pane.clear_cleanup_event_choices()
+            return
+        affected: dict[int, set[str]] = {}
+        if cleanup.event_plan is not None:
+            for decision in cleanup.event_plan.decisions:
+                if decision.action != "suppress_event":
+                    continue
+                for index in decision.source_event_indices:
+                    affected.setdefault(index, set()).add("イベント寄与を整理")
+        if cleanup.reduction_plan is not None:
+            for removal in cleanup.reduction_plan.removals:
+                for index in removal.point.source_event_indices:
+                    affected.setdefault(index, set()).add("キーを削減")
+        source_events = {item.base_event_index: item for item in context.source_events}
+        choices: list[tuple[str, int]] = []
+        for index in sorted(affected):
+            event = source_events.get(index)
+            if event is None:
+                continue
+            reasons = "・".join(sorted(affected[index]))
+            choices.append((
+                f"No.{index + 1} / {event.vowel} / {event.start_frame}–{event.end_frame}f（{reasons}）",
+                index,
+            ))
+        self.right_pane.set_cleanup_event_choices(
+            binding_digest=context.identity.binding_digest,
+            ticket=context.ticket,
+            lifecycle_epoch=context.lifecycle_epoch,
+            items=tuple(choices),
+            busy=self.ui_state.is_busy or self._analysis_info_in_progress,
+        )
+
+    def _on_cleanup_event_selection_request(
+        self, request: CleanupEventSelectionRequest
+    ) -> None:
+        state = self.ui_state
+        context = state.final_output_state.current_context
+        if (
+            not isinstance(request, CleanupEventSelectionRequest)
+            or context is None
+            or context.cleanup_binding is None
+            or state.is_busy
+            or self._analysis_info_in_progress
+            or self._selected_event_editor_has_uncommitted_input()
+            or self.right_pane._selected_editor_active_gesture is not None
+            or request.binding_digest != context.identity.binding_digest
+            or request.ticket != context.ticket
+            or request.lifecycle_epoch != context.lifecycle_epoch
+            or context.lifecycle_signature != self._capture_final_output_lifecycle_signature()
+            or not self._matches_current_shared_final_output_binding(request.binding_digest)
+        ):
+            return
+        event = next(
+            (item for item in context.source_events if item.base_event_index == request.base_event_index),
+            None,
+        )
+        preview = self.placeholder_container.pnl_preview.model
+        if (
+            event is None
+            or not preview.is_valid
+            or preview.final_output_binding != request.binding_digest
+            or preview.find_event_hit_region(request.base_event_index) is None
+        ):
+            return
+        base_digest = context.input_identity.base_plan_digest
+        valid_indices = tuple(item.base_event_index for item in context.source_events)
+        if not state.commit_selected_source_event_index(
+            request.base_event_index,
+            requested_base_plan_identity_digest=base_digest,
+            current_base_plan_identity_digest=base_digest,
+            valid_base_event_indices=valid_indices,
+        ):
+            return
+        self.placeholder_container.set_selected_source_event_index(request.base_event_index)
+        self.placeholder_container.pnl_preview.set_playback_position_sec(event.peak_frame / 30.0)
+        self.update_selected_event_display()
+        self.right_pane.show_selected_event_tab()
+
+    def _on_closure_restriction_selection(self, binding: str, target) -> None:
+        context = self.ui_state.final_output_state.current_context
+        identity = getattr(context, "identity", None)
+        if (
+            identity is None
+            or identity.binding_digest != binding
+            or getattr(target, "restriction", None) is None
+            or getattr(target, "event", None) is None
+        ):
+            return
+        if getattr(context, "lifecycle_signature", None) != (
+            self._capture_final_output_lifecycle_signature()
+        ):
+            return
+        event = target.event
+        valid_indices = tuple(
+            region.base_event_index
+            for region in self.placeholder_container.pnl_preview.model.get_event_hit_regions()
+        )
+        if event.base_event_index not in valid_indices:
+            return
+        digest = context.input_identity.base_plan_digest
+        self._finish_current_adjustment_gesture()
+        committed = self.ui_state.commit_selected_source_event_index(
+            event.base_event_index,
+            requested_base_plan_identity_digest=digest,
+            current_base_plan_identity_digest=digest,
+            valid_base_event_indices=valid_indices,
+        )
+        if not committed:
+            return
+        self.placeholder_container.set_selected_source_event_index(
+            event.base_event_index
+        )
+        self.placeholder_container.pnl_preview.set_playback_position_sec(
+            target.restriction.frame_no / 30.0
+        )
+        self.update_selected_event_display()
+        self.right_pane.show_selected_event_tab()
 
     def _sync_whisper_model_panel(
         self,
@@ -3302,6 +5408,37 @@ class MainFrame(wx.Frame):
             ),
             "duration_sec": duration_diagnostic.get("selected_duration_sec"),
         }
+        if self._bounded_candidate_enabled():
+            identity = build_base_plan_identity(base_input)
+            snapshot = state.current_adjustment_snapshot
+            if snapshot is None:
+                snapshot = empty_adjustment_snapshot(identity)
+                state.initialize_adjustment_history(snapshot,
+                    expected_base_plan_identity_digest=identity.digest)
+            elif snapshot.base_plan_identity != identity:
+                self._current_ui_sync_failure_reason = "bounded_source_identity_mismatch"
+                return None
+            current = state.final_output_state.current_context
+            effective = None
+            default_selection = self._current_default_transition_selection()
+            if (current is not None and current.transition_binding is not None
+                    and (
+                        (
+                            self._transition_evaluation_request is not None
+                            and current.transition_binding.evaluation_request == self._transition_evaluation_request
+                        )
+                        or (
+                            self._transition_evaluation_request is None
+                            and current.transition_binding.default_selection == default_selection
+                        )
+                    )
+                    and current.issuer_context.legacy_context.base_input == base_input
+                    and current.issuer_context.legacy_context.adjustment_snapshot == snapshot):
+                effective = current.issuer_context.legacy_context.effective_plan_snapshot
+            context = UiSyncContext(base_input, identity, effective)
+            self._current_ui_sync_context = context
+            self._current_ui_sync_failure_reason = None
+            return context
         cached = self._current_ui_sync_context
         current_output_state = state.current_output_edit_state
         self._current_ui_sync_diagnostic["sync_inputs"]["cache_state"] = "miss"
@@ -3424,6 +5561,12 @@ class MainFrame(wx.Frame):
         base_input = self._build_current_base_timing_plan_input()
         if base_input is None:
             return None
+        if self._bounded_candidate_enabled():
+            current = self.ui_state.final_output_state.current_context
+            if current is None or current.issuer_context.legacy_context.base_input != base_input:
+                return None
+            return UiSyncContext(base_input, build_base_plan_identity(base_input),
+                                 current.issuer_context.legacy_context.effective_plan_snapshot)
         try:
             return build_ui_sync_context(
                 base_input,
@@ -3456,6 +5599,8 @@ class MainFrame(wx.Frame):
                 self._current_ui_sync_failure_reason
                 or "effective_shape_plan_unavailable",
             )
+        if sync_context.effective_plan is None:
+            return "not_applicable", None, None
         return "ready", sync_context.effective_plan, None
 
     def capture_current_delivery_state(
@@ -3464,7 +5609,7 @@ class MainFrame(wx.Frame):
         ffmpeg_path: str | Path | None = None,
         confirmed_warning_save_state_fingerprint: str | None = None,
     ) -> DeliveryStartGateResult:
-        """Capture one immutable B1 delivery candidate from the current UI state."""
+        """Capture a delivery candidate from the accepted shared final output."""
         state = self.ui_state
         source_audio_path = resolve_source_audio_path_from_ui_state(state)
         audio_probe = state.selected_audio_probe
@@ -3473,75 +5618,62 @@ class MainFrame(wx.Frame):
             closing_hold_frames=self.get_closing_hold_frames(),
             closing_softness_frames=self.get_closing_softness_frames(),
         )
-        if confirmed_warning_save_state_fingerprint is None:
-            confirmed_warning_save_state_fingerprint = (
-                state.confirmed_warning_save_state_fingerprint
-            )
-
-        if state.is_busy:
-            return evaluate_delivery_start_gate(
-                effective_shape_plan=None,
-                diagnostics_snapshot=state.current_output_diagnostics_snapshot,
-                audio_probe=audio_probe,
-                source_audio_path=source_audio_path,
-                mmd_wav_spec=MMD_WAV_SPEC,
-                ffmpeg_path=ffmpeg_path,
-                writer_parameters=writer_parameters,
-                output_morph_names=None,
-                effective_writer_input_state="not_applicable",
-                confirmed_warning_save_state_fingerprint=(
-                    confirmed_warning_save_state_fingerprint
-                ),
-                application_busy=True,
-                analysis_in_progress=self._analysis_info_in_progress,
-            )
-
-        sync_context = self._build_current_ui_sync_context()
-        if sync_context is None:
-            effective_writer_input_state = "invalid"
-            effective_shape_plan = None
-            effective_writer_input_failure_reason = (
-                self._current_ui_sync_failure_reason
-                or "effective_shape_plan_unavailable"
-            )
-        else:
-            (
-                effective_writer_input_state,
-                effective_shape_plan,
-                effective_writer_input_failure_reason,
-            ) = self.prepare_current_effective_output(sync_context=sync_context)
-
-        output_morph_names = (
-            self._resolved_output_morph_names()
-            if effective_shape_plan is not None
-            else None
+        confirmed = (
+            state.confirmed_shared_warning_fingerprint
+            if confirmed_warning_save_state_fingerprint is None
+            else confirmed_warning_save_state_fingerprint
         )
-        try:
-            snapshot = self.build_and_store_output_diagnostics_snapshot(
-                effective_shape_plan=effective_shape_plan,
-                effective_writer_input_state=effective_writer_input_state,
-                effective_writer_input_failure_reason=(
-                    effective_writer_input_failure_reason
-                ),
-                output_morph_names=output_morph_names,
-            )
-        except (AttributeError, TypeError, ValueError):
-            snapshot = None
+        shared_context = state.final_output_state.current_context
+        shared_snapshot = getattr(self, "_shared_final_output_diagnostics", None)
+        effective_shape_plan = (
+            None
+            if shared_context is None
+            else shared_context.issuer_context.legacy_context.effective_plan_snapshot
+        )
+        output_morph_names = (
+            None
+            if shared_context is None
+            else tuple(name for _, name in shared_context.input_identity.output_mapping)
+        )
+        lifecycle_signature = self._capture_final_output_lifecycle_signature()
         return evaluate_delivery_start_gate(
             effective_shape_plan=effective_shape_plan,
-            diagnostics_snapshot=snapshot,
+            diagnostics_snapshot=shared_snapshot,
             audio_probe=audio_probe,
             source_audio_path=source_audio_path,
             mmd_wav_spec=MMD_WAV_SPEC,
             ffmpeg_path=ffmpeg_path,
             writer_parameters=writer_parameters,
             output_morph_names=output_morph_names,
-            effective_writer_input_state=effective_writer_input_state,
-            confirmed_warning_save_state_fingerprint=(
-                confirmed_warning_save_state_fingerprint
+            effective_writer_input_state=(
+                "ready" if shared_context is not None else "not_applicable"
             ),
-            application_busy=state.is_busy,
+            confirmed_warning_save_state_fingerprint=confirmed,
+            application_busy=(
+                state.is_busy
+                or state.output_edit_draft_dirty
+                or self._pending_selected_event_projection is not None
+            ),
             analysis_in_progress=self._analysis_info_in_progress,
+            projection_kind="shared_final_output",
+            shared_final_output_context=shared_context,
+            shared_lifecycle_signature=lifecycle_signature,
+            expected_transition_input_digest=(
+                state.final_output_state.expected_transition_input_digest
+            ),
+            expected_application_binding_digest=(
+                state.final_output_state.expected_application_binding_digest
+            ),
+            expected_cleanup_input_digest=(
+                getattr(
+                    getattr(state.final_output_state.current_context, "input_identity", None),
+                    "cleanup_input_digest",
+                    None,
+                )
+            ),
+            expected_cleanup_application_binding_digest=(
+                state.final_output_state.expected_cleanup_application_binding_digest
+            ),
         )
 
     def build_and_store_output_diagnostics_snapshot(
@@ -3609,17 +5741,169 @@ class MainFrame(wx.Frame):
             projection_generation=self._diagnostics_projection_generation,
         )
 
+    def show_vmd_save_progress(
+        self,
+        operation_id: int,
+        *,
+        on_cancel: Callable[[], object],
+        get_progress_state: Callable[[], ProgressState],
+    ) -> bool:
+        if self._vmd_save_progress_dialog is not None:
+            return False
+        dialog = VmdSaveProgressDialog(
+            self,
+            on_cancel=on_cancel,
+            get_progress_state=get_progress_state,
+        )
+        self._vmd_save_progress_dialog = dialog
+        self._vmd_save_progress_operation_id = operation_id
+        dialog.show()
+        return True
+
+    def suspend_vmd_save_progress(self, operation_id: int) -> None:
+        if self._vmd_save_progress_operation_id != operation_id:
+            return
+        if self._vmd_save_progress_dialog is not None:
+            self._vmd_save_progress_dialog.suspend()
+
+    def resume_vmd_save_progress(self, operation_id: int) -> None:
+        if self._vmd_save_progress_operation_id != operation_id:
+            return
+        if self._vmd_save_progress_dialog is not None:
+            self._vmd_save_progress_dialog.resume()
+
+    def close_vmd_save_progress(self, operation_id: int) -> None:
+        if self._vmd_save_progress_operation_id != operation_id:
+            return
+        dialog = self._vmd_save_progress_dialog
+        self._vmd_save_progress_dialog = None
+        self._vmd_save_progress_operation_id = None
+        if dialog is not None:
+            dialog.close()
+
+    def update_vmd_save_action_states(self) -> None:
+        snapshot = self._shared_final_output_diagnostics
+        sync_context = self._current_ui_sync_context
+        if snapshot is None or sync_context is None:
+            return
+        self.update_action_states(
+            snapshot,
+            sync_context=sync_context,
+            busy_override=self.ui_state.is_busy,
+        )
+
+    def update_audio_worker_action_states(self) -> None:
+        snapshot = self._shared_final_output_diagnostics
+        sync_context = self._current_ui_sync_context
+        if snapshot is not None and sync_context is not None:
+            self.update_action_states(
+                snapshot,
+                sync_context=sync_context,
+                busy_override=self.ui_state.is_busy,
+            )
+            return
+
+        state = self.ui_state
+        busy = state.is_busy
+        self.btn_open_text.Enable(not busy)
+        self.btn_open_wav.Enable(not busy)
+        self.mi_workspace_reset.Enable(not busy)
+        self.mi_text_open.Enable(not busy)
+        self.mi_wav_open.Enable(not busy)
+
+        for item in (
+            self.mi_vmd_save,
+            self.mi_diagnostic_report_save,
+            self.mi_mmd_delivery_export,
+            self.mi_adjustment_undo,
+            self.mi_adjustment_redo,
+            self.mi_adjustment_reset_selected,
+            self.mi_adjustment_reset_all,
+        ):
+            item.Enable(False)
+
+        self.param_panel.enable_inputs(
+            not busy and state.draft_model_profile_state.active_model_profile_id is None
+        )
+        self.btn_process.Enable(state.analysis_start_ready and not busy)
+        self.btn_save_vmd.Enable(False)
+        transcription_edit_enabled = bool(
+            state.input_mode == INPUT_MODE_VOICE_ONLY
+            and state.transcription_text
+            and not busy
+        )
+        self.info_panel.set_text_preview_editable(transcription_edit_enabled)
+        self.info_panel.set_transcription_edit_controls_enabled(
+            transcription_edit_enabled
+        )
+        self.btn_export_mmd_wav.Enable(state.mmd_wav_export_ready and not busy)
+        self.btn_cancel_audio_worker.Enable(state.audio_worker_cancel_available)
+        self._update_playback_action_states()
+
+        self._update_zoom_action_states()
+
+        self.mi_settings.Enable(False)
+        self.mi_help.Enable(True)
+        self.mi_about.Enable(True)
+
+    def _update_playback_action_states(self, *, busy_override: bool | None = None) -> None:
+        state = self.ui_state
+        busy = bool(state.is_busy if busy_override is None else busy_override)
+        self.btn_play.Enable(
+            state.playback_ready and not busy and not state.is_playing
+        )
+        self.btn_pause.Enable(state.is_playing and not busy)
+        self.btn_stop.Enable(state.playback_active)
+
+    def sync_playback_controls(self) -> None:
+        """Update transport button states without rebuilding unrelated UI."""
+        self._update_playback_action_states()
+
+    def _update_zoom_action_states(self) -> None:
+        if self.controller:
+            zoom_state = self.controller.get_zoom_action_state()
+            self.btn_zoom_in.Enable(zoom_state["zoom_in"])
+            self.btn_zoom_out.Enable(zoom_state["zoom_out"])
+            self.btn_zoom_reset.Enable(zoom_state["zoom_reset"])
+        else:
+            self.btn_zoom_in.Enable(False)
+            self.btn_zoom_out.Enable(False)
+            self.btn_zoom_reset.Enable(False)
+
+    def sync_zoom_controls(self) -> None:
+        """Update Zoom button states without rebuilding unrelated UI."""
+        self._update_zoom_action_states()
+
     def update_action_states(
         self,
         diagnostics_snapshot: OutputDiagnosticsSnapshot | None = None,
         *,
         sync_context: UiSyncContext | None = None,
+        busy_override: bool | None = None,
     ):
         """
         [MS14-B2] UiState に基づき、UI コントロールの有効/無効を判定・反映する
         """
         state = self.ui_state
-        busy = diagnostics_snapshot.whisper_summary.application_busy if diagnostics_snapshot else state.is_busy
+        draft_dirty = state.output_edit_draft_dirty
+        busy = (
+            busy_override
+            if busy_override is not None
+            else (
+                diagnostics_snapshot.whisper_summary.application_busy
+                if diagnostics_snapshot
+                else state.is_busy
+            )
+        )
+        shared_context = state.final_output_state.current_context
+        shared_ready = bool(
+            shared_context is not None
+            and self._shared_final_output_diagnostics is not None
+            and self._shared_final_output_diagnostics.shared_final_output_identity
+            == shared_context.identity
+            and getattr(shared_context, "lifecycle_signature", None)
+            == self._capture_final_output_lifecycle_signature()
+        )
         if sync_context is None:
             sync_context = self._build_current_ui_sync_context()
         if diagnostics_snapshot is None:
@@ -3646,16 +5930,23 @@ class MainFrame(wx.Frame):
         self.mi_text_open.Enable(not busy)
         self.mi_wav_open.Enable(not busy)
         self.mi_vmd_save.Enable(
-            diagnostics_snapshot.saveability.vmd_save_allowed and not busy
+            diagnostics_snapshot.saveability.vmd_save_allowed
+            and not busy
+            and shared_ready
+            and not draft_dirty
         )
         source_audio_path = resolve_source_audio_path_from_ui_state(state)
         self.mi_diagnostic_report_save.Enable(
             not busy
+            and shared_ready
+            and not draft_dirty
             and source_audio_path is not None
             and bool(source_audio_path.stem)
         )
         self.mi_mmd_delivery_export.Enable(
             not busy
+            and shared_ready
+            and not draft_dirty
             and source_audio_path is not None
             and bool(source_audio_path.stem)
             and diagnostics_snapshot.saveability.vmd_save_allowed
@@ -3692,7 +5983,14 @@ class MainFrame(wx.Frame):
         
         # --- パラメータ入力 (busy / active profile時ロック) ---
         self.param_panel.enable_inputs(
-            not busy and state.model_profile_state.active_model_profile_id is None
+            not busy and state.draft_model_profile_state.active_model_profile_id is None
+        )
+        self.param_panel.btn_apply_output_edits.Enable(
+            draft_dirty
+            and not busy
+            and state.output_edit_draft_error is None
+            and state.analysis_result_valid
+            and not self._selected_event_editor_has_uncommitted_input()
         )
 
         # --- 解析実行 ---
@@ -3701,11 +5999,14 @@ class MainFrame(wx.Frame):
             not in {"incomplete", "mismatch"}
         )
         can_analyze = state.analysis_start_ready and whisper_runtime_valid
-        self.btn_process.Enable(can_analyze and not busy)
+        self.btn_process.Enable(can_analyze and not busy and not draft_dirty)
 
         # --- VMD 保存 ---
         self.btn_save_vmd.Enable(
-            diagnostics_snapshot.saveability.vmd_save_allowed and not busy
+            diagnostics_snapshot.saveability.vmd_save_allowed
+            and not busy
+            and shared_ready
+            and not draft_dirty
         )
 
         # --- MS19-B5 書き起こし編集 ---
@@ -3720,27 +6021,28 @@ class MainFrame(wx.Frame):
         self.btn_export_mmd_wav.Enable(state.mmd_wav_export_ready and not busy)
         self.btn_cancel_audio_worker.Enable(state.audio_worker_cancel_available)
 
-        # [MS15-B5] 再生系の仮開放 ---
-        can_play = state.playback_ready and not busy and not state.is_playing
-        can_stop = state.is_playing # busy中もストップは可能とする
-        self.btn_play.Enable(can_play)
-        self.btn_stop.Enable(can_stop)
+        self._update_playback_action_states(busy_override=busy)
         
         # [MS15-B5] Zoom UI の仮開放
-        if self.controller:
-            zoom_state = self.controller.get_zoom_action_state()
-            self.btn_zoom_in.Enable(zoom_state["zoom_in"])
-            self.btn_zoom_out.Enable(zoom_state["zoom_out"])
-            self.btn_zoom_reset.Enable(zoom_state["zoom_reset"])
-        else:
-            self.btn_zoom_in.Enable(False)
-            self.btn_zoom_out.Enable(False)
-            self.btn_zoom_reset.Enable(False)
+        self._update_zoom_action_states()
         
         # 設定・ヘルプ
         self.mi_settings.Enable(False)
         self.mi_help.Enable(True)
         self.mi_about.Enable(True)
+
+    def _reject_unapplied_output_edit(self) -> bool:
+        if self._pending_selected_event_projection is not None:
+            message = "選択イベントの編集表示を計算しています。完了後にもう一度操作してください。"
+            self.right_pane.set_info_text(message)
+            self.param_panel.set_output_edit_status("編集表示を更新中…")
+            return True
+        if not self.ui_state.output_edit_draft_dirty:
+            return False
+        message = "先に変更を適用するか、Undo / Redoで適用済みの内容へ戻してください。"
+        self.right_pane.set_info_text(message)
+        self.param_panel.set_output_edit_status("変更未適用")
+        return True
 
     def _preset_store_items(self):
         if self.controller and hasattr(self.controller, "preset_store"):
@@ -3760,7 +6062,12 @@ class MainFrame(wx.Frame):
             for item in self._preset_store_items()
         )
         valid_ids = {item.id for item in items}
-        active_state = self.ui_state.generation_state
+        active_state = (
+            self.ui_state.current_output_edit_state.generation_state
+            if self.ui_state.output_edit_draft_dirty
+            and self.ui_state.current_output_edit_state is not None
+            else self.ui_state.generation_state
+        )
         active_id = active_state.active_preset_id
         active_display_name = self._active_preset_display_name
         if store is not None:
@@ -3775,6 +6082,8 @@ class MainFrame(wx.Frame):
         if not self._preset_selection_initialized:
             self._selected_preset_id = active_id if active_id in valid_ids else None
             self._preset_selection_initialized = True
+        elif self.ui_state.output_edit_draft_dirty:
+            self._selected_preset_id = active_id if active_id in valid_ids else None
         elif self._selected_preset_id is not None and self._selected_preset_id not in valid_ids:
             self._selected_preset_id = active_id if active_id in valid_ids else None
 
@@ -3864,12 +6173,23 @@ class MainFrame(wx.Frame):
             )
         items = tuple(profile_items)
         valid_ids = {item.id for item in items}
-        active_profile_id = self.ui_state.model_profile_state.active_model_profile_id
+        draft_profile_state = self.ui_state.draft_model_profile_state
+        draft_generation_state = (
+            self.ui_state.current_output_edit_state.generation_state
+            if self.ui_state.output_edit_draft_dirty
+            and self.ui_state.current_output_edit_state is not None
+            else self.ui_state.generation_state
+        )
+        active_profile_id = draft_profile_state.active_model_profile_id
         if not self._model_profile_selection_initialized:
             self._selected_model_profile_id = (
                 active_profile_id if active_profile_id in valid_ids else None
             )
             self._model_profile_selection_initialized = True
+        elif self.ui_state.output_edit_draft_dirty:
+            self._selected_model_profile_id = (
+                active_profile_id if active_profile_id in valid_ids else None
+            )
         elif self._selected_model_profile_id not in valid_ids and self._selected_model_profile_id is not None:
             self._selected_model_profile_id = (
                 active_profile_id if active_profile_id in valid_ids else None
@@ -3879,13 +6199,13 @@ class MainFrame(wx.Frame):
             self._sync_profile_display_names_from_state()
         active_profile_display_name = self.ui_state.active_model_profile_display_name
         active_baseline_id = (
-            self.ui_state.model_profile_state.active_profile_baseline_preset_id
+            draft_profile_state.active_profile_baseline_preset_id
         )
         active_baseline = preset_by_id.get(active_baseline_id)
-        active_preset_id = self.ui_state.generation_state.active_preset_id
+        active_preset_id = draft_generation_state.active_preset_id
         active_preset = preset_by_id.get(active_preset_id)
         active_morph_name_set = get_builtin_morph_name_set(
-            self.ui_state.generation_state.resolved_morph_name_set_id
+            draft_generation_state.resolved_morph_name_set_id
         )
         load_error_code = None
         load_error_message = None
@@ -4091,18 +6411,42 @@ class MainFrame(wx.Frame):
     def _on_preset_select_request(self, request: PresetSelectRequest):
         if not isinstance(request, PresetSelectRequest):
             return
+        operation_handle = self._begin_debug_operation(
+            "generation_preset_select",
+            payload={"preset_id": request.selected_preset_id},
+            entry="preset_panel",
+        )
         if self.ui_state.is_busy or request.expected_panel_revision != self._preset_panel_revision:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=("busy" if self.ui_state.is_busy else "stale_panel_request"),
+            )
             return
         valid_ids = {item.id for item in self._preset_store_items()}
         if request.selected_preset_id is not None and request.selected_preset_id not in valid_ids:
             self._set_preset_notice("選択したプリセットは現在利用できません。")
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="preset_unavailable",
+            )
             return
+        changed = request.selected_preset_id != self._selected_preset_id
         self._selected_preset_id = request.selected_preset_id
         self._set_preset_notice("")
         self._sync_preset_panel()
+        self._finish_debug_operation(
+            operation_handle,
+            "completed" if changed else "noop",
+            reason_code="preset_selected" if changed else "preset_selection_unchanged",
+            payload={"preset_id": request.selected_preset_id, "changed": changed},
+        )
 
     def _on_preset_apply_request(self, request: PresetApplyRequest):
         if not isinstance(request, PresetApplyRequest):
+            return
+        if self._reject_unapplied_output_edit():
             return
         if not self._preset_request_is_current(
             request.expected_panel_revision,
@@ -4116,12 +6460,25 @@ class MainFrame(wx.Frame):
             self._set_preset_notice("選択したプリセットは現在利用できません。")
             self._sync_preset_panel()
             return
-        current = self.ui_state.generation_state
+        current_output = self.ui_state.current_output_edit_state
+        current = (
+            current_output.generation_state
+            if self.ui_state.output_edit_draft_dirty and current_output is not None
+            else self.ui_state.generation_state
+        )
         if (
             current.active_preset_id == preset.id
             and current.generation_settings == preset.generation_settings
         ):
             self._set_preset_notice("選択中のプリセットは既に適用されています。")
+            self.controller.record_debug_operation_event(
+                "generation_preset_apply",
+                "noop",
+                source="user",
+                entry="preset_panel",
+                payload={"preset_id": preset.id, "changed": False},
+                reason_code="preset_already_active",
+            )
             return
         if self.ui_state.model_profile_state.active_model_profile_id is not None:
             applied = self.apply_active_model_profile_preset(preset.id)
@@ -4141,9 +6498,20 @@ class MainFrame(wx.Frame):
     def _on_preset_create_request(self, request: PresetCreateRequest):
         if not isinstance(request, PresetCreateRequest):
             return
+        operation_handle = self._begin_debug_operation(
+            "generation_preset_create",
+            payload={"setting": "generation_preset"},
+            entry="preset_panel",
+        )
         if not self._preset_request_is_current(request.expected_panel_revision):
+            self._finish_debug_operation(
+                operation_handle, "ignored", reason_code="stale_panel_request"
+            )
             return
         if self.controller is None:
+            self._finish_debug_operation(
+                operation_handle, "rejected", reason_code="controller_unavailable"
+            )
             return
         before_ids = {item.id for item in self.controller.preset_store.user_presets}
         result = self.controller.create_generation_preset(
@@ -4153,11 +6521,22 @@ class MainFrame(wx.Frame):
         if not result.succeeded:
             self._set_preset_notice(self._format_preset_mutation_error(result))
             self._sync_preset_panel()
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=getattr(result, "error_code", None) or "preset_create_rejected",
+            )
             return
         created = next((item for item in result.user_presets if item.id not in before_ids), None)
         self._selected_preset_id = created.id if created is not None else self._selected_preset_id
         self._set_preset_notice("ユーザープリセットを作成しました。Applyで出力へ反映できます。")
         self._sync_preset_panel()
+        self._finish_debug_operation(
+            operation_handle,
+            "completed",
+            reason_code="preset_created",
+            payload={"preset_id": getattr(created, "id", None), "changed": True},
+        )
 
     def _normalize_active_preset_after_mutation(self) -> None:
         if self.controller is None:
@@ -4206,16 +6585,32 @@ class MainFrame(wx.Frame):
     def _on_preset_update_request(self, request: PresetUpdateRequest):
         if not isinstance(request, PresetUpdateRequest):
             return
+        operation_handle = self._begin_debug_operation(
+            "generation_preset_update",
+            payload={"preset_id": request.preset_id},
+            entry="preset_panel",
+        )
         if not self._preset_request_is_current(
             request.expected_panel_revision,
             expected_editor_revision=request.expected_editor_revision,
         ):
+            self._finish_debug_operation(
+                operation_handle, "ignored", reason_code="stale_panel_request"
+            )
             return
         if self.controller is None:
+            self._finish_debug_operation(
+                operation_handle, "rejected", reason_code="controller_unavailable"
+            )
             return
         target = self.controller.lookup_generation_preset(request.preset_id)
         if target is None or target.source != "user":
             self._set_preset_notice("組み込みプリセットは変更できません。")
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="preset_not_user_owned",
+            )
             return
         result = self.controller.update_generation_preset(
             request.preset_id,
@@ -4225,36 +6620,74 @@ class MainFrame(wx.Frame):
         if not result.succeeded:
             self._set_preset_notice(self._format_preset_mutation_error(result))
             self._sync_preset_panel()
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=getattr(result, "error_code", None) or "preset_update_rejected",
+            )
             return
         self._selected_preset_id = request.preset_id
         self._normalize_active_preset_after_mutation()
         self._set_preset_notice("ユーザープリセットを更新しました。必要ならApplyしてください。")
         self._sync_preset_panel()
+        self._finish_debug_operation(
+            operation_handle,
+            "completed",
+            reason_code="preset_updated",
+            payload={"preset_id": request.preset_id, "changed": True},
+        )
 
     def _on_preset_delete_request(self, request: PresetDeleteRequest):
         if not isinstance(request, PresetDeleteRequest):
             return
+        operation_handle = self._begin_debug_operation(
+            "generation_preset_delete",
+            payload={"preset_id": request.preset_id},
+            entry="preset_panel",
+        )
         if not self._preset_request_is_current(
             request.expected_panel_revision,
             expected_editor_revision=request.expected_editor_revision,
         ):
+            self._finish_debug_operation(
+                operation_handle, "ignored", reason_code="stale_panel_request"
+            )
             return
         if self.controller is None:
+            self._finish_debug_operation(
+                operation_handle, "rejected", reason_code="controller_unavailable"
+            )
             return
         target = self.controller.lookup_generation_preset(request.preset_id)
         if target is None or target.source != "user":
             self._set_preset_notice("組み込みプリセットは削除できません。")
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="preset_not_user_owned",
+            )
             return
         result = self.controller.delete_generation_preset(request.preset_id)
         if not result.succeeded:
             self._set_preset_notice(self._format_preset_mutation_error(result))
             self._sync_preset_panel()
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=getattr(result, "error_code", None) or "preset_delete_rejected",
+            )
             return
         self._normalize_active_preset_after_mutation()
         active_id = self.ui_state.generation_state.active_preset_id
         self._selected_preset_id = active_id if active_id != request.preset_id else None
         self._set_preset_notice("ユーザープリセットを削除しました。")
         self._sync_preset_panel()
+        self._finish_debug_operation(
+            operation_handle,
+            "completed",
+            reason_code="preset_deleted",
+            payload={"preset_id": request.preset_id, "changed": True},
+        )
 
     def _on_model_profile_select_request(
         self,
@@ -4262,10 +6695,20 @@ class MainFrame(wx.Frame):
     ) -> None:
         if not isinstance(request, ModelProfileSelectRequest):
             return
+        operation_handle = self._begin_debug_operation(
+            "model_profile_select",
+            payload={"profile_id": request.selected_profile_id},
+            entry="profile_panel",
+        )
         if (
             self.ui_state.is_busy
             or request.expected_panel_revision != self._model_profile_panel_revision
         ):
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=("busy" if self.ui_state.is_busy else "stale_panel_request"),
+            )
             return
         valid_ids = {item.id for item in self._profile_store_items()}
         if (
@@ -4273,10 +6716,22 @@ class MainFrame(wx.Frame):
             and request.selected_profile_id not in valid_ids
         ):
             self._set_model_profile_notice("選択したモデルプロファイルは現在利用できません。")
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="model_profile_unavailable",
+            )
             return
+        changed = request.selected_profile_id != self._selected_model_profile_id
         self._selected_model_profile_id = request.selected_profile_id
         self._set_model_profile_notice("")
         self._sync_model_profile_panel()
+        self._finish_debug_operation(
+            operation_handle,
+            "completed" if changed else "noop",
+            reason_code=("model_profile_selected" if changed else "selection_unchanged"),
+            payload={"profile_id": request.selected_profile_id, "changed": changed},
+        )
 
     def _on_whisper_model_select_request(
         self,
@@ -4285,11 +6740,25 @@ class MainFrame(wx.Frame):
         if not isinstance(request, WhisperModelSelectRequest):
             return
         state = self.ui_state.whisper_model_selection
+        operation_handle = self._begin_debug_operation(
+            "whisper_model_select",
+            payload={"model_key": request.selected_model_key},
+            entry="whisper_model_panel",
+        )
         if (
             self.ui_state.is_busy
             or state.management_busy
             or request.expected_panel_revision != state.panel_revision
         ):
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=(
+                    "busy"
+                    if self.ui_state.is_busy or state.management_busy
+                    else "stale_panel_request"
+                ),
+            )
             return
         valid_keys = {spec.model_key for spec in state.model_specs}
         if request.selected_model_key not in valid_keys:
@@ -4298,8 +6767,19 @@ class MainFrame(wx.Frame):
                 notice="選択したWhisperモデルは現在利用できません。",
             )
             self.sync_ui_state(adjustment_only=True)
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="whisper_model_unavailable",
+            )
             return
         if request.selected_model_key == state.selected_model_key:
+            self._finish_debug_operation(
+                operation_handle,
+                "noop",
+                reason_code="model_already_selected",
+                payload={"model_key": request.selected_model_key},
+            )
             return
         self.ui_state.whisper_model_selection = replace(
             state,
@@ -4310,6 +6790,12 @@ class MainFrame(wx.Frame):
         if self.controller is not None:
             self.controller.request_settings_save()
         self.sync_ui_state(adjustment_only=True)
+        self._finish_debug_operation(
+            operation_handle,
+            "completed",
+            reason_code="whisper_model_selected",
+            payload={"model_key": request.selected_model_key, "changed": True},
+        )
 
     def _on_whisper_model_download_request(
         self,
@@ -4317,7 +6803,17 @@ class MainFrame(wx.Frame):
     ) -> None:
         if not isinstance(request, WhisperModelDownloadRequest):
             return
+        operation_handle = self._begin_debug_operation(
+            "whisper_model_download",
+            payload={"model_key": request.model_key},
+            entry="whisper_model_panel",
+        )
         if self.controller is None:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="controller_unavailable",
+            )
             return
         state = self.ui_state.whisper_model_selection
         spec = next(
@@ -4325,6 +6821,11 @@ class MainFrame(wx.Frame):
             None,
         )
         if spec is None:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="model_key_unsupported",
+            )
             return
         message = (
             f"{spec.display_name} を取得して検証します。\n\n"
@@ -4339,11 +6840,17 @@ class MainFrame(wx.Frame):
             "Whisperモデルの取得確認",
             wx.YES_NO | wx.ICON_INFORMATION,
         ) != wx.YES:
+            self._finish_debug_operation(
+                operation_handle,
+                "cancelled",
+                reason_code="download_confirmation_declined",
+            )
             return
         self.controller.start_whisper_model_download(
             request.model_key,
             request.expected_panel_revision,
             confirmed=True,
+            operation_handle=operation_handle,
         )
 
     def _on_whisper_model_apply_request(
@@ -4352,7 +6859,24 @@ class MainFrame(wx.Frame):
     ) -> None:
         if not isinstance(request, WhisperModelApplyRequest):
             return
+        operation_handle = self._begin_debug_operation(
+            "whisper_model_apply",
+            payload={"model_key": request.model_key},
+            entry="whisper_model_panel",
+        )
+        if self._reject_unapplied_output_edit():
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="unapplied_output_edits",
+            )
+            return
         if self.controller is None:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="controller_unavailable",
+            )
             return
         state = self.ui_state.whisper_model_selection
         item = next(
@@ -4360,6 +6884,11 @@ class MainFrame(wx.Frame):
             None,
         )
         if item is None:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="model_key_unsupported",
+            )
             return
         if wx.MessageBox(
             f"{item.display_name} を次回解析に適用します。\n\n"
@@ -4368,10 +6897,16 @@ class MainFrame(wx.Frame):
             "Whisperモデル適用確認",
             wx.YES_NO | wx.ICON_INFORMATION,
         ) != wx.YES:
+            self._finish_debug_operation(
+                operation_handle,
+                "cancelled",
+                reason_code="model_apply_confirmation_declined",
+            )
             return
         self.controller.start_whisper_model_apply(
             request.model_key,
             request.expected_panel_revision,
+            operation_handle=operation_handle,
         )
 
     def _on_whisper_model_cancel_request(
@@ -4392,7 +6927,17 @@ class MainFrame(wx.Frame):
     ) -> None:
         if not isinstance(request, WhisperModelDeleteRequest):
             return
+        operation_handle = self._begin_debug_operation(
+            "whisper_model_delete",
+            payload={"model_key": request.model_key},
+            entry="whisper_model_panel",
+        )
         if self.controller is None:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="controller_unavailable",
+            )
             return
         state = self.ui_state.whisper_model_selection
         item = next(
@@ -4400,6 +6945,11 @@ class MainFrame(wx.Frame):
             None,
         )
         if item is None:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="model_key_unsupported",
+            )
             return
         if wx.MessageBox(
             f"{item.display_name} の検証済みモデルを削除します。\n\n"
@@ -4409,11 +6959,17 @@ class MainFrame(wx.Frame):
             "Whisperモデルの削除確認",
             wx.YES_NO | wx.ICON_WARNING,
         ) != wx.YES:
+            self._finish_debug_operation(
+                operation_handle,
+                "cancelled",
+                reason_code="model_delete_confirmation_declined",
+            )
             return
         self.controller.start_whisper_model_delete(
             request.model_key,
             request.expected_panel_revision,
             confirmed=True,
+            operation_handle=operation_handle,
         )
 
     def _on_whisper_storage_root_request(
@@ -4422,7 +6978,16 @@ class MainFrame(wx.Frame):
     ) -> None:
         if not isinstance(request, WhisperStorageRootRequest):
             return
+        operation_handle = self._begin_debug_operation(
+            "whisper_storage_root_change",
+            entry="whisper_model_panel",
+        )
         if self.controller is None:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="controller_unavailable",
+            )
             return
         state = self.ui_state.whisper_model_selection
         dialog = wx.DirDialog(
@@ -4433,11 +6998,21 @@ class MainFrame(wx.Frame):
         )
         try:
             if dialog.ShowModal() != wx.ID_OK:
+                self._finish_debug_operation(
+                    operation_handle,
+                    "cancelled",
+                    reason_code="directory_dialog_cancelled",
+                )
                 return
             selected_path = dialog.GetPath()
         finally:
             dialog.Destroy()
         if not selected_path:
+            self._finish_debug_operation(
+                operation_handle,
+                "cancelled",
+                reason_code="empty_directory_selection",
+            )
             return
         if wx.MessageBox(
             f"Whisperモデルの保存先を次へ変更します。\n\n{selected_path}\n\n"
@@ -4446,11 +7021,22 @@ class MainFrame(wx.Frame):
             "Whisperモデル保存先の確認",
             wx.YES_NO | wx.ICON_INFORMATION,
         ) != wx.YES:
+            self._finish_debug_operation(
+                operation_handle,
+                "cancelled",
+                reason_code="storage_root_confirmation_declined",
+            )
             return
-        self.controller.change_whisper_storage_root(
+        changed = self.controller.change_whisper_storage_root(
             selected_path,
             request.expected_panel_revision,
             confirmed=True,
+        )
+        self._finish_debug_operation(
+            operation_handle,
+            "completed" if changed else "rejected",
+            reason_code="storage_root_changed" if changed else "storage_root_change_rejected",
+            payload={"changed": bool(changed)},
         )
 
     def _on_model_profile_apply_request(
@@ -4458,6 +7044,8 @@ class MainFrame(wx.Frame):
         request: ModelProfileApplyRequest,
     ) -> None:
         if not isinstance(request, ModelProfileApplyRequest):
+            return
+        if self._reject_unapplied_output_edit():
             return
         if not self._model_profile_request_is_current(
             request.expected_panel_revision,
@@ -4517,12 +7105,27 @@ class MainFrame(wx.Frame):
     ) -> None:
         if not isinstance(request, ModelProfileCreateRequest):
             return
+        values = request.values
+        operation_handle = self._begin_debug_operation(
+            "model_profile_create",
+            payload={
+                "morph_name_set_id": values.morph_name_set_id,
+                "morph_upper_limit": values.morph_upper_limit,
+                "preset_id": values.default_preset_id,
+            },
+            entry="profile_panel",
+        )
         if not self._model_profile_request_is_current(request.expected_panel_revision):
+            self._finish_debug_operation(
+                operation_handle, "ignored", reason_code="stale_panel_request"
+            )
             return
         if self.controller is None:
+            self._finish_debug_operation(
+                operation_handle, "rejected", reason_code="controller_unavailable"
+            )
             return
         before_ids = {item.id for item in self.controller.profile_store.user_profiles}
-        values = request.values
         result = self.controller.create_model_profile_from_values(
             values.display_name,
             values.morph_name_set_id,
@@ -4533,6 +7136,11 @@ class MainFrame(wx.Frame):
         if not result.succeeded:
             self._set_model_profile_notice(self._format_model_profile_mutation_error(result))
             self._sync_model_profile_panel()
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=getattr(result, "error_code", None) or "model_profile_create_rejected",
+            )
             return
         created_ids = [
             item.id for item in result.user_profiles if item.id not in before_ids
@@ -4547,6 +7155,19 @@ class MainFrame(wx.Frame):
                 "作成結果のIDを一意に確認できませんでした。選択は変更していません。"
             )
         self._sync_model_profile_panel()
+        self._finish_debug_operation(
+            operation_handle,
+            "completed" if len(created_ids) == 1 else "failed",
+            reason_code=(
+                "model_profile_created"
+                if len(created_ids) == 1
+                else "created_profile_identity_unavailable"
+            ),
+            payload={
+                "profile_id": created_ids[0] if len(created_ids) == 1 else None,
+                "changed": len(created_ids) == 1,
+            },
+        )
 
     def _on_model_profile_update_request(
         self,
@@ -4554,14 +7175,36 @@ class MainFrame(wx.Frame):
     ) -> None:
         if not isinstance(request, ModelProfileUpdateRequest):
             return
+        values = request.values
+        operation_handle = self._begin_debug_operation(
+            "model_profile_update",
+            payload={
+                "profile_id": request.profile_id,
+                "morph_name_set_id": values.morph_name_set_id,
+                "morph_upper_limit": values.morph_upper_limit,
+                "preset_id": values.default_preset_id,
+            },
+            entry="profile_panel",
+        )
         if not self._model_profile_request_is_current(
             request.expected_panel_revision,
             expected_editor_revision=request.expected_editor_revision,
         ):
+            self._finish_debug_operation(
+                operation_handle, "ignored", reason_code="stale_panel_request"
+            )
             return
         if request.profile_id != self._selected_model_profile_id or self.controller is None:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=(
+                    "controller_unavailable"
+                    if self.controller is None
+                    else "model_profile_selection_changed"
+                ),
+            )
             return
-        values = request.values
         result = self.controller.update_model_profile_from_values(
             request.profile_id,
             values.display_name,
@@ -4573,12 +7216,23 @@ class MainFrame(wx.Frame):
         if not result.succeeded:
             self._set_model_profile_notice(self._format_model_profile_mutation_error(result))
             self._sync_model_profile_panel()
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=getattr(result, "error_code", None) or "model_profile_update_rejected",
+            )
             return
         self._selected_model_profile_id = request.profile_id
         if self.ui_state.model_profile_state.active_model_profile_id == request.profile_id:
             self._sync_profile_display_names_from_state()
         self._set_model_profile_notice("モデルプロファイルを更新しました。必要ならApplyしてください。")
         self.sync_ui_state()
+        self._finish_debug_operation(
+            operation_handle,
+            "completed",
+            reason_code="model_profile_updated",
+            payload={"profile_id": request.profile_id, "changed": True},
+        )
 
     def _on_model_profile_delete_request(
         self,
@@ -4586,23 +7240,51 @@ class MainFrame(wx.Frame):
     ) -> None:
         if not isinstance(request, ModelProfileDeleteRequest):
             return
+        operation_handle = self._begin_debug_operation(
+            "model_profile_delete",
+            payload={"profile_id": request.profile_id},
+            entry="profile_panel",
+        )
         if not self._model_profile_request_is_current(
             request.expected_panel_revision,
             expected_editor_revision=request.expected_editor_revision,
         ):
+            self._finish_debug_operation(
+                operation_handle, "ignored", reason_code="stale_panel_request"
+            )
             return
         if request.profile_id != self._selected_model_profile_id or self.controller is None:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=(
+                    "controller_unavailable"
+                    if self.controller is None
+                    else "model_profile_selection_changed"
+                ),
+            )
             return
         result = self.controller.delete_model_profile(request.profile_id)
         if not result.succeeded:
             self._set_model_profile_notice(self._format_model_profile_mutation_error(result))
             self._sync_model_profile_panel()
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=getattr(result, "error_code", None) or "model_profile_delete_rejected",
+            )
             return
         valid_ids = {item.id for item in result.user_profiles}
         active_id = self.ui_state.model_profile_state.active_model_profile_id
         self._selected_model_profile_id = active_id if active_id in valid_ids else None
         self._set_model_profile_notice("モデルプロファイルを削除しました。")
         self.sync_ui_state()
+        self._finish_debug_operation(
+            operation_handle,
+            "completed",
+            reason_code="model_profile_deleted",
+            payload={"profile_id": request.profile_id, "changed": True},
+        )
 
 
     def update_status_display(
@@ -4636,7 +7318,8 @@ class MainFrame(wx.Frame):
 
     def update_status(self, message: str):
         """[MS13-B5] UI上のステータス表示更新を一元化する共通入口"""
-        self.st_status_main.SetLabel(message)
+        if self.st_status_main.GetLabel() != message:
+            self.st_status_main.SetLabel(message)
 
     def get_status_text(self) -> str:
         """[MS13-B5] 最小限の View Accessor (将来取得が必要になった場合の整理用)"""
@@ -4668,8 +7351,11 @@ class MainFrame(wx.Frame):
         self.placeholder_container.set_preview_placeholder_text(text)
         
     def set_playback_position_sec(self, position_sec: float | None):
-        """[MS15-B3] 再生位置を waveform と Preview の両方へ通知する"""
+        """Update the waveform and Preview cursors without refreshing Info."""
         self.placeholder_container.set_playback_position_sec(position_sec)
+
+    def sync_playback_context(self) -> None:
+        """Refresh the RightPane playback context at explicit sync points."""
         self._sync_playback_context()
 
     def _sync_playback_context(self):
@@ -4678,6 +7364,7 @@ class MainFrame(wx.Frame):
         timeline = getattr(plan, "timeline", None) if plan is not None else None
         context = build_playback_info_context(
             is_playing=state.is_playing,
+            is_paused=state.is_paused,
             position_sec=state.playback_position_sec,
             timeline=timeline,
             analysis_result_valid=state.analysis_result_valid,
@@ -4698,6 +7385,12 @@ class MainFrame(wx.Frame):
 
     def reset_workspace_display(self):
         """Restore workspace-specific widgets to their initial display."""
+        self._accepted_debug_trace = None
+        self._transition_evaluation_request = None
+        self._cleanup_evaluation_request = None
+        self.right_pane.clear_transition_candidate_status()
+        self._refresh_transition_application_status()
+        self.right_pane.clear_transition_summary()
         self.info_panel.reset_workspace_display()
         self.placeholder_container.set_waveform_placeholder_text("WAVファイルが読み込まれていません")
         self.placeholder_container.set_preview_placeholder_text("未解析")
@@ -4737,21 +7430,47 @@ class MainFrame(wx.Frame):
 
     def _on_preview_selection_request(self, request: PreviewSelectionRequest):
         """Validate and commit a canonical Preview click without trusting stale wx state."""
-        if not isinstance(request, PreviewSelectionRequest) or self.ui_state.is_busy:
+        if not isinstance(request, PreviewSelectionRequest):
+            return
+        operation_handle = self._begin_debug_operation(
+            "event_selection",
+            payload={"event_index": request.base_event_index},
+            entry="preview",
+        )
+
+        def finish_selection(status: str, reason_code: str) -> None:
+            self._finish_debug_operation(
+                operation_handle,
+                status,
+                reason_code=reason_code,
+                payload={"event_index": request.base_event_index},
+            )
+
+        if self.ui_state.is_busy:
+            finish_selection("rejected", "busy")
             return
         preview_model = self.placeholder_container.pnl_preview.model
         if (
             not preview_model.is_valid
             or request.render_revision != preview_model.render_revision
             or request.base_plan_identity_digest != preview_model.base_plan_identity_digest
+            or request.final_output_binding != preview_model.final_output_binding
         ):
+            finish_selection("ignored", "stale_preview_selection")
+            return
+        if not self._matches_current_shared_final_output_binding(
+            request.final_output_binding
+        ):
+            finish_selection("ignored", "stale_output_binding")
             return
         base_input = self._build_current_base_timing_plan_input()
         if base_input is None:
+            finish_selection("rejected", "base_plan_unavailable")
             return
         try:
             current_digest = build_base_plan_identity(base_input).digest
         except Exception:
+            finish_selection("rejected", "base_plan_identity_unavailable")
             return
         valid_indices = tuple(
             region.base_event_index for region in preview_model.get_event_hit_regions()
@@ -4769,11 +7488,16 @@ class MainFrame(wx.Frame):
             valid_base_event_indices=valid_indices,
         )
         if not committed:
+            finish_selection("ignored", "selection_not_committed")
             return
         self._selected_event_notice = ""
         self.placeholder_container.set_selected_source_event_index(request.base_event_index)
         self.update_selected_event_display()
         self.right_pane.show_selected_event_tab()
+        finish_selection(
+            "completed" if request.base_event_index is not None else "noop",
+            "event_selected" if request.base_event_index is not None else "selection_cleared",
+        )
 
     def update_selected_event_display(
         self,
@@ -4786,17 +7510,63 @@ class MainFrame(wx.Frame):
         selected_digest = state.selected_base_plan_identity_digest
         if selected_index is not None and selected_digest:
             if sync_context is None:
-                sync_context = self._build_current_ui_sync_context()
-            if sync_context is not None:
+                if state.output_edit_draft_dirty:
+                    sync_context = self._current_ui_sync_context
+                else:
+                    sync_context = self._build_current_ui_sync_context()
+            effective_plan = (
+                None if sync_context is None else sync_context.effective_plan
+            )
+            base_input = None if sync_context is None else sync_context.base_input
+            if effective_plan is None:
+                cached_context = getattr(self, "_current_ui_sync_context", None)
+                cached_plan = getattr(cached_context, "effective_plan", None)
+                cached_base_input = getattr(cached_context, "base_input", None)
+                if (
+                    isinstance(cached_plan, EffectiveShapePlan)
+                    and cached_plan.base_plan_identity.digest == selected_digest
+                    and isinstance(cached_base_input, BaseTimingPlanInput)
+                ):
+                    effective_plan = cached_plan
+                    base_input = cached_base_input
+            if effective_plan is None:
+                shared_context = state.final_output_state.current_context
+                legacy_context = getattr(
+                    getattr(shared_context, "issuer_context", None),
+                    "legacy_context",
+                    None,
+                )
+                accepted_plan = getattr(
+                    legacy_context, "effective_plan_snapshot", None
+                )
+                accepted_base_input = getattr(legacy_context, "base_input", None)
+                if (
+                    isinstance(accepted_plan, EffectiveShapePlan)
+                    and accepted_plan.base_plan_identity.digest == selected_digest
+                    and isinstance(accepted_base_input, BaseTimingPlanInput)
+                ):
+                    effective_plan = accepted_plan
+                    base_input = accepted_base_input
+            if effective_plan is not None and base_input is not None:
+                shared_context = state.final_output_state.current_context
+                shared_identity = getattr(shared_context, "identity", None)
+                final_output_binding = (
+                    shared_identity.binding_digest
+                    if shared_identity is not None
+                    and self._matches_current_shared_final_output_binding(
+                        shared_identity.binding_digest
+                    )
+                    else None
+                )
                 try:
                     editor_state = build_selected_event_editor_state(
-                        sync_context.effective_plan,
+                        effective_plan,
                         selected_index,
                         expected_base_identity_digest=selected_digest,
                         editor_revision=state.selected_event_editor_revision,
-                        source_duration_frames=(
-                            sync_context.base_input.source_duration_frames
-                        ),
+                        source_duration_frames=base_input.source_duration_frames,
+                        adjustment_snapshot=state.current_adjustment_snapshot,
+                        final_output_binding=final_output_binding,
                     )
                     self.right_pane.set_selected_event_editor_state(
                         editor_state,
@@ -4812,6 +7582,71 @@ class MainFrame(wx.Frame):
         else:
             self.right_pane.clear_selected_event()
 
+    def _current_default_transition_selection(self):
+        if getattr(self, "_transition_evaluation_request", None) is not None:
+            return None
+        binding = getattr(self, "_adopted_transition_binding", None)
+        if binding is None:
+            return None
+        return resolve_default_transition_selection(binding, self.ui_state.input_mode)
+
+    def _current_default_cleanup_selection(self):
+        if (
+            getattr(self, "_transition_evaluation_request", None) is not None
+            or getattr(self, "_cleanup_evaluation_request", None) is not None
+        ):
+            return None
+        binding = getattr(self, "_adopted_cleanup_binding", None)
+        if binding is None:
+            return None
+        names = self._resolved_output_morph_names()
+        mapping = tuple(zip(SEMANTIC_VOWEL_ORDER, names))
+        profile = getattr(self.ui_state, "model_profile_state", None)
+        return resolve_default_cleanup_selection(
+            binding,
+            input_mode=self.ui_state.input_mode,
+            profile_id=getattr(profile, "active_model_profile_id", None),
+            output_mapping=mapping,
+        )
+
+    def _refresh_transition_application_status(self) -> None:
+        cleanup_request = getattr(self, "_cleanup_evaluation_request", None)
+        if cleanup_request is not None:
+            self.right_pane.set_transition_candidate_status(
+                f"自動整理：比較候補（{cleanup_request.variant}）"
+            )
+            return
+        if self._transition_evaluation_request is not None:
+            self.right_pane.set_transition_candidate_status(
+                "自動母音遷移：候補検証中"
+            )
+            return
+        selection = self._current_default_transition_selection()
+        if selection is None:
+            self.right_pane.clear_transition_candidate_status()
+            return
+        if selection.selection_kind == "transition":
+            cleanup_selection = self._current_default_cleanup_selection()
+            if cleanup_selection is not None and cleanup_selection.selection_kind == "cleanup":
+                status = "自動母音遷移：適用（採択scope）／自動キー整理：適用（曲線同一の場合のみ）"
+            else:
+                status = "自動母音遷移：適用（採択scope）"
+        else:
+            cleanup_selection = self._current_default_cleanup_selection()
+            if cleanup_selection is not None and cleanup_selection.selection_kind == "cleanup":
+                status = f"自動母音遷移：対象外（{selection.reason}）／自動キー整理：適用（曲線同一の場合のみ）"
+            else:
+                status = f"自動母音遷移：対象外（{selection.reason}）"
+        self.right_pane.set_transition_candidate_status(status)
+
+    def _bounded_candidate_enabled(self):
+        from src.core.cross_vowel_transition import TRANSITION_POLICY_V2
+        request = getattr(self, "_transition_evaluation_request", None)
+        if request is not None:
+            return request.policy.policy_id == TRANSITION_POLICY_V2
+        selection = self._current_default_transition_selection()
+        return selection is not None and selection.selection_kind == "transition"
+
     def _resolve_current_effective_plan(self, base_input: BaseTimingPlanInput):
         identity = build_base_plan_identity(base_input)
         snapshot = self.ui_state.current_adjustment_snapshot
@@ -4823,6 +7658,8 @@ class MainFrame(wx.Frame):
             )
         elif snapshot.base_plan_identity != identity:
             raise AdjustmentContractError("adjustment snapshot base identity mismatch")
+        if self._bounded_candidate_enabled():
+            return None
         return resolve_effective_shape_plan(base_input, snapshot)
 
     @staticmethod
@@ -4846,8 +7683,14 @@ class MainFrame(wx.Frame):
     ) -> bool:
         snapshot = self.ui_state.current_adjustment_snapshot
         if sync_context is None:
-            sync_context = self._build_current_ui_sync_context()
-        if snapshot is None or sync_context is None:
+            base_input = self._build_current_base_timing_plan_input()
+            if snapshot is None or base_input is None:
+                return False
+            try:
+                return snapshot.base_plan_identity == build_base_plan_identity(base_input)
+            except (AdjustmentContractError, TypeError, ValueError):
+                return False
+        if snapshot is None:
             return False
         return snapshot.base_plan_identity == sync_context.base_plan_identity
 
@@ -4892,11 +7735,23 @@ class MainFrame(wx.Frame):
 
     def _perform_adjustment_history_navigation(self, *, redo: bool) -> bool:
         state = self.ui_state
+        operation_handle = self._begin_debug_operation(
+            "adjustment_redo" if redo else "adjustment_undo",
+            payload={"history_action": "redo" if redo else "undo"},
+            entry="shortcut_or_button",
+        )
         if (
             state.is_busy
+            or self._pending_selected_event_projection is not None
             or not self._adjustment_history_matches_current_base()
             or self._selected_event_editor_has_uncommitted_input()
         ):
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=("busy" if state.is_busy else "history_unavailable"),
+                payload={"history_action": "redo" if redo else "undo"},
+            )
             return False
         self._finish_current_adjustment_gesture()
         before_persistent_projection = self._persistent_generation_projection()
@@ -4922,7 +7777,25 @@ class MainFrame(wx.Frame):
         )
         if not changed:
             self.update_action_states()
+            self._finish_debug_operation(
+                operation_handle,
+                "noop",
+                reason_code="history_unchanged",
+                payload={
+                    "history_action": "redo" if redo else "undo",
+                    "history_changed": False,
+                },
+            )
             return False
+        current_draft_base = self._build_current_base_timing_plan_input()
+        if (
+            current_draft_base is not None
+            and state.output_edit_history_state is not None
+            and not self._rebase_output_edit_draft(current_draft_base)
+        ):
+            state.output_edit_draft_error = (
+                "Undo / Redo後の編集履歴を解析イベントへ対応付けできません。"
+            )
         self._selected_event_notice = (
             "出力編集をやり直しました。"
             if redo
@@ -4935,12 +7808,22 @@ class MainFrame(wx.Frame):
             )
             self._active_preset_display_name = resolution.active_preset_display_name
         self._sync_profile_display_names_from_state()
+        self._project_output_edit_controls()
         self.sync_ui_state(adjustment_only=True)
         if (
             self.controller
             and before_persistent_projection != self._persistent_generation_projection()
         ):
             self.controller.request_settings_save()
+        self._finish_debug_operation(
+            operation_handle,
+            "completed",
+            reason_code="history_changed",
+            payload={
+                "history_action": "redo" if redo else "undo",
+                "history_changed": True,
+            },
+        )
         return True
 
     def _persistent_generation_projection(self):
@@ -4955,8 +7838,13 @@ class MainFrame(wx.Frame):
         )
 
     def _sync_profile_display_names_from_state(self) -> None:
-        profile_id = self.ui_state.model_profile_state.active_model_profile_id
-        baseline_id = self.ui_state.model_profile_state.active_profile_baseline_preset_id
+        profile_state = (
+            self.ui_state.draft_model_profile_state
+            if self.ui_state.output_edit_draft_dirty
+            else self.ui_state.model_profile_state
+        )
+        profile_id = profile_state.active_model_profile_id
+        baseline_id = profile_state.active_profile_baseline_preset_id
         if self.controller is None or profile_id is None:
             self.ui_state.active_model_profile_display_name = None
             self.ui_state.baseline_preset_display_name = None
@@ -5011,15 +7899,30 @@ class MainFrame(wx.Frame):
 
     def _on_adjustment_reset_all(self, event):
         state = self.ui_state
+        operation_handle = self._begin_debug_operation(
+            "adjustments_reset_all",
+            entry="button",
+        )
         if (
             state.is_busy
+            or self._pending_selected_event_projection is not None
             or not state.has_event_adjustments
             or not self._adjustment_history_matches_current_base()
             or self._selected_event_editor_has_uncommitted_input()
         ):
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=("busy" if state.is_busy else "reset_unavailable"),
+            )
             return
         snapshot = state.current_adjustment_snapshot
         if snapshot is None:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="adjustment_snapshot_unavailable",
+            )
             return
         self._finish_current_adjustment_gesture()
         reset_snapshot = empty_adjustment_snapshot(snapshot.base_plan_identity)
@@ -5029,155 +7932,281 @@ class MainFrame(wx.Frame):
                 snapshot.base_plan_identity.digest
             ),
         ):
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="reset_not_committed",
+            )
             return
+        if not state.output_edit_draft_dirty:
+            state.require_output_edit_apply_for_current_state()
         self._selected_event_notice = "すべての出力編集をリセットしました。"
         self.sync_ui_state(adjustment_only=True)
+        self._finish_debug_operation(
+            operation_handle,
+            "completed",
+            reason_code="adjustments_reset",
+            payload={"changed": True},
+        )
 
     def _on_selected_event_edit_request(self, request: SelectedEventEditRequest):
         state = self.ui_state
-        if not isinstance(request, SelectedEventEditRequest) or state.is_busy:
+        if not isinstance(request, SelectedEventEditRequest):
+            return
+        operation_handle = self._begin_debug_operation(
+            "selected_event_edit",
+            payload={
+                "event_index": request.base_event_index,
+                "field": request.field,
+                "after": request.value,
+            },
+            entry="selected_event_editor",
+        )
+
+        def finish_edit(status: str, reason_code: str, *, changed: bool = False, before=None) -> None:
+            self.right_pane.clear_selected_event_edit_pending()
+            payload = {
+                "event_index": request.base_event_index,
+                "field": request.field,
+                "after": request.value,
+                "changed": changed,
+            }
+            if before is not None:
+                payload["before"] = before
+            self._finish_debug_operation(
+                operation_handle,
+                status,
+                reason_code=reason_code,
+                payload=payload,
+            )
+
+        if state.is_busy:
+            finish_edit("rejected", "busy")
+            return
+        if self._pending_selected_event_projection is not None:
+            finish_edit("rejected", "draft_projection_pending")
             return
         if (
             request.base_event_index != state.selected_source_event_index
             or request.base_identity_digest
             != state.selected_base_plan_identity_digest
             or request.editor_revision != state.selected_event_editor_revision
+            or not self._matches_current_shared_final_output_binding(
+                request.final_output_binding,
+                coalescing_token=request.coalescing_token,
+            )
         ):
+            finish_edit("ignored", "stale_selected_event_edit")
             return
         base_input = self._build_current_base_timing_plan_input()
         snapshot = state.current_adjustment_snapshot
         if base_input is None or snapshot is None:
+            finish_edit("rejected", "adjustment_snapshot_unavailable")
             return
+        editor_state = getattr(self.right_pane, "_selected_editor_state", None)
+        requested_field_names = {
+            "peak_value": "requested_peak_value",
+            "start_offset_frames": "requested_start_offset_frames",
+            "end_offset_frames": "requested_end_offset_frames",
+            "hold_frames": "requested_hold_frames",
+            "softness_frames": "requested_softness_frames",
+            "slope_ratio": "requested_slope_ratio",
+            "long_vowel_mode": "requested_long_vowel_mode",
+            "manual_overlap_limit_override": "requested_manual_overlap_limit_override",
+        }
+        before_value = getattr(
+            editor_state,
+            requested_field_names.get(request.field, ""),
+            None,
+        )
+        if before_value is None:
+            current_adjustment = next(
+                (
+                    item
+                    for item in snapshot.adjustments
+                    if item.base_event_index == request.base_event_index
+                ),
+                None,
+            )
+            before_value = (
+                None
+                if current_adjustment is None
+                else getattr(current_adjustment, request.field, None)
+            )
         try:
-            requested_change = merge_selected_event_edit(snapshot, request)
-            result = apply_adjustment_update(
-                base_input,
+            adjustment_target_base_event_index = (
+                editor_state.group_tail_base_event_index
+                if editor_state is not None and request.field in GROUP_SHARED_FIELDS
+                else request.base_event_index
+            )
+            requested_change = merge_selected_event_edit(
                 snapshot,
-                requested_change,
+                request,
+                adjustment_target_base_event_index=(
+                    adjustment_target_base_event_index
+                ),
+            )
+            requested_adjustments = {
+                item.base_event_index: item for item in snapshot.adjustments
+            }
+            requested_adjustments[
+                requested_change.base_event_index
+            ] = requested_change
+            requested_snapshot = canonicalize_adjustment_snapshot(
+                snapshot.base_plan_identity,
+                requested_adjustments.values(),
+                base_peak_values=tuple(
+                    float(getattr(point, "peak_value", getattr(point, "value", 0.0)))
+                    for point in base_input.timeline
+                ),
+                closing_hold_frames=base_input.shape_parameters.closing_hold_frames,
+                closing_softness_frames=base_input.shape_parameters.closing_softness_frames,
             )
         except (AdjustmentContractError, TypeError, ValueError) as error:
             message = f"補正を適用できません: {error}"
-            self.update_selected_event_display()
             self.right_pane.set_selected_event_editor_error(
                 message
             )
+            finish_edit("rejected", "edit_contract_rejected", before=before_value)
             return
-        if result.canonical_snapshot == snapshot:
-            self.update_selected_event_display()
-            return
-        notice_parts = []
-        if result.removed_tail_override_event_indices:
-            indices = ", ".join(
-                str(index)
-                for index in result.removed_tail_override_event_indices
-            )
-            notice_parts.append(
-                f"group変更によりEvent {indices}の末尾補正を解除しました。"
-            )
-        if result.removed_slope_override_event_indices:
-            indices = ", ".join(
-                str(index)
-                for index in result.removed_slope_override_event_indices
-            )
-            notice_parts.append(
-                "閉口スムーズが反映されなくなったため、"
-                f"Event {indices}の閉口傾斜比を解除しました。"
-            )
-        notice_parts.append("出力編集はPreviewとVMD保存へ反映されます。")
         coalesce_key = None
         if request.coalescing_token is not None:
             try:
                 coalesce_key = self._build_adjustment_coalescing_key(
                     base_identity_digest=request.base_identity_digest,
-                    base_event_index=request.base_event_index,
+                    base_event_index=adjustment_target_base_event_index,
                     field=request.field,
                     coalescing_token=request.coalescing_token,
                 )
             except (AdjustmentContractError, TypeError, ValueError):
+                finish_edit("rejected", "edit_coalescing_invalid", before=before_value)
                 return
-        if not state.commit_adjustment_snapshot(
-            result.canonical_snapshot,
-            expected_base_plan_identity_digest=request.base_identity_digest,
-            coalesce_key=coalesce_key,
-        ):
-            return
-        self._selected_event_notice = "\n".join(notice_parts)
-        self.sync_ui_state(
-            effective_plan_hint=result.effective_plan,
-            adjustment_only=True,
+        bounded_candidate_enabled = self._bounded_candidate_enabled()
+        started = self._queue_selected_event_projection(
+            purpose="selected_event_edit",
+            base_input=base_input,
+            snapshot=snapshot,
+            compute=lambda: apply_adjustment_update(
+                base_input,
+                snapshot,
+                requested_change,
+                defer_automatic_zero_conflicts=bounded_candidate_enabled,
+            ),
+            operation_handle=operation_handle,
+            payload={
+                "event_index": request.base_event_index,
+                "field": request.field,
+                "before_value": before_value,
+                "after_value": request.value,
+                "snapshot": snapshot,
+                "requested_snapshot": requested_snapshot,
+                "timing_plan": state.current_timing_plan,
+                "editor_revision": state.selected_event_editor_revision,
+                "coalescing_key": coalesce_key,
+            },
         )
+        if not started:
+            finish_edit("rejected", "draft_projection_pending", before=before_value)
 
     def _on_selected_event_reset_request(
         self,
         base_event_index: int,
         base_identity_digest: str,
         editor_revision: int,
+        final_output_binding: str | None = None,
     ):
         state = self.ui_state
+        operation_handle = self._begin_debug_operation(
+            "selected_event_reset",
+            payload={"event_index": base_event_index},
+            entry="selected_event_editor",
+        )
+        if self._pending_selected_event_projection is not None:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="draft_projection_pending",
+            )
+            return
         if (
             state.is_busy
             or base_event_index != state.selected_source_event_index
             or base_identity_digest != state.selected_base_plan_identity_digest
             or editor_revision != state.selected_event_editor_revision
+            or not self._matches_current_shared_final_output_binding(
+                final_output_binding
+            )
         ):
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=("busy" if state.is_busy else "stale_selected_event_reset"),
+            )
             return
+        self._finish_current_adjustment_gesture()
         base_input = self._build_current_base_timing_plan_input()
         snapshot = state.current_adjustment_snapshot
         if base_input is None or snapshot is None:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="adjustment_snapshot_unavailable",
+            )
             return
-        self._finish_current_adjustment_gesture()
-        try:
-            result = apply_adjustment_update(
+        bounded_candidate_enabled = self._bounded_candidate_enabled()
+        started = self._queue_selected_event_projection(
+            purpose="selected_event_reset",
+            base_input=base_input,
+            snapshot=snapshot,
+            compute=lambda: apply_adjustment_update(
                 base_input,
                 snapshot,
                 reset_selected_event_adjustment(snapshot, base_event_index),
-            )
-        except (AdjustmentContractError, TypeError, ValueError) as error:
-            message = f"補正をリセットできません: {error}"
-            self.update_selected_event_display()
-            self.right_pane.set_selected_event_editor_error(
-                message
-            )
-            return
-        if result.canonical_snapshot == snapshot:
-            return
-        if not state.commit_adjustment_snapshot(
-            result.canonical_snapshot,
-            expected_base_plan_identity_digest=base_identity_digest,
-        ):
-            return
-        notices = ["選択イベントの出力編集をリセットしました。"]
-        if result.removed_tail_override_event_indices:
-            notices.append("group変更により他イベントの末尾補正も解除しました。")
-        if state.has_event_adjustments:
-            notices.append(
-                "他イベントの出力編集はPreviewとVMD保存へ反映されます。"
-            )
-        self._selected_event_notice = "\n".join(notices)
-        self.sync_ui_state(
-            effective_plan_hint=result.effective_plan,
-            adjustment_only=True,
+                defer_automatic_zero_conflicts=bounded_candidate_enabled,
+            ),
+            operation_handle=operation_handle,
+            payload={
+                "event_index": base_event_index,
+                "snapshot": snapshot,
+                "timing_plan": state.current_timing_plan,
+                "editor_revision": state.selected_event_editor_revision,
+            },
         )
+        if not started:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="draft_projection_pending",
+            )
         
     def get_morph_upper_limit(self) -> float:
         return self.param_panel.get_morph_upper_limit()
         
     def set_morph_upper_limit(self, val: float):
+        changed = self.ui_state.resolved_morph_upper_limit != val
         self.param_panel.set_morph_upper_limit(val)
         if not self._projection_guard:
             self.ui_state.resolved_morph_upper_limit = val
+            if changed:
+                self.ui_state.final_output_state.invalidate_context()
         
     def get_closing_hold_frames(self) -> int:
         return self.param_panel.get_closing_hold_frames()
         
     def set_closing_hold_frames(self, val: int):
+        changed = self.param_panel.get_closing_hold_frames() != val
         self.param_panel.set_closing_hold_frames(val)
+        if changed:
+            self.ui_state.final_output_state.invalidate_context()
         
     def get_closing_softness_frames(self) -> int:
         return self.param_panel.get_closing_softness_frames()
         
     def set_closing_softness_frames(self, val: int):
+        changed = self.param_panel.get_closing_softness_frames() != val
         self.param_panel.set_closing_softness_frames(val)
+        if changed:
+            self.ui_state.final_output_state.invalidate_context()
 
     def apply_generation_state(
         self,
@@ -5187,6 +8216,8 @@ class MainFrame(wx.Frame):
     ) -> bool:
         if not isinstance(generation_state, GenerationState):
             return False
+        if generation_state != self.ui_state.generation_state:
+            self.ui_state.final_output_state.invalidate_context()
         self.ui_state.generation_state = generation_state
         self._active_preset_display_name = active_preset_display_name
         self._project_generation_controls()
@@ -5234,6 +8265,11 @@ class MainFrame(wx.Frame):
             finally:
                 self._projection_guard = False
             self.ui_state.generation_state = candidate_generation
+            self.ui_state.resolved_morph_upper_limit = (
+                self.ui_state.current_output_edit_state.morph_upper_limit
+                if self.ui_state.current_output_edit_state is not None
+                else self.ui_state.resolved_morph_upper_limit
+            )
             self.ui_state.model_profile_state = resolved.model_profile_state
             self.ui_state.active_model_profile_display_name = (
                 resolved.active_profile_display_name
@@ -5258,11 +8294,13 @@ class MainFrame(wx.Frame):
                 if snapshot is None:
                     snapshot = empty_adjustment_snapshot(build_base_plan_identity(base_input))
                 try:
-                    sync_context = build_ui_sync_context(base_input, snapshot)
+                    sync_context = build_ui_sync_context(base_input, snapshot,
+                        defer_resolution=self._bounded_candidate_enabled())
                     candidate_output = OutputEditState(
                         base_plan_identity=sync_context.base_plan_identity,
                         adjustment_snapshot=snapshot,
                         generation_state=candidate_generation,
+                        morph_upper_limit=resolved.morph_upper_limit,
                     )
                 except (AdjustmentContractError, TypeError, ValueError):
                     return False
@@ -5283,6 +8321,13 @@ class MainFrame(wx.Frame):
                 resolved.baseline_preset_display_name
             )
             self._active_preset_display_name = resolved.active_preset_display_name
+            # This path is reached only by an explicit, clean profile action.
+            # Keep its prior context in history, but adopt the success as the
+            # new applied baseline.
+            self.ui_state.generation_state = candidate_generation
+            self.ui_state.model_profile_state = resolved.model_profile_state
+            if self.ui_state.analysis_result_valid:
+                self.ui_state.initialize_output_edit_draft_baseline()
             self._project_generation_controls()
             self.sync_ui_state(adjustment_only=True)
         if request_save and self.controller:
@@ -5290,22 +8335,101 @@ class MainFrame(wx.Frame):
         return True
 
     def apply_model_profile(self, profile_id: str) -> bool:
+        operation_handle = self._begin_debug_operation(
+            "model_profile_apply",
+            payload={"profile_id": profile_id},
+            entry="profile_panel",
+        )
+        if self._reject_unapplied_output_edit():
+            self._finish_debug_operation(
+                operation_handle, "rejected", reason_code="unapplied_output_edits"
+            )
+            return False
         if self.controller is None or self.ui_state.is_busy:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=("busy" if self.ui_state.is_busy else "controller_unavailable"),
+            )
             return False
         resolution = self.controller.resolve_model_profile_apply(profile_id)
-        return self._commit_resolved_model_profile(resolution)
+        changed = self._commit_resolved_model_profile(resolution)
+        self._finish_debug_operation(
+            operation_handle,
+            "completed" if changed else "rejected",
+            reason_code="model_profile_applied" if changed else "model_profile_apply_rejected",
+            payload={"profile_id": profile_id, "changed": changed},
+        )
+        return changed
 
     def apply_no_model_profile(self) -> bool:
+        operation_handle = self._begin_debug_operation(
+            "model_profile_clear",
+            payload={
+                "profile_id": self.ui_state.model_profile_state.active_model_profile_id
+            },
+            entry="profile_panel",
+        )
+        if self._reject_unapplied_output_edit():
+            self._finish_debug_operation(
+                operation_handle, "rejected", reason_code="unapplied_output_edits"
+            )
+            return False
         if self.controller is None or self.ui_state.is_busy:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=("busy" if self.ui_state.is_busy else "controller_unavailable"),
+            )
             return False
         resolution = self.controller.resolve_no_profile()
-        return self._commit_resolved_model_profile(resolution)
+        changed = self._commit_resolved_model_profile(resolution)
+        self._finish_debug_operation(
+            operation_handle,
+            "completed" if changed else "rejected",
+            reason_code="model_profile_cleared" if changed else "model_profile_clear_rejected",
+            payload={"changed": changed},
+        )
+        return changed
 
     def apply_active_model_profile_preset(self, preset_id: str) -> bool:
+        operation_handle = self._begin_debug_operation(
+            "model_profile_preset_apply",
+            payload={
+                "profile_id": self.ui_state.model_profile_state.active_model_profile_id,
+                "preset_id": preset_id,
+            },
+            entry="profile_panel",
+        )
+        if self._reject_unapplied_output_edit():
+            self._finish_debug_operation(
+                operation_handle, "rejected", reason_code="unapplied_output_edits"
+            )
+            return False
         if self.controller is None or self.ui_state.is_busy:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=("busy" if self.ui_state.is_busy else "controller_unavailable"),
+            )
             return False
         resolution = self.controller.resolve_active_profile_preset_apply(preset_id)
-        return self._commit_resolved_model_profile(resolution)
+        changed = self._commit_resolved_model_profile(resolution)
+        self._finish_debug_operation(
+            operation_handle,
+            "completed" if changed else "rejected",
+            reason_code=(
+                "model_profile_preset_applied"
+                if changed
+                else "model_profile_preset_apply_rejected"
+            ),
+            payload={
+                "profile_id": self.ui_state.model_profile_state.active_model_profile_id,
+                "preset_id": preset_id,
+                "changed": changed,
+            },
+        )
+        return changed
 
     def _project_generation_controls(self) -> None:
         settings = self.ui_state.generation_state.generation_settings
@@ -5316,8 +8440,40 @@ class MainFrame(wx.Frame):
         finally:
             self._projection_guard = False
 
+    def _project_output_edit_controls(self) -> None:
+        state = self.ui_state
+        output_state = state.current_output_edit_state
+        settings = (
+            state.generation_state.generation_settings
+            if output_state is None
+            else output_state.generation_state.generation_settings
+        )
+        upper_limit = (
+            state.resolved_morph_upper_limit
+            if output_state is None
+            else output_state.morph_upper_limit
+        )
+        self._projection_guard = True
+        try:
+            if self.param_panel.get_morph_upper_limit() != upper_limit:
+                self.set_morph_upper_limit(upper_limit)
+            if self.param_panel.get_closing_hold_frames() != settings.closing_hold_frames:
+                self.set_closing_hold_frames(settings.closing_hold_frames)
+            if (
+                self.param_panel.get_closing_softness_frames()
+                != settings.closing_softness_frames
+            ):
+                self.set_closing_softness_frames(settings.closing_softness_frames)
+        finally:
+            self._projection_guard = False
+
     def _generation_settings_from_controls(self) -> GenerationSettings:
-        current = self.ui_state.generation_state.generation_settings
+        output_state = self.ui_state.current_output_edit_state
+        current = (
+            output_state.generation_state.generation_settings
+            if self.ui_state.output_edit_draft_dirty and output_state is not None
+            else self.ui_state.generation_state.generation_settings
+        )
         return GenerationSettings(
             closing_hold_frames=self.get_closing_hold_frames(),
             closing_softness_frames=self.get_closing_softness_frames(),
@@ -5332,19 +8488,35 @@ class MainFrame(wx.Frame):
         active_preset_display_name: str | None | object = _UNSET,
         request_save: bool = True,
     ) -> bool:
-        if self.ui_state.is_busy or not isinstance(generation_settings, GenerationSettings):
+        if (
+            self.ui_state.is_busy
+            or self._pending_selected_event_projection is not None
+            or not isinstance(generation_settings, GenerationSettings)
+        ):
             return False
+        current_output = self.ui_state.current_output_edit_state
+        current = (
+            current_output.generation_state
+            if self.ui_state.output_edit_draft_dirty and current_output is not None
+            else self.ui_state.generation_state
+        )
         debug_payload = {
+            "operation_kind": (
+                "preset_apply"
+                if active_preset_id is not _UNSET
+                else "generation_settings"
+            ),
             "closing_hold_frames": generation_settings.closing_hold_frames,
             "closing_softness_frames": generation_settings.closing_softness_frames,
             "long_vowel_mode": generation_settings.long_vowel_mode,
         }
+        if active_preset_id is not _UNSET and active_preset_id is not None:
+            debug_payload["preset_id"] = active_preset_id
         self.record_debug_action(
             "generation_settings_request",
             payload=debug_payload,
             status="started",
         )
-        current = self.ui_state.generation_state
         if generation_settings == current.generation_settings:
             if active_preset_id is _UNSET or active_preset_id == current.active_preset_id:
                 self.record_debug_action(
@@ -5366,11 +8538,19 @@ class MainFrame(wx.Frame):
         )
         try:
             direct_edit_guard = validate_active_profile_direct_edit(
-                current_model_profile_state=self.ui_state.model_profile_state,
+                current_model_profile_state=self.ui_state.draft_model_profile_state,
                 current_generation_settings=current.generation_settings,
                 candidate_generation_settings=generation_settings,
-                current_morph_upper_limit=self.ui_state.resolved_morph_upper_limit,
-                candidate_morph_upper_limit=self.ui_state.resolved_morph_upper_limit,
+                current_morph_upper_limit=(
+                    current_output.morph_upper_limit
+                    if current_output is not None
+                    else self.ui_state.resolved_morph_upper_limit
+                ),
+                candidate_morph_upper_limit=(
+                    current_output.morph_upper_limit
+                    if current_output is not None
+                    else self.ui_state.resolved_morph_upper_limit
+                ),
             )
         except (TypeError, ValueError):
             self._project_generation_controls()
@@ -5388,6 +8568,88 @@ class MainFrame(wx.Frame):
                 status="rejected",
             )
             return False
+        state = self.ui_state
+        if state.output_edit_draft_dirty and active_preset_id is not _UNSET:
+            self.right_pane.set_info_text(
+                "先に変更を適用するか、Undo / Redoで適用済みの内容へ戻してください。"
+            )
+            self.record_debug_action(
+                "generation_settings_rejected",
+                payload={"reason": "unapplied_output_edits"},
+                status="rejected",
+            )
+            return False
+        if (
+            active_preset_id is _UNSET
+            and state.analysis_result_valid
+            and not state.analysis_pending_rebuild
+            and state.current_timing_plan is not None
+        ):
+            if state.output_edit_draft_baseline is None:
+                state.initialize_output_edit_draft_baseline()
+            draft_output = state.current_output_edit_state
+            if draft_output is None:
+                self.record_debug_action(
+                    "generation_settings_rejected",
+                    payload={"reason": "output_edit_history_unavailable"},
+                    status="rejected",
+                )
+                return False
+            base_input = self._build_current_base_timing_plan_input()
+            if base_input is None:
+                state.output_edit_apply_status = "現在の解析結果を編集表示へ反映できません。"
+                self._project_output_edit_controls()
+                self.sync_ui_state(adjustment_only=True)
+                return False
+            history_before_draft = state.output_edit_history_state
+            try:
+                draft_base = BaseTimingPlanInput(
+                    timeline=base_input.timeline,
+                    observations=base_input.observations,
+                    source_duration_frames=base_input.source_duration_frames,
+                    shape_parameters=ShapeParameters(
+                        closing_hold_frames=generation_settings.closing_hold_frames,
+                        closing_softness_frames=generation_settings.closing_softness_frames,
+                        long_vowel_mode=generation_settings.long_vowel_mode,
+                    ),
+                )
+                if not self._rebase_output_edit_draft(draft_base):
+                    raise AdjustmentContractError("draft history could not be rebased")
+                rebased_output = state.current_output_edit_state
+                if rebased_output is None:
+                    raise AdjustmentContractError("draft history is unavailable")
+                candidate_output = OutputEditState(
+                    base_plan_identity=rebased_output.base_plan_identity,
+                    adjustment_snapshot=rebased_output.adjustment_snapshot,
+                    generation_state=candidate_generation,
+                    morph_upper_limit=rebased_output.morph_upper_limit,
+                )
+                if not state.commit_output_edit_state(
+                    candidate_output,
+                    model_profile_state=state.draft_model_profile_state,
+                ):
+                    raise AdjustmentContractError("draft history rejected the edit")
+            except (AdjustmentContractError, TypeError, ValueError):
+                state.output_edit_history_state = history_before_draft
+                state._sync_legacy_adjustment_history()
+                state.output_edit_apply_status = "設定を編集表示へ反映できませんでした。"
+                self._project_output_edit_controls()
+                self.record_debug_action(
+                    "generation_settings_rejected",
+                    payload={"reason": "draft_projection_failed"},
+                    status="rejected",
+                )
+                self.sync_ui_state(adjustment_only=True)
+                return False
+            state.mark_output_edit_draft_changed()
+            self.sync_ui_state(adjustment_only=True)
+            self.record_debug_action(
+                "generation_settings_drafted",
+                payload=debug_payload,
+                status="accepted",
+            )
+            return True
+        state.clear_output_edit_draft()
         base_input = self._build_current_base_timing_plan_input()
         sync_context = None
         effective_plan = None
@@ -5407,16 +8669,19 @@ class MainFrame(wx.Frame):
                 ),
             )
             try:
-                effective_plan = resolve_effective_shape_plan(candidate_base, snapshot)
+                effective_plan = (None if self._bounded_candidate_enabled() else
+                                  resolve_effective_shape_plan(candidate_base, snapshot))
                 sync_context = build_ui_sync_context(
                     candidate_base,
                     snapshot,
                     effective_plan_hint=effective_plan,
+                    defer_resolution=self._bounded_candidate_enabled(),
                 )
                 candidate_output = OutputEditState(
                     base_plan_identity=sync_context.base_plan_identity,
                     adjustment_snapshot=snapshot,
                     generation_state=candidate_generation,
+                    morph_upper_limit=self.ui_state.resolved_morph_upper_limit,
                 )
             except (AdjustmentContractError, TypeError, ValueError):
                 self._project_generation_controls()
@@ -5451,6 +8716,7 @@ class MainFrame(wx.Frame):
                 )
             )
             self._project_generation_controls()
+            self.ui_state.initialize_output_edit_draft_baseline()
             self.sync_ui_state(
                 effective_plan_hint=effective_plan,
                 adjustment_only=True,
@@ -5498,14 +8764,22 @@ class MainFrame(wx.Frame):
             message="VMDファイルの保存先を指定してください",
             defaultDir=default_dir,
             wildcard="VMD files (*.vmd)|*.vmd",
-            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT
+            style=wx.FD_SAVE
         ) as dialog:
             if dialog.ShowModal() == wx.ID_CANCEL:
                 return None
             path = dialog.GetPath()
-            if not path.endswith('.vmd'):
+            if Path(path).suffix.lower() != ".vmd":
                 path += '.vmd'
             return path
+
+    def confirm_vmd_overwrite(self, path: str) -> bool:
+        return wx.MessageBox(
+            f"既存のVMDファイルを置き換えますか？\n\n{path}",
+            "VMD上書きの確認",
+            wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
+            self,
+        ) == wx.YES
 
     def confirm_vmd_save_warnings(
         self,
@@ -5555,6 +8829,24 @@ class MainFrame(wx.Frame):
             if result != wx.YES:
                 return None
         return path
+
+    def show_mmd_wav_export_completed(self, output_path: str | os.PathLike[str]) -> None:
+        absolute_path = Path(os.path.abspath(os.fspath(output_path)))
+        message = (
+            "MMD用WAVを出力しました。\n\n"
+            f"ファイル名: {absolute_path.name}\n"
+            f"フルパス: {absolute_path}"
+        )
+        dialog = wx.MessageDialog(
+            self,
+            message,
+            "MMD用WAV出力完了",
+            wx.OK | wx.ICON_INFORMATION,
+        )
+        try:
+            dialog.ShowModal()
+        finally:
+            dialog.Destroy()
 
     def show_diagnostic_report_save_dialog_and_get_path(
         self,
@@ -5661,7 +8953,47 @@ class MainFrame(wx.Frame):
     def set_closing_softness_frames(self, val: int):
         self.param_panel.set_closing_softness_frames(val)
 
-    def _on_close(self, event: wx.Event):
+    def _on_menu_exit(self, _event: wx.CommandEvent) -> None:
+        """Route the File menu command through wx's close-event lifecycle."""
+        self.Close()
+
+    def _on_close(self, event: wx.CloseEvent):
+        operation_handle = self._pending_exit_operation_handle
+        if operation_handle is None:
+            operation_handle = self._begin_debug_operation(
+                "application_exit",
+                entry="window_close",
+            )
+
+        def finish_close_attempt(status: str, reason_code: str) -> None:
+            self._finish_debug_operation(
+                operation_handle,
+                status,
+                reason_code=reason_code,
+            )
+            self._pending_exit_operation_handle = None
+            if self.controller:
+                self.controller.set_pending_exit_operation(None)
+
+        if self.controller and self.controller.verified_vmd_save_may_be_active:
+            if self.controller._verified_vmd_close_pending:
+                event.Veto()
+                return
+            res = wx.MessageBox(
+                "検証済みVMDを保存中です。キャンセルまたは確定完了まで待って終了しますか？",
+                "終了の確認",
+                wx.YES_NO | wx.NO_DEFAULT | wx.ICON_QUESTION,
+                self,
+            )
+            if res != wx.YES:
+                event.Veto()
+                finish_close_attempt("cancelled", "close_confirmation_declined")
+                return
+            event.Veto()
+            self._pending_exit_operation_handle = operation_handle
+            self.controller.set_pending_exit_operation(operation_handle)
+            self.controller.request_close_verified_vmd_save()
+            return
         if self.controller and self.controller.delivery_may_be_active:
             if self.controller.delivery_close_pending:
                 event.Veto()
@@ -5675,12 +9007,19 @@ class MainFrame(wx.Frame):
                 )
                 if res != wx.YES:
                     event.Veto()
+                    finish_close_attempt("cancelled", "close_confirmation_declined")
                     return
                 event.Veto()
+                self._pending_exit_operation_handle = operation_handle
+                self.controller.set_pending_exit_operation(operation_handle)
                 self.controller.request_close_delivery()
                 return
             event.Veto()
-            self.controller.request_exit()
+            self.controller.set_pending_exit_operation(operation_handle)
+            accepted = self.controller.request_exit()
+            if not accepted:
+                self._pending_exit_operation_handle = None
+                self.controller.set_pending_exit_operation(None)
             return
 
         if getattr(self, 'ui_state', None) and self.ui_state.is_busy:
@@ -5693,6 +9032,7 @@ class MainFrame(wx.Frame):
                 )
                 if res == wx.NO:
                     event.Veto()
+                    finish_close_attempt("cancelled", "close_confirmation_declined")
                     return
                 if self.controller:
                     self.controller.request_cancel_audio_worker()
@@ -5705,6 +9045,7 @@ class MainFrame(wx.Frame):
                 )
                 if res == wx.NO:
                     event.Veto()
+                    finish_close_attempt("cancelled", "close_confirmation_declined")
                     return
             else:
                 res = wx.MessageBox(
@@ -5715,12 +9056,38 @@ class MainFrame(wx.Frame):
                 )
                 if res == wx.NO:
                     event.Veto()
+                    finish_close_attempt("cancelled", "close_confirmation_declined")
                     return
                 self._cancel_requested = True
-                
+
+        if self.controller:
+            self.controller.set_pending_exit_operation(operation_handle)
+            accepted = self.controller.request_exit()
+            if not accepted:
+                event.Veto()
+                self._pending_exit_operation_handle = None
+                self.controller.set_pending_exit_operation(None)
+        else:
+            self.prepare_for_confirmed_exit()
+            self.Destroy()
+
+    def prepare_for_confirmed_exit(self) -> None:
+        if self._exit_prepared:
+            return
+        self._exit_prepared = True
+        self.stop_output_edit_progress()
+        self.right_pane.prepare_for_shutdown()
+        active_job_id = self._active_analysis_job_id
+        if self._analysis_info_in_progress or self._current_job_id is not None:
             self._current_job_id = None
             self._cleanup_analysis_job()
-
+        if active_job_id is not None:
+            self._finish_analysis_operation(
+                active_job_id,
+                "cancelled",
+                reason_code="application_exit",
+            )
+            self._complete_analysis_terminal()
         if self._active_debug_trace is not None:
             active_trace = self._active_debug_trace
             self._active_debug_trace = None
@@ -5729,13 +9096,11 @@ class MainFrame(wx.Frame):
                 status="cancelled",
                 reason_code="application_exit",
             )
+        self._final_output_sync_coordinator.close()
+        self._output_edit_draft_projection_coordinator.close()
+        self.ui_state.final_output_state.invalidate(reason="application_shutdown")
         self._shutdown_debug_store()
         self.close_about_dialog()
-
-        if self.controller:
-            self.controller.request_exit()
-        else:
-            self.Destroy()
 
     # --- UI Event Handlers ([MS13-B5] UI イベントを Action Sink へ流す) ---
     # --- メニューイベントハンドラはボタン側と同じ_openメソッドを呼ぶため削除 ---
@@ -5839,7 +9204,12 @@ class MainFrame(wx.Frame):
         
     def _open_audio_file(self, quiet_path: str = None):
         """ [MS17-B6] 音声ファイルを開き、Controllerへ処理を委譲する """
+        operation_handle = None
         if quiet_path is None:
+            operation_handle = self._begin_debug_operation(
+                "audio_input_open",
+                entry="file_dialog",
+            )
             dialog_dir = self.ui_state.last_audio_dialog_dir or self.ui_state.last_wav_dialog_dir or ""
             with wx.FileDialog(
                 self,
@@ -5849,18 +9219,48 @@ class MainFrame(wx.Frame):
                 style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST
             ) as file_dialog:
                 if file_dialog.ShowModal() == wx.ID_CANCEL:
+                    self._finish_debug_operation(
+                        operation_handle,
+                        "cancelled",
+                        reason_code="file_dialog_cancelled",
+                    )
                     return
                 path = file_dialog.GetPath()
         else:
             path = quiet_path
 
         if not path:
+            self._finish_debug_operation(
+                operation_handle,
+                "noop",
+                reason_code="empty_path",
+            )
             return
             
         if self.controller:
-            self.controller.request_open_audio_file(path)
+            if operation_handle is None:
+                operation_handle = self._begin_debug_operation(
+                    "audio_input_open",
+                    payload={"file_basename": os.path.basename(path)},
+                    entry="recent_file",
+                )
+            self.controller.request_open_audio_file(
+                path,
+                _operation_handle=operation_handle,
+                _entry="recent_file" if quiet_path is not None else "file_dialog",
+            )
+        else:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="controller_unavailable",
+            )
     def _open_text_file(self, quiet_path: str = None, auto_load_counterpart: bool = True):
         """ [MS14-B3] TEXTファイルを開き、処理してGUIに反映する """
+        operation_handle = self._begin_debug_operation(
+            "text_input_open",
+            entry="recent_file" if quiet_path is not None else "file_dialog",
+        )
         if quiet_path is None:
             dialog_dir = self.ui_state.last_text_dialog_dir or ""
             with wx.FileDialog(
@@ -5871,6 +9271,11 @@ class MainFrame(wx.Frame):
                 style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST
             ) as file_dialog:
                 if file_dialog.ShowModal() == wx.ID_CANCEL:
+                    self._finish_debug_operation(
+                        operation_handle,
+                        "cancelled",
+                        reason_code="file_dialog_cancelled",
+                    )
                     return
                 path = file_dialog.GetPath()
                 self.ui_state.last_text_dialog_dir = file_dialog.GetDirectory()
@@ -5879,14 +9284,29 @@ class MainFrame(wx.Frame):
 
         # 妥当性確認
         if not path:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="empty_path",
+            )
             return
         if not os.path.exists(path):
             if not quiet_path:
                 wx.MessageBox("指定されたファイルが見つかりません。", "エラー", wx.OK | wx.ICON_ERROR)
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="input_file_missing",
+            )
             return
         if os.path.isdir(path):
             if not quiet_path:
                 wx.MessageBox("ファイルではなくディレクトリが選択されました。", "エラー", wx.OK | wx.ICON_ERROR)
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="input_not_file",
+            )
             return
 
         # 読込ループ (想定外例外、UnicodeDecodeErrorを捕捉)
@@ -5904,6 +9324,11 @@ class MainFrame(wx.Frame):
         except Exception as e:
             if not quiet_path:
                 wx.MessageBox(f"テキストの読み込み処理でエラーが発生しました。\n{e}", "読込エラー", wx.OK | wx.ICON_ERROR)
+            self._finish_debug_operation(
+                operation_handle,
+                "failed",
+                reason_code="text_read_failed",
+            )
             return
 
         # 変換
@@ -5914,10 +9339,20 @@ class MainFrame(wx.Frame):
         except TextProcessingError as e:
             if not quiet_path:
                 wx.MessageBox(f"テキストの変換処理でエラーが発生しました。\n{e}", "変換エラー", wx.OK | wx.ICON_ERROR)
+            self._finish_debug_operation(
+                operation_handle,
+                "failed",
+                reason_code="text_processing_failed",
+            )
             return
         except Exception as e:
             if not quiet_path:
                 wx.MessageBox(f"想定外の変換エラーが発生しました。\n{e}", "変換エラー", wx.OK | wx.ICON_ERROR)
+            self._finish_debug_operation(
+                operation_handle,
+                "failed",
+                reason_code="text_processing_failed",
+            )
             return
 
         # State 更新
@@ -5953,6 +9388,17 @@ class MainFrame(wx.Frame):
         if self.ui_state.analysis_start_ready:
             self.ui_state.mark_ready_for_analysis()
         self.sync_ui_state()
+        self._finish_debug_operation(
+            operation_handle,
+            "completed",
+            reason_code="text_input_loaded",
+            payload={
+                "file_basename": os.path.basename(path),
+                "changed": True,
+                "text_length": len(clean_text),
+                "vowel_length": len(vowel),
+            },
+        )
 
         # Counterpart auto load
         if auto_load_counterpart:
@@ -5963,7 +9409,11 @@ class MainFrame(wx.Frame):
                 audio_path = str(dir_path / (stem + ext))
                 if os.path.exists(audio_path):
                     if self.controller:
-                        self.controller.request_open_audio_file(audio_path)
+                        self.controller.request_open_audio_file(
+                            audio_path,
+                            _source="system",
+                            _entry="text_counterpart",
+                        )
                     break
 
     def show_audio_open_dialog(self) -> str | None:
@@ -5991,7 +9441,22 @@ class MainFrame(wx.Frame):
         return hiragana, vowel
 
     def _on_transcription_apply(self, event):
+        operation_handle = self._begin_debug_operation(
+            "transcription_apply",
+            payload={"text_length": len(self.info_panel.get_text_preview())},
+            entry="button",
+        )
+        if self._reject_unapplied_output_edit():
+            self._finish_debug_operation(
+                operation_handle, "rejected", reason_code="unapplied_output_edits"
+            )
+            return
         if self.ui_state.input_mode != INPUT_MODE_VOICE_ONLY:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="voice_only_mode_required",
+            )
             return
         edited_text = self.info_panel.get_text_preview()
         try:
@@ -5999,12 +9464,23 @@ class MainFrame(wx.Frame):
             self._update_voice_only_text_previews(clean_text)
         except TextProcessingError as e:
             wx.MessageBox(f"書き起こしテキストの変換処理でエラーが発生しました。\n{e}", "変換エラー", wx.OK | wx.ICON_ERROR)
+            self._finish_debug_operation(
+                operation_handle,
+                "failed",
+                reason_code="transcription_validation_failed",
+            )
             return
         except Exception as e:
             wx.MessageBox(f"想定外の変換エラーが発生しました。\n{e}", "変換エラー", wx.OK | wx.ICON_ERROR)
+            self._finish_debug_operation(
+                operation_handle,
+                "failed",
+                reason_code="transcription_processing_failed",
+            )
             return
 
-        if clean_text != self.ui_state.transcription_text:
+        changed = clean_text != self.ui_state.transcription_text
+        if changed:
             self.ui_state.apply_transcription_edit(clean_text)
             self.placeholder_container.set_preview_placeholder_text(
                 "書き起こしが編集されました。\n再解析が必要です。"
@@ -6012,20 +9488,46 @@ class MainFrame(wx.Frame):
         else:
             self.ui_state.transcription_edit_dirty = False
         self.sync_ui_state()
+        self._finish_debug_operation(
+            operation_handle,
+            "completed" if changed else "noop",
+            reason_code="transcription_applied" if changed else "no_change",
+            payload={"changed": changed, "text_length": len(clean_text)},
+        )
 
     def _on_transcription_revert(self, event):
+        operation_handle = self._begin_debug_operation(
+            "transcription_revert",
+            entry="button",
+        )
         if self.ui_state.input_mode != INPUT_MODE_VOICE_ONLY:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="voice_only_mode_required",
+            )
             return
         original_text = self.ui_state.transcription_original_text
         if not original_text:
+            self._finish_debug_operation(
+                operation_handle,
+                "noop",
+                reason_code="original_transcription_unavailable",
+            )
             return
         try:
             self._update_voice_only_text_previews(original_text)
         except Exception as e:
             wx.MessageBox(f"書き起こしテキストの復元に失敗しました。\n{e}", "変換エラー", wx.OK | wx.ICON_ERROR)
+            self._finish_debug_operation(
+                operation_handle,
+                "failed",
+                reason_code="transcription_revert_failed",
+            )
             return
 
-        if self.ui_state.transcription_text != original_text:
+        changed = self.ui_state.transcription_text != original_text
+        if changed:
             self.ui_state.revert_transcription_edit()
             self.placeholder_container.set_preview_placeholder_text(
                 "書き起こしを元に戻しました。\n再解析が必要です。"
@@ -6033,6 +9535,12 @@ class MainFrame(wx.Frame):
         else:
             self.ui_state.transcription_edit_dirty = False
         self.sync_ui_state()
+        self._finish_debug_operation(
+            operation_handle,
+            "completed" if changed else "noop",
+            reason_code="transcription_reverted" if changed else "no_change",
+            payload={"changed": changed, "text_length": len(original_text)},
+        )
 
     def _on_btn_process(self, event):
         self._run_analysis()
@@ -6056,10 +9564,13 @@ class MainFrame(wx.Frame):
     def _build_base_timing_plan_input_for_plan(
         self,
         plan,
+        *,
+        generation_state: GenerationState | None = None,
     ) -> BaseTimingPlanInput | None:
         duration_sec = self._selected_audio_duration_sec()
         if plan is None or duration_sec is None:
             return None
+        resolved_generation = generation_state or self.ui_state.generation_state
         try:
             return BaseTimingPlanInput(
                 timeline=tuple(plan.timeline),
@@ -6072,9 +9583,9 @@ class MainFrame(wx.Frame):
                     duration_sec
                 ),
                 shape_parameters=ShapeParameters(
-                    closing_hold_frames=self.ui_state.generation_state.generation_settings.closing_hold_frames,
-                    closing_softness_frames=self.ui_state.generation_state.generation_settings.closing_softness_frames,
-                    long_vowel_mode=self.ui_state.generation_state.generation_settings.long_vowel_mode,
+                    closing_hold_frames=resolved_generation.generation_settings.closing_hold_frames,
+                    closing_softness_frames=resolved_generation.generation_settings.closing_softness_frames,
+                    long_vowel_mode=resolved_generation.generation_settings.long_vowel_mode,
                 ),
             )
         except (AttributeError, TypeError, ValueError):
@@ -6224,6 +9735,7 @@ class MainFrame(wx.Frame):
         state.analysis_pending_rebuild = False
         state.adjustment_history_state = snapshot.adjustment_history_state
         state.output_edit_history_state = snapshot.output_edit_history_state
+        state._observe_final_output_manual_snapshot()
         if snapshot.generation_state is not None:
             state.generation_state = snapshot.generation_state
             self._project_generation_controls()
@@ -6245,24 +9757,98 @@ class MainFrame(wx.Frame):
         )
 
     def _complete_analysis_terminal(self):
+        pending_job_id = self._active_analysis_job_id
+        if pending_job_id is not None:
+            self.ui_state.final_output_state.discard_pending_analysis(
+                job_id=pending_job_id
+            )
         self._active_analysis_job_id = None
         self._analysis_parameter_snapshot = None
         self._analysis_rollback_snapshot = None
 
+    def _finish_analysis_operation(
+        self,
+        job_id: int,
+        status: str,
+        *,
+        reason_code: str,
+        accepted_origin: object | None = None,
+    ) -> None:
+        handle = self._analysis_operation_handles.pop(job_id, None)
+        if self.controller is None:
+            return
+        if handle is not None:
+            self._finish_debug_operation(
+                handle,
+                status,
+                reason_code=reason_code,
+                accepted_origin=accepted_origin,
+            )
+            return
+        matching_origin = accepted_origin
+        if getattr(matching_origin, "job_id", None) != job_id:
+            matching_origin = None
+            final_state = self.ui_state.final_output_state
+            for candidate in (
+                getattr(final_state, "pending_origin", None),
+                getattr(final_state, "accepted_origin", None),
+            ):
+                if getattr(candidate, "job_id", None) == job_id:
+                    matching_origin = candidate
+                    break
+        self.controller.record_debug_operation_event(
+            "analysis_run",
+            "ignored" if status == "ignored" else status,
+            source="worker",
+            job_kind="analysis",
+            job_id=job_id,
+            analysis_run_id=getattr(matching_origin, "source_run_id", None),
+            analysis_result_id=getattr(
+                matching_origin,
+                "analysis_result_id",
+                None,
+            ),
+            reason_code=reason_code if handle is None else "start_not_recorded",
+        )
+
     def _run_analysis(self):
         """ [MS14-B4] 解析実行の非同期起動 """
+        if self._reject_unapplied_output_edit():
+            return
+        operation_handle = self._begin_debug_operation(
+            "analysis_run",
+            payload={
+                "input_mode": self.ui_state.input_mode,
+                "has_text_input": bool(self.ui_state.selected_text_content),
+                "has_audio_input": bool(self.ui_state.audio_for_analysis_ready),
+                "analysis_result_valid": bool(self.ui_state.analysis_result_valid),
+            },
+            entry="button",
+            capture_current_origin=False,
+        )
+
+        def reject_request(reason_code: str) -> None:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=reason_code,
+            )
+
         # 開始前の前提条件確認
         self.ui_state.refresh_input_mode()
         if self.ui_state.input_mode == INPUT_MODE_TEXT_AUDIO and not (
             self.ui_state.selected_text_path and self.ui_state.selected_text_content
         ):
             wx.MessageBox("TEXTが設定されていません。", "エラー", wx.OK | wx.ICON_ERROR)
+            reject_request("text_input_missing")
             return
         if not self.ui_state.audio_for_analysis_ready:
             wx.MessageBox("音声ファイルが設定されていません。", "エラー", wx.OK | wx.ICON_ERROR)
+            reject_request("audio_input_missing")
             return
         if not self.ui_state.analysis_start_ready:
             wx.MessageBox("解析に必要な入力が揃っていません。", "エラー", wx.OK | wx.ICON_ERROR)
+            reject_request("analysis_inputs_incomplete")
             return
         whisper_summary = build_whisper_diagnostics_summary(
             self.ui_state,
@@ -6283,6 +9869,7 @@ class MainFrame(wx.Frame):
                 "Whisperモデル確認エラー",
                 wx.OK | wx.ICON_ERROR,
             )
+            reject_request("runtime_identity_mismatch")
             return
         if (
             self.ui_state.input_mode == INPUT_MODE_VOICE_ONLY
@@ -6294,31 +9881,50 @@ class MainFrame(wx.Frame):
                 "確認",
                 wx.OK | wx.ICON_WARNING,
             )
+            reject_request("transcription_edit_unapplied")
             return
         if self.ui_state.is_busy:
+            reject_request("busy")
             return  # 二重実行防止
         if self._selected_event_editor_has_uncommitted_input():
+            reject_request("selected_event_edit_uncommitted")
             return
 
-        whisper_model_request = None
-        if self.controller is not None:
-            try:
-                whisper_model_request = self.controller.build_active_whisper_model_request()
-            except WhisperModelRuntimeError as error:
-                self.ui_state.whisper_model_selection = replace(
-                    self.ui_state.whisper_model_selection,
-                    whisper_failure_class=error.failure_class,
-                    whisper_failure_detail_code=error.code,
-                    whisper_failure_detail=str(error),
+        try:
+            if self.controller is None:
+                raise WhisperModelRuntimeError(
+                    "model_unavailable",
+                    "Whisper model controller is not available.",
+                    failure_class="model_unavailable",
                 )
-                self.sync_ui_state(adjustment_only=True)
-                wx.MessageBox(
-                    "解析に使用できる確認済みWhisperモデルがありません。\n"
-                    f"{format_whisper_failure_notice(error.code)}",
-                    "Whisperモデル確認エラー",
-                    wx.OK | wx.ICON_ERROR,
+            whisper_model_request = (
+                self.controller.build_active_whisper_model_request()
+            )
+            if not isinstance(
+                whisper_model_request,
+                VerifiedAnalysisModelRequest,
+            ):
+                raise WhisperModelRuntimeError(
+                    "model_unavailable",
+                    "No verified Whisper model request was produced.",
+                    failure_class="model_unavailable",
                 )
-                return
+        except WhisperModelRuntimeError as error:
+            self.ui_state.whisper_model_selection = replace(
+                self.ui_state.whisper_model_selection,
+                whisper_failure_class=error.failure_class,
+                whisper_failure_detail_code=error.code,
+                whisper_failure_detail=str(error),
+            )
+            self.sync_ui_state(adjustment_only=True)
+            wx.MessageBox(
+                "解析に使用できる確認済みWhisperモデルがありません。\n"
+                f"{format_whisper_failure_notice(error.code)}",
+                "Whisperモデル確認エラー",
+                wx.OK | wx.ICON_ERROR,
+            )
+            reject_request(error.code)
+            return
 
         transcription_text_override = None
         retained_whisper_timing_result = None
@@ -6336,6 +9942,7 @@ class MainFrame(wx.Frame):
                     "エラー",
                     wx.OK | wx.ICON_ERROR,
                 )
+                reject_request("retained_timing_unavailable")
                 return
             transcription_text_override = self.ui_state.analysis_text_content
             retained_whisper_timing_result = self.ui_state.transcription_timing_result
@@ -6352,6 +9959,29 @@ class MainFrame(wx.Frame):
                 "エラー",
                 wx.OK | wx.ICON_ERROR,
             )
+            reject_request("analysis_parameters_invalid")
+            return
+
+        selected_analysis_wav = self.ui_state.selected_analysis_wav
+        selected_analysis_wav_path = (
+            None
+            if selected_analysis_wav is None
+            else getattr(selected_analysis_wav, "analysis_wav_path", None)
+        )
+        if selected_analysis_wav_path:
+            try:
+                wav_path = os.fspath(selected_analysis_wav_path)
+            except TypeError:
+                wav_path = None
+        else:
+            wav_path = self.ui_state.selected_wav_path
+        if not isinstance(wav_path, str) or not wav_path:
+            wx.MessageBox(
+                "解析に使用する音声ファイルのパスを確認できません。音声を選択し直してください。",
+                "エラー",
+                wx.OK | wx.ICON_ERROR,
+            )
+            reject_request("analysis_audio_path_unavailable")
             return
 
         self._current_job_id += 1
@@ -6367,8 +9997,11 @@ class MainFrame(wx.Frame):
         self._cancel_requested = False
         self.ui_state.clear_output_diagnostics_state()
 
-        if self.controller and getattr(self.ui_state, 'is_playing', False):
-            self.controller.request_playback_stop()
+        if self.controller and self.ui_state.playback_active:
+            self.controller.request_playback_stop(
+                _source="system",
+                _reason_code="analysis_started",
+            )
 
         # Busy状態の開始
         self._analysis_info_in_progress = True
@@ -6378,10 +10011,29 @@ class MainFrame(wx.Frame):
         self._progress_dialog = AnalysisProgressDialog(self, on_cancel_callback=self._on_analysis_cancel)
         self._progress_dialog.Show()
 
-        # [MS17-B6] 解析用WAVを優先使用
-        wav_path = self.ui_state.selected_wav_path
-        if self.ui_state.selected_analysis_wav:
-            wav_path = self.ui_state.selected_analysis_wav.analysis_wav_path
+        analysis_text = (
+            self.ui_state.selected_text_content
+            or transcription_text_override
+            or self.ui_state.analysis_text_content
+        )
+        final_output_origin = self.ui_state.final_output_state.begin_analysis(
+            job_id=self._current_job_id,
+            input_mode=self.ui_state.input_mode,
+            source_audio_path=self.ui_state.selected_wav_path,
+            analysis_wav_path=wav_path,
+            text_path=self.ui_state.selected_text_path,
+            analysis_text=analysis_text,
+        )
+        operation_handle = self._mark_debug_operation_started(
+            operation_handle,
+            job_kind="analysis",
+            job_id=self._current_job_id,
+            analysis_run_id=getattr(final_output_origin, "source_run_id", None),
+            payload={"input_mode": self.ui_state.input_mode},
+        )
+        if operation_handle is not None:
+            self._analysis_operation_handles[self._current_job_id] = operation_handle
+        self.ui_state.confirmed_shared_warning_fingerprint = None
 
         if self._active_debug_trace is not None:
             self._finish_debug_trace(
@@ -6397,9 +10049,7 @@ class MainFrame(wx.Frame):
                 source_audio_path=self.ui_state.selected_wav_path,
                 analysis_wav_path=wav_path,
                 text_path=self.ui_state.selected_text_path,
-                analysis_text=self.ui_state.selected_text_content
-                or transcription_text_override
-                or self.ui_state.analysis_text_content,
+                analysis_text=analysis_text,
                 model_identity=None,
                 timing_source=self.ui_state.transcription_timing_source or "pending",
                 selected_model_key=self.ui_state.whisper_model_selection.active_model_key,
@@ -6416,6 +10066,7 @@ class MainFrame(wx.Frame):
                         self.ui_state.model_profile_state.active_model_profile_id
                     ),
                 ),
+                analysis_run_id=final_output_origin.source_run_id,
             )
             self._active_debug_trace.record_stage(
                 "input_snapshot",
@@ -6450,8 +10101,20 @@ class MainFrame(wx.Frame):
             retained_whisper_timing_result=retained_whisper_timing_result,
             reuse_retained_timing=reuse_retained_timing,
             debug_trace=self._active_debug_trace,
+            collect_transition_acoustics=(
+                self._transition_evaluation_request is not None
+                or self._bounded_candidate_enabled()
+            ),
         )
-        self._worker.start()
+        try:
+            self._worker.start()
+        except Exception:
+            self._finish_analysis_operation(
+                self._current_job_id,
+                "failed",
+                reason_code="analysis_worker_start_failed",
+            )
+            raise
 
         if self._timeout_timer:
             self._timeout_timer.Destroy()
@@ -6461,6 +10124,16 @@ class MainFrame(wx.Frame):
 
     def _on_analysis_cancel(self):
         self._cancel_requested = True
+        job_id = self._active_analysis_job_id
+        if self.controller and job_id is not None:
+            handle = self._analysis_operation_handles.get(job_id)
+            self.controller.record_debug_operation_phase(
+                handle,
+                "analysis_cancel_request",
+                "requested",
+                job_kind="analysis",
+                job_id=job_id,
+            )
         if self._timeout_timer:
             self._timeout_timer.Stop()
 
@@ -6559,11 +10232,18 @@ class MainFrame(wx.Frame):
             status="cancelled",
             reason_code="analysis_cancelled",
         )
+        if job_id is not None:
+            self._finish_analysis_operation(
+                job_id,
+                "cancelled",
+                reason_code="analysis_cancelled",
+            )
 
     def _finish_analysis_parameter_mismatch(
         self,
         debug_trace: AnalysisDebugTrace | None = None,
     ):
+        job_id = self._active_analysis_job_id
         self._complete_analysis_terminal()
         self.ui_state.invalidate_analysis()
         self.ui_state.set_busy(False)
@@ -6573,10 +10253,21 @@ class MainFrame(wx.Frame):
             status="failed",
             reason_code="analysis_parameter_mismatch",
         )
+        if job_id is not None:
+            self._finish_analysis_operation(
+                job_id,
+                "failed",
+                reason_code="analysis_parameter_mismatch",
+            )
 
     def _on_analysis_success(self, job_id, result):
         """ [MS14-B4] 解析成功時のコールバック """
         if not self._is_current_analysis_terminal(job_id):
+            self._finish_analysis_operation(
+                job_id,
+                "ignored",
+                reason_code="stale_analysis_result",
+            )
             return
 
         debug_trace = getattr(result, "debug_trace", None) or self._active_debug_trace
@@ -6623,6 +10314,11 @@ class MainFrame(wx.Frame):
                     self._finish_debug_trace(
                         debug_trace,
                         status="failed",
+                        reason_code="runtime_identity_mismatch",
+                    )
+                    self._finish_analysis_operation(
+                        job_id,
+                        "failed",
                         reason_code="runtime_identity_mismatch",
                     )
                     wx.MessageBox(
@@ -6700,18 +10396,50 @@ class MainFrame(wx.Frame):
                 analysis_text_source="text_file",
             )
 
+        self._accepted_debug_trace = None
+        if debug_trace is not None:
+            analysis_result_id = debug_trace.adopt()
+        else:
+            analysis_result_id = uuid.uuid4().hex
+        self._project_generation_controls()
+        base_input = self._build_current_base_timing_plan_input()
+        if base_input is not None:
+            try:
+                self._resolve_current_effective_plan(base_input)
+            except (AdjustmentContractError, TypeError, ValueError):
+                pass
+        accepted_origin = self.ui_state.final_output_state.accept_analysis(
+            job_id=job_id,
+            adjustment_snapshot=self.ui_state.current_adjustment_snapshot,
+            analysis_result_id=analysis_result_id,
+        )
+        if accepted_origin is not None:
+            self.ui_state.initialize_output_edit_draft_baseline()
+        if (
+            debug_trace is not None
+            and accepted_origin is not None
+            and debug_trace.analysis_run_id == accepted_origin.source_run_id
+            and debug_trace.analysis_result_id == accepted_origin.analysis_result_id
+        ):
+            self._accepted_debug_trace = debug_trace
         self.ui_state.set_busy(False)
         self._complete_analysis_terminal()
         self._selected_event_notice = ""
-        if debug_trace is not None:
-            debug_trace.adopt()
-            self._accepted_debug_trace = debug_trace
-        self._project_generation_controls()
         self.sync_ui_state()
         self._finish_debug_trace(
             debug_trace,
             status="completed",
             reason_code="analysis_accepted",
+        )
+        self._finish_analysis_operation(
+            job_id,
+            "completed",
+            reason_code=(
+                "analysis_accepted"
+                if accepted_origin is not None
+                else "analysis_result_origin_unavailable"
+            ),
+            accepted_origin=accepted_origin,
         )
         if self.controller:
             self.controller.flush_pending_save()
@@ -6765,6 +10493,11 @@ class MainFrame(wx.Frame):
                 output_morph_names=output_morph_names,
             )
             return
+        if self._restore_accepted_output_preview_if_current(
+            sync_context.effective_plan,
+            duration_sec,
+        ):
+            return
         try:
             effective_plan = sync_context.effective_plan
             preview_data = build_preview_data_from_effective_shape_plan(
@@ -6773,7 +10506,22 @@ class MainFrame(wx.Frame):
             )
             preview_model = self.placeholder_container.pnl_preview.model
             current_digest = effective_plan.base_plan_identity.digest
-            if (
+            if self.ui_state.output_edit_draft_dirty:
+                baseline = self.ui_state.output_edit_draft_baseline
+                try:
+                    current_keys = source_event_keys(plan.timeline)
+                except (AdjustmentContractError, TypeError, ValueError):
+                    current_keys = ()
+                if (
+                    baseline is not None
+                    and current_keys == baseline.source_event_keys
+                    and self.ui_state.selected_source_event_index is not None
+                    and self.ui_state.selected_source_event_index < len(current_keys)
+                ):
+                    self.ui_state.selected_base_plan_identity_digest = current_digest
+                else:
+                    self.ui_state.clear_selection()
+            elif (
                 preview_model.base_plan_identity_digest is not None
                 and preview_model.base_plan_identity_digest != current_digest
             ) or (
@@ -6794,18 +10542,92 @@ class MainFrame(wx.Frame):
             )
 
     def _resolved_output_morph_names(self) -> tuple[str, ...]:
+        output_state = self.ui_state.current_output_edit_state
+        generation_state = (
+            output_state.generation_state
+            if self.ui_state.output_edit_draft_dirty and output_state is not None
+            else self.ui_state.generation_state
+        )
         return get_builtin_morph_name_set(
-            self.ui_state.generation_state.resolved_morph_name_set_id
+            generation_state.resolved_morph_name_set_id
         ).output_names
 
     def _build_current_base_timing_plan_input(self) -> BaseTimingPlanInput | None:
+        state = self.ui_state
+        plan = self._current_output_edit_draft_timing_plan()
         return self._build_base_timing_plan_input_for_plan(
-            self.ui_state.current_timing_plan
+            plan,
+            generation_state=(
+                state.current_output_edit_state.generation_state
+                if state.output_edit_draft_dirty
+                and state.current_output_edit_state is not None
+                else state.generation_state
+            ),
         )
+
+    def _current_output_edit_draft_timing_plan(self):
+        state = self.ui_state
+        current = state.current_output_edit_state
+        baseline = state.output_edit_draft_baseline
+        if not state.output_edit_draft_dirty or current is None or baseline is None:
+            return state.current_timing_plan
+        if current.morph_upper_limit == baseline.output_state.morph_upper_limit:
+            state.output_edit_draft_timing_plan = None
+            state.output_edit_draft_timing_upper_limit = None
+            return state.current_timing_plan
+        if (
+            state.output_edit_draft_timing_plan is not None
+            and state.output_edit_draft_timing_upper_limit == current.morph_upper_limit
+        ):
+            return state.output_edit_draft_timing_plan
+        try:
+            projected = reproject_peak_values_for_upper_limit(
+                state.current_timing_plan,
+                current.morph_upper_limit,
+            )
+        except (AttributeError, TypeError, ValueError):
+            state.output_edit_draft_error = "モーフ最大値の編集表示を更新できません。"
+            return None
+        state.output_edit_draft_timing_plan = projected
+        state.output_edit_draft_timing_upper_limit = current.morph_upper_limit
+        return projected
+
+    def _rebase_output_edit_draft(
+        self,
+        base_input: BaseTimingPlanInput,
+    ) -> bool:
+        state = self.ui_state
+        history = state.output_edit_history_state
+        if history is None:
+            return False
+        baseline = state.output_edit_draft_baseline
+        try:
+            keys = (
+                baseline.source_event_keys
+                if baseline is not None
+                else source_event_keys(
+                    getattr(state.current_timing_plan, "timeline", ()) or ()
+                )
+            )
+            rebased, _ = rebase_output_edit_history(
+                history,
+                keys,
+                base_input,
+            )
+        except (AdjustmentContractError, TypeError, ValueError):
+            return False
+        state.output_edit_history_state = rebased
+        state._sync_legacy_adjustment_history()
+        return True
 
     def _on_analysis_error(self, job_id, error):
         """ [MS14-B4] 解析失敗時のコールバック """
         if not self._is_current_analysis_terminal(job_id):
+            self._finish_analysis_operation(
+                job_id,
+                "ignored",
+                reason_code="stale_analysis_error",
+            )
             return
 
         debug_trace = self._active_debug_trace
@@ -6872,6 +10694,11 @@ class MainFrame(wx.Frame):
             status="failed",
             reason_code=detail_code,
         )
+        self._finish_analysis_operation(
+            job_id,
+            "failed",
+            reason_code=detail_code,
+        )
         if self.controller:
             self.controller.flush_pending_save()
         if failed_input_mode == INPUT_MODE_VOICE_ONLY:
@@ -6889,12 +10716,38 @@ class MainFrame(wx.Frame):
         if self.controller: self.controller.request_save_vmd()
 
     def _on_mi_workspace_reset(self, event):
+        operation_handle = self._begin_debug_operation(
+            "workspace_reset",
+            payload={
+                "has_text_input": bool(self.ui_state.selected_text_path),
+                "has_audio_input": bool(
+                    self.ui_state.selected_audio_input or self.ui_state.selected_wav_path
+                ),
+            },
+            entry="menu",
+        )
         if self.ui_state.is_busy:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="busy",
+            )
             return
         if self.ui_state.has_workspace_user_data and not self.confirm_workspace_reset():
+            self._finish_debug_operation(
+                operation_handle,
+                "cancelled",
+                reason_code="workspace_reset_confirmation_declined",
+            )
             return
         if self.controller:
-            self.controller.request_reset_workspace()
+            self.controller.request_reset_workspace(operation_handle)
+        else:
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="controller_unavailable",
+            )
 
     def _on_btn_export_mmd_wav(self, event):
         if self.controller: self.controller.request_export_mmd_wav()
@@ -6905,9 +10758,12 @@ class MainFrame(wx.Frame):
     def _on_btn_play(self, event):
         if self.controller: self.controller.request_playback_play()
 
+    def _on_btn_pause(self, event):
+        if self.controller: self.controller.request_playback_pause()
+
     def _on_btn_stop(self, event):
         if self.controller: self.controller.request_playback_stop()
-        
+
     def _on_btn_zoom_in(self, event):
         if self.controller: self.controller.request_zoom_in()
 
@@ -7002,7 +10858,7 @@ class MainFrame(wx.Frame):
         self._build_recent_menus()
         
         # パラメータ復元
-        limit = settings.get("morph_upper_limit", 0.5)
+        limit = settings.get("morph_upper_limit", 0.9)
         if resolved_morph_upper_limit is not None:
             limit = resolved_morph_upper_limit
         self._projection_guard = True
@@ -7051,9 +10907,9 @@ class MainFrame(wx.Frame):
         # Parameter変更時のsaveコールバック
         self.param_panel.sc_morph_limit.Bind(wx.EVT_SPINCTRLDOUBLE, self._on_morph_upper_changed)
         self.param_panel.sc_morph_limit.Bind(wx.EVT_TEXT, self._on_morph_upper_changed)
-        self.param_panel.sc_hold_frames.Bind(wx.EVT_SPINCTRL, self._on_output_setting_changed)
+        self.param_panel.sc_hold_frames.Bind(wx.EVT_SPINCTRLDOUBLE, self._on_output_setting_changed)
         self.param_panel.sc_hold_frames.Bind(wx.EVT_TEXT, self._on_output_setting_changed)
-        self.param_panel.sc_softness_frames.Bind(wx.EVT_SPINCTRL, self._on_output_setting_changed)
+        self.param_panel.sc_softness_frames.Bind(wx.EVT_SPINCTRLDOUBLE, self._on_output_setting_changed)
         self.param_panel.sc_softness_frames.Bind(wx.EVT_TEXT, self._on_output_setting_changed)
         self.sync_ui_state()
 
@@ -7065,13 +10921,45 @@ class MainFrame(wx.Frame):
         event.Skip()
         if self._projection_guard:
             return
+        state = self.ui_state
+        previous_state = state.current_output_edit_state
+        previous_upper = (
+            state.resolved_morph_upper_limit
+            if previous_state is None
+            else previous_state.morph_upper_limit
+        )
         candidate_upper = self.get_morph_upper_limit()
+        operation_handle = self._begin_debug_operation(
+            "morph_upper_limit_change",
+            payload={"before": previous_upper, "after": candidate_upper},
+            entry="parameter_control",
+        )
+        if self._pending_selected_event_projection is not None:
+            self._projection_guard = True
+            try:
+                self.set_morph_upper_limit(previous_upper)
+            finally:
+                self._projection_guard = False
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code="draft_projection_pending",
+            )
+            return
         try:
             direct_edit_guard = validate_active_profile_direct_edit(
-                current_model_profile_state=self.ui_state.model_profile_state,
-                current_generation_settings=self.ui_state.generation_state.generation_settings,
-                candidate_generation_settings=self.ui_state.generation_state.generation_settings,
-                current_morph_upper_limit=self.ui_state.resolved_morph_upper_limit,
+                current_model_profile_state=state.draft_model_profile_state,
+                current_generation_settings=(
+                    previous_state.generation_state.generation_settings
+                    if previous_state is not None
+                    else state.generation_state.generation_settings
+                ),
+                candidate_generation_settings=(
+                    previous_state.generation_state.generation_settings
+                    if previous_state is not None
+                    else state.generation_state.generation_settings
+                ),
+                current_morph_upper_limit=previous_upper,
                 candidate_morph_upper_limit=candidate_upper,
             )
         except (TypeError, ValueError):
@@ -7079,26 +10967,117 @@ class MainFrame(wx.Frame):
         if direct_edit_guard is None or not direct_edit_guard.allowed:
             self._projection_guard = True
             try:
-                self.set_morph_upper_limit(self.ui_state.resolved_morph_upper_limit)
+                self.set_morph_upper_limit(previous_upper)
             finally:
                 self._projection_guard = False
+            self._finish_debug_operation(
+                operation_handle,
+                "rejected",
+                reason_code=(
+                    "profile_guard_input_invalid"
+                    if direct_edit_guard is None
+                    else direct_edit_guard.reason_code
+                ),
+                payload={"before": previous_upper, "after": candidate_upper},
+            )
             return
-        self.ui_state.resolved_morph_upper_limit = candidate_upper
-        if self.controller:
-            self.controller.invalidate_audio_job_for_input_change()
-        if self.ui_state.analysis_result_valid:
-            self.ui_state.invalidate_analysis()
+        if candidate_upper == previous_upper:
+            self._finish_debug_operation(
+                operation_handle,
+                "noop",
+                reason_code="morph_upper_limit_unchanged",
+                payload={"before": previous_upper, "after": candidate_upper},
+            )
+            return
+        if (
+            state.analysis_result_valid
+            and not state.analysis_pending_rebuild
+            and state.current_timing_plan is not None
+        ):
+            if state.output_edit_draft_baseline is None:
+                state.initialize_output_edit_draft_baseline()
+            current_output = state.current_output_edit_state
+            if current_output is None:
+                state.output_edit_draft_error = "編集履歴を利用できません。"
+                self._finish_debug_operation(
+                    operation_handle,
+                    "rejected",
+                    reason_code="output_edit_history_unavailable",
+                )
+                return
+            history_before_draft = state.output_edit_history_state
+            try:
+                draft_plan = reproject_peak_values_for_upper_limit(
+                    state.current_timing_plan,
+                    candidate_upper,
+                )
+                target_base = self._build_base_timing_plan_input_for_plan(
+                    draft_plan,
+                    generation_state=current_output.generation_state,
+                )
+                if target_base is None or not self._rebase_output_edit_draft(target_base):
+                    raise AdjustmentContractError("draft base could not be rebased")
+                rebased_output = state.current_output_edit_state
+                if rebased_output is None:
+                    raise AdjustmentContractError("draft history is unavailable")
+                candidate_output = OutputEditState(
+                    base_plan_identity=rebased_output.base_plan_identity,
+                    adjustment_snapshot=rebased_output.adjustment_snapshot,
+                    generation_state=rebased_output.generation_state,
+                    morph_upper_limit=candidate_upper,
+                )
+                if not state.commit_output_edit_state(
+                    candidate_output,
+                    model_profile_state=state.draft_model_profile_state,
+                ):
+                    raise AdjustmentContractError("draft history rejected the edit")
+                state.output_edit_draft_timing_plan = draft_plan
+                state.output_edit_draft_timing_upper_limit = candidate_upper
+                state.mark_output_edit_draft_changed()
+            except (AdjustmentContractError, TypeError, ValueError):
+                state.output_edit_history_state = history_before_draft
+                state._sync_legacy_adjustment_history()
+                state.output_edit_apply_status = "モーフ最大値を編集表示へ反映できませんでした。"
+                self._projection_guard = True
+                try:
+                    self.set_morph_upper_limit(previous_upper)
+                finally:
+                    self._projection_guard = False
+                self._finish_debug_operation(
+                    operation_handle,
+                    "rejected",
+                    reason_code="draft_projection_failed",
+                    payload={"before": previous_upper, "after": candidate_upper},
+                )
+                self.sync_ui_state(adjustment_only=True)
+                return
+            self.sync_ui_state(adjustment_only=True)
         else:
-            self.ui_state.clear_output_diagnostics_state()
-            if self.ui_state.status_key == StatusKey.ANALYSIS_CANCELLED:
-                self.ui_state.status_key = (
+            state.resolved_morph_upper_limit = candidate_upper
+            state.clear_output_diagnostics_state()
+            if state.status_key == StatusKey.ANALYSIS_CANCELLED:
+                state.status_key = (
                     StatusKey.READY_FOR_ANALYSIS
-                    if self.ui_state.analysis_start_ready
+                    if state.analysis_start_ready
                     else StatusKey.INPUT_MISSING
                 )
-        self.sync_ui_state()
-        if self.controller:
-            self.controller.request_settings_save()
+            self.sync_ui_state()
+            if self.controller:
+                self.controller.request_settings_save()
+        self._finish_debug_operation(
+            operation_handle,
+            "completed" if candidate_upper != previous_upper else "noop",
+            reason_code=(
+                "morph_upper_limit_changed"
+                if candidate_upper != previous_upper
+                else "morph_upper_limit_unchanged"
+            ),
+            payload={
+                "before": previous_upper,
+                "after": candidate_upper,
+                "changed": candidate_upper != previous_upper,
+            },
+        )
 
     def _on_output_setting_changed(self, event):
         event.Skip()

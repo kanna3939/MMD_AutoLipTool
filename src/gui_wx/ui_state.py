@@ -19,7 +19,13 @@ from src.core import (
     undo_output_edit_state as undo_output_history_state,
 )
 from src.core.generation_presets import GenerationSettings
-from src.core.event_adjustment import AdjustmentLayerSnapshot
+from src.core.event_adjustment import AdjustmentContractError, AdjustmentLayerSnapshot
+from src.core.final_output_state import FinalOutputState
+from src.core.output_edit_draft import (
+    OutputEditDraftBaseline,
+    semantic_output_edit_key,
+    source_event_keys,
+)
 from src.core.model_profile_state import (
     ModelProfileResolutionStatus,
     ModelProfileState,
@@ -351,6 +357,7 @@ class UiState:
     current_diagnostic_failure: Optional[DiagnosticFailureInput] = None
     current_output_diagnostics_snapshot: Optional[OutputDiagnosticsSnapshot] = None
     confirmed_warning_save_state_fingerprint: Optional[str] = None
+    confirmed_shared_warning_fingerprint: Optional[str] = None
     analysis_cancelled: bool = False
     
     # UI / Application Related
@@ -373,9 +380,18 @@ class UiState:
     )
     active_model_profile_display_name: Optional[str] = None
     baseline_preset_display_name: Optional[str] = None
-    resolved_morph_upper_limit: float = 0.5
+    resolved_morph_upper_limit: float = 0.9
     output_edit_history_state: Optional[OutputEditHistoryState] = None
     adjustment_history_state: Optional[AdjustmentHistoryState] = None
+    output_edit_draft_baseline: OutputEditDraftBaseline | None = None
+    output_edit_draft_force_apply_states: tuple[OutputEditState, ...] = ()
+    output_edit_draft_timing_plan: Any = None
+    output_edit_draft_timing_upper_limit: float | None = None
+    output_edit_source_revision: int = 0
+    output_edit_draft_revision: int = 0
+    output_edit_draft_error: str | None = None
+    output_edit_apply_status: str | None = None
+    final_output_state: FinalOutputState = field(default_factory=FinalOutputState)
     selected_event_editor_revision: int = 0
     current_audio_job_id: int = 0
     audio_worker_state: Any = None
@@ -386,8 +402,13 @@ class UiState:
     
     # [MS15-B3] Playback State
     is_playing: bool = False
+    is_paused: bool = False
     playback_position_sec: float = 0.0
     loaded_playback_path: Optional[str] = None
+
+    @property
+    def playback_active(self) -> bool:
+        return bool(self.is_playing or self.is_paused)
 
     @property
     def playback_ready(self) -> bool:
@@ -491,6 +512,7 @@ class UiState:
         self.current_diagnostic_failure = None
         self.current_output_diagnostics_snapshot = None
         self.confirmed_warning_save_state_fingerprint = None
+        self.confirmed_shared_warning_fingerprint = None
         self.analysis_cancelled = False
 
     @property
@@ -512,6 +534,105 @@ class UiState:
     def current_output_edit_state(self) -> OutputEditState | None:
         history = self.output_edit_history_state
         return None if history is None else history.current_state
+
+    @property
+    def applied_output_edit_state(self) -> OutputEditState | None:
+        baseline = self.output_edit_draft_baseline
+        if baseline is not None:
+            return baseline.output_state
+        return self.current_output_edit_state
+
+    @property
+    def draft_model_profile_state(self) -> ModelProfileState:
+        history = self.output_edit_history_state
+        if history is not None and history.current_model_profile_state is not None:
+            return history.current_model_profile_state
+        return self.model_profile_state
+
+    @property
+    def output_edit_draft_dirty(self) -> bool:
+        baseline = self.output_edit_draft_baseline
+        current = self.current_output_edit_state
+        if baseline is None or current is None:
+            return False
+        if any(
+            current == forced_state
+            for forced_state in self.output_edit_draft_force_apply_states
+        ):
+            return True
+        try:
+            current_keys = source_event_keys(
+                getattr(self.current_timing_plan, "timeline", ()) or ()
+            )
+            if (
+                baseline.source_revision != self.output_edit_source_revision
+                or current_keys != baseline.source_event_keys
+                or self.output_edit_draft_error is not None
+            ):
+                return True
+            return semantic_output_edit_key(
+                baseline.output_state,
+                baseline.model_profile_state,
+                baseline.source_event_keys,
+            ) != semantic_output_edit_key(
+                current,
+                self.draft_model_profile_state,
+                current_keys,
+            )
+        except (AdjustmentContractError, TypeError, ValueError):
+            return True
+
+    def initialize_output_edit_draft_baseline(self) -> bool:
+        output_state = self.current_output_edit_state
+        if output_state is None or not self.analysis_result_valid:
+            return False
+        try:
+            keys = source_event_keys(
+                getattr(self.current_timing_plan, "timeline", ()) or ()
+            )
+            baseline = OutputEditDraftBaseline(
+                source_revision=self.output_edit_source_revision,
+                source_event_keys=keys,
+                output_state=output_state,
+                model_profile_state=self.model_profile_state,
+            )
+        except (AdjustmentContractError, TypeError, ValueError):
+            return False
+        self.output_edit_draft_baseline = baseline
+        self.output_edit_draft_error = None
+        return True
+
+    def mark_output_edit_draft_changed(self) -> None:
+        self.output_edit_draft_revision += 1
+        self.output_edit_draft_error = None
+        self.output_edit_apply_status = None
+
+    def require_output_edit_apply_for_current_state(self) -> bool:
+        current = self.current_output_edit_state
+        if current is None or not self.analysis_result_valid:
+            return False
+        if not any(
+            current == forced_state
+            for forced_state in self.output_edit_draft_force_apply_states
+        ):
+            self.output_edit_draft_force_apply_states = (
+                *self.output_edit_draft_force_apply_states,
+                current,
+            )
+        self.output_edit_draft_error = None
+        self.output_edit_apply_status = None
+        return True
+
+    def clear_output_edit_draft(self, *, source_changed: bool = False) -> None:
+        self.output_edit_draft_baseline = None
+        self.output_edit_draft_force_apply_states = ()
+        self.output_edit_draft_timing_plan = None
+        self.output_edit_draft_timing_upper_limit = None
+        self.output_edit_draft_error = None
+        self.output_edit_apply_status = None
+        self.output_edit_draft_revision += 1
+        if source_changed:
+            self.output_edit_source_revision += 1
 
     @property
     def can_undo_adjustment(self) -> bool:
@@ -573,6 +694,12 @@ class UiState:
             pending_edit=legacy_pending,
         )
 
+    def _observe_final_output_manual_snapshot(self) -> None:
+        if not self.output_edit_draft_dirty:
+            self.final_output_state.observe_manual_snapshot(
+                self.current_adjustment_snapshot
+            )
+
     def initialize_output_edit_history_state(self, output_state: OutputEditState) -> bool:
         try:
             self.output_edit_history_state = initialize_output_edit_history(
@@ -582,6 +709,9 @@ class UiState:
         except (TypeError, ValueError):
             return False
         self._sync_legacy_adjustment_history()
+        self._observe_final_output_manual_snapshot()
+        if self.analysis_result_valid and self.output_edit_draft_baseline is None:
+            self.initialize_output_edit_draft_baseline()
         return True
 
     def commit_output_edit_state(
@@ -593,7 +723,7 @@ class UiState:
     ) -> bool:
         history = self.output_edit_history_state
         target_profile_state = (
-            self.model_profile_state
+            self.draft_model_profile_state
             if model_profile_state is None
             else model_profile_state
         )
@@ -606,6 +736,9 @@ class UiState:
             except (TypeError, ValueError):
                 return False
             self._sync_legacy_adjustment_history()
+            self._observe_final_output_manual_snapshot()
+            if self.analysis_result_valid and self.output_edit_draft_baseline is None:
+                self.initialize_output_edit_draft_baseline()
             return True
         try:
             updated = commit_output_history_state(
@@ -622,10 +755,14 @@ class UiState:
             != history.current_model_profile_state
         )
         self.output_edit_history_state = updated
-        self.generation_state = updated.current_state.generation_state
-        if updated.current_model_profile_state is not None:
-            self.model_profile_state = updated.current_model_profile_state
+        if not self.output_edit_draft_dirty:
+            self.generation_state = updated.current_state.generation_state
+            if updated.current_model_profile_state is not None:
+                self.model_profile_state = updated.current_model_profile_state
+        elif changed:
+            self.mark_output_edit_draft_changed()
         self._sync_legacy_adjustment_history()
+        self._observe_final_output_manual_snapshot()
         if changed:
             self.selected_event_editor_revision += 1
         return True
@@ -643,9 +780,12 @@ class UiState:
             return False
         changed = updated != history
         self.output_edit_history_state = updated
-        self.generation_state = updated.current_state.generation_state
-        if updated.current_model_profile_state is not None:
-            self.model_profile_state = updated.current_model_profile_state
+        if not self.output_edit_draft_dirty:
+            self.generation_state = updated.current_state.generation_state
+            if updated.current_model_profile_state is not None:
+                self.model_profile_state = updated.current_model_profile_state
+        elif changed:
+            self.mark_output_edit_draft_changed()
         self._sync_legacy_adjustment_history()
         return changed
 
@@ -659,9 +799,12 @@ class UiState:
             return False
         changed = updated != history
         self.output_edit_history_state = updated
-        self.generation_state = updated.current_state.generation_state
-        if updated.current_model_profile_state is not None:
-            self.model_profile_state = updated.current_model_profile_state
+        if not self.output_edit_draft_dirty:
+            self.generation_state = updated.current_state.generation_state
+            if updated.current_model_profile_state is not None:
+                self.model_profile_state = updated.current_model_profile_state
+        elif changed:
+            self.mark_output_edit_draft_changed()
         self._sync_legacy_adjustment_history()
         return changed
 
@@ -678,10 +821,17 @@ class UiState:
         except (TypeError, ValueError):
             return False
         self.output_edit_history_state = updated
-        self.generation_state = updated.current_state.generation_state
-        if updated.current_model_profile_state is not None:
-            self.model_profile_state = updated.current_model_profile_state
+        if not self.output_edit_draft_dirty:
+            self.generation_state = updated.current_state.generation_state
+            if updated.current_model_profile_state is not None:
+                self.model_profile_state = updated.current_model_profile_state
+        elif (
+            updated.current_state,
+            updated.current_model_profile_state,
+        ) != before:
+            self.mark_output_edit_draft_changed()
         self._sync_legacy_adjustment_history()
+        self._observe_final_output_manual_snapshot()
         if (
             updated.current_state,
             updated.current_model_profile_state,
@@ -703,10 +853,17 @@ class UiState:
         except (TypeError, ValueError):
             return False
         self.output_edit_history_state = updated
-        self.generation_state = updated.current_state.generation_state
-        if updated.current_model_profile_state is not None:
-            self.model_profile_state = updated.current_model_profile_state
+        if not self.output_edit_draft_dirty:
+            self.generation_state = updated.current_state.generation_state
+            if updated.current_model_profile_state is not None:
+                self.model_profile_state = updated.current_model_profile_state
+        elif (
+            updated.current_state,
+            updated.current_model_profile_state,
+        ) != before:
+            self.mark_output_edit_draft_changed()
         self._sync_legacy_adjustment_history()
+        self._observe_final_output_manual_snapshot()
         if (
             updated.current_state,
             updated.current_model_profile_state,
@@ -728,10 +885,14 @@ class UiState:
             return False
         changed = normalized != history
         self.output_edit_history_state = normalized
-        self.generation_state = normalized.current_state.generation_state
-        if normalized.current_model_profile_state is not None:
-            self.model_profile_state = normalized.current_model_profile_state
+        if not self.output_edit_draft_dirty:
+            self.generation_state = normalized.current_state.generation_state
+            if normalized.current_model_profile_state is not None:
+                self.model_profile_state = normalized.current_model_profile_state
+        elif changed:
+            self.mark_output_edit_draft_changed()
         self._sync_legacy_adjustment_history()
+        self._observe_final_output_manual_snapshot()
         return changed
 
     def normalize_profile_aware_output_edit_history(self, resolve_endpoint) -> bool:
@@ -747,10 +908,16 @@ class UiState:
             return False
         changed = normalized != history
         self.output_edit_history_state = normalized
-        self.generation_state = normalized.current_state.generation_state
-        if normalized.current_model_profile_state is not None:
-            self.model_profile_state = normalized.current_model_profile_state
+        if not self.output_edit_draft_dirty:
+            self.generation_state = normalized.current_state.generation_state
+            if normalized.current_model_profile_state is not None:
+                self.model_profile_state = normalized.current_model_profile_state
+        elif changed:
+            self.mark_output_edit_draft_changed()
         self._sync_legacy_adjustment_history()
+        self._observe_final_output_manual_snapshot()
+        if self.analysis_result_valid and self.output_edit_draft_baseline is None:
+            self.initialize_output_edit_draft_baseline()
         return changed
 
     def initialize_adjustment_history(
@@ -783,6 +950,7 @@ class UiState:
                 base_plan_identity=snapshot.base_plan_identity,
                 adjustment_snapshot=snapshot,
                 generation_state=self.generation_state,
+                morph_upper_limit=self.resolved_morph_upper_limit,
             )
             self.output_edit_history_state = initialize_output_edit_history(
                 output_state,
@@ -792,6 +960,9 @@ class UiState:
         except (TypeError, ValueError):
             self.output_edit_history_state = None
             self.adjustment_history_state = history
+        self._observe_final_output_manual_snapshot()
+        if self.analysis_result_valid and self.output_edit_draft_baseline is None:
+            self.initialize_output_edit_draft_baseline()
         if previous != snapshot:
             self.selected_event_editor_revision += 1
         return True
@@ -818,7 +989,8 @@ class UiState:
                 output_state = build_output_edit_state(
                     base_plan_identity=snapshot.base_plan_identity,
                     adjustment_snapshot=snapshot,
-                    generation_state=self.generation_state,
+                    generation_state=output_history.current_state.generation_state,
+                    morph_upper_limit=output_history.current_state.morph_upper_limit,
                 )
             except (TypeError, ValueError):
                 return False
@@ -828,14 +1000,18 @@ class UiState:
                     output_history,
                     output_state,
                     coalesce_key=coalesce_key,
-                    model_profile_state=self.model_profile_state,
+                    model_profile_state=self.draft_model_profile_state,
                 )
             except (TypeError, ValueError):
                 return False
             self.output_edit_history_state = updated
-            if updated.current_model_profile_state is not None:
+            if self.output_edit_draft_baseline is not None:
+                if updated.current_state != before:
+                    self.mark_output_edit_draft_changed()
+            elif updated.current_model_profile_state is not None:
                 self.model_profile_state = updated.current_model_profile_state
             self._sync_legacy_adjustment_history()
+            self._observe_final_output_manual_snapshot()
             if updated.current_state != before:
                 self.selected_event_editor_revision += 1
             return True
@@ -856,6 +1032,7 @@ class UiState:
         except (TypeError, ValueError):
             return False
         self.adjustment_history_state = updated
+        self._observe_final_output_manual_snapshot()
         if updated.current_snapshot != before:
             self.selected_event_editor_revision += 1
         return True
@@ -919,6 +1096,7 @@ class UiState:
         except (TypeError, ValueError):
             return False
         self.adjustment_history_state = updated
+        self._observe_final_output_manual_snapshot()
         if updated.current_snapshot == before:
             return False
         self.selected_event_editor_revision += 1
@@ -936,6 +1114,7 @@ class UiState:
         except (TypeError, ValueError):
             return False
         self.adjustment_history_state = updated
+        self._observe_final_output_manual_snapshot()
         if updated.current_snapshot == before:
             return False
         self.selected_event_editor_revision += 1
@@ -944,6 +1123,8 @@ class UiState:
     def clear_adjustment_history(self):
         self.output_edit_history_state = None
         self.adjustment_history_state = None
+        self.clear_output_edit_draft(source_changed=True)
+        self._observe_final_output_manual_snapshot()
         self.selected_event_editor_revision += 1
 
     def clear_adjustment_snapshot(self):
@@ -971,7 +1152,7 @@ class UiState:
             or self.analysis_pending_rebuild
             or self.analysis_cancelled
             or self.has_event_adjustments
-            or self.is_playing
+            or self.playback_active
             or self.playback_position_sec
             or self.loaded_playback_path
             or self.last_mmd_wav_output_path
@@ -979,6 +1160,7 @@ class UiState:
 
     def reset_workspace(self):
         """Clear current-workspace data while preserving settings and history."""
+        self.final_output_state.reset()
         self.selected_text_path = None
         self.selected_wav_path = None
         self.selected_audio_input = None
@@ -999,6 +1181,7 @@ class UiState:
         self.audio_worker_state = None
 
         self.is_playing = False
+        self.is_paused = False
         self.playback_position_sec = 0.0
         self.loaded_playback_path = None
         self.last_mmd_wav_output_path = None
@@ -1011,11 +1194,13 @@ class UiState:
         [MS14-B2] Invalidate the current analysis results.
         Call this when inputs (paths or parameters) change.
         """
+        self.final_output_state.invalidate(reason="analysis_invalidated")
         self.analysis_result_valid = False
         self.current_timing_plan = None
         self.analysis_pending_rebuild = True
         self.clear_output_diagnostics_state()
         self.clear_adjustment_snapshot()
+        self.clear_output_edit_draft(source_changed=True)
         self.status_key = StatusKey.ANALYSIS_INVALIDATED
         self.clear_selection()
 
@@ -1025,12 +1210,19 @@ class UiState:
         """
         self.status_key = StatusKey.READY_FOR_ANALYSIS
 
-    def set_busy(self, is_busy: bool):
+    def set_busy(
+        self,
+        is_busy: bool,
+        *,
+        preserve_final_output_context: bool = False,
+    ):
         """
         [MS14-B2] Toggle busy state.
         """
         if is_busy:
             self.finish_current_adjustment_coalescing()
+            if not self.is_busy and not preserve_final_output_context:
+                self.final_output_state.invalidate_context()
         self.is_busy = is_busy
         if is_busy:
             self.status_key = StatusKey.BUSY
@@ -1092,6 +1284,7 @@ class UiState:
         if transcription_timing_result is not None:
             self.transcription_timing_result = transcription_timing_result
         self.current_timing_plan = timing_plan
+        self.clear_output_edit_draft(source_changed=True)
         self.analysis_result_valid = True
         self.analysis_pending_rebuild = False
         self.clear_output_diagnostics_state()
