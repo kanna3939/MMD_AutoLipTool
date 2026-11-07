@@ -1672,6 +1672,9 @@ class MainFrame(wx.Frame):
         self._init_icon()
         self._init_menu()
         self._init_ui()
+        self.placeholder_container.set_frame_grid_enabled(
+            self.mi_frame_grid.IsChecked()
+        )
         self._refresh_transition_application_status()
         self.right_pane.on_closure_restriction_selection = (
             self._on_closure_restriction_selection
@@ -1755,6 +1758,12 @@ class MainFrame(wx.Frame):
             "解析traceと操作順・変更・処理結果をdebugフォルダへ記録します（セッション限定）",
         )
         self.mi_debug_mode.Check(False)
+        self.mi_frame_grid = view_menu.AppendCheckItem(
+            wx.ID_ANY,
+            "フレームグリッドを表示",
+            "WaveformとPreviewに30fpsのframe gridを表示します（全体表示では非表示）",
+        )
+        self.mi_frame_grid.Check(True)
         
         # [MS15-B5] テーマサブメニュー
         self.theme_menu = wx.Menu()
@@ -1814,6 +1823,7 @@ class MainFrame(wx.Frame):
         )
         self.Bind(wx.EVT_MENU, self._on_mi_settings, self.mi_settings)
         self.Bind(wx.EVT_MENU, self._on_toggle_debug_mode, self.mi_debug_mode)
+        self.Bind(wx.EVT_MENU, self._on_toggle_frame_grid, self.mi_frame_grid)
         
         self.Bind(wx.EVT_MENU, lambda e: self._on_change_theme(ThemeMode.SYSTEM), self.mi_theme_system)
         self.Bind(wx.EVT_MENU, lambda e: self._on_change_theme(ThemeMode.LIGHT), self.mi_theme_light)
@@ -1850,6 +1860,13 @@ class MainFrame(wx.Frame):
         self.update_status(
             "デバッグ操作ログを記録中" if enabled else "デバッグ操作ログを一時停止しました"
         )
+
+    def _on_toggle_frame_grid(self, event: wx.CommandEvent) -> None:
+        enabled = bool(event.IsChecked())
+        self.mi_frame_grid.Check(enabled)
+        container = getattr(self, "placeholder_container", None)
+        if container is not None:
+            container.set_frame_grid_enabled(enabled)
 
     def _debug_operation_state_snapshot(self) -> dict[str, Any]:
         state = self.ui_state

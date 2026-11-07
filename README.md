@@ -4,7 +4,7 @@ Windows 向けの MikuMikuDance 用リップモーション生成ツールです
 音声ファイル 1 件（wav / mp3 / m4a）と、必要に応じて UTF-8 のテキストファイル 1 件を読み込み、選択したモデルプロファイルの母音モーフを使った VMD を生成します。プロファイルなしでは `あ / い / う / え / お`、英字プロファイルでは `A / I / U / E / O` を使用します。
 
 現在、GUI の wxPython への完全移行が完了しました（MS16 にて Qt/PySide6 を排除し、RightPane やプレビュー変形基盤の拡張が完了しました）。
-現在のバージョン: `Ver. 1.2.0`
+現在のバージョン: `Ver. 1.2.1`
 MS26で機能基準をCloseOut Aとして整理済みです。MS27-B4のonefile内部監査とB5のZIP・配布環境確認はPassです。B6監査では、Python 3.11 / 3.12のsource / build互換性をWindows onefile公開判定から外し、FFmpegのGitHub上の既存公開をユーザー判断で受容したため、release readinessはPassです。2026-09-18にユーザーがMS27 CloseOutを確定しました。GitHub Release、tag、push、merge、公開用source archive生成は別工程であり、未実施です。
 2026-09-14にユーザーから手動確認通過・実MMDでも問題なしとの報告を受領しました。これはユーザー確認の記録であり、Codex自身のGUI・実MMD操作結果ではありません。
 

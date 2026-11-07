@@ -121,6 +121,11 @@ class PlaceholderContainer(wx.Panel):
         self.pnl_waveform.set_viewport_sec(start_sec, end_sec)
         self.pnl_preview.set_viewport_sec(start_sec, end_sec)
 
+    def set_frame_grid_enabled(self, enabled: bool) -> None:
+        value = bool(enabled)
+        self.pnl_waveform.set_frame_grid_enabled(value)
+        self.pnl_preview.set_frame_grid_enabled(value)
+
     def clear_viewport_sec(self):
         self.pnl_waveform.clear_viewport_sec()
         self.pnl_preview.clear_viewport_sec()

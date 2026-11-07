@@ -14,6 +14,7 @@ from src.core.preview_hit_test import (
 )
 from src.core.preview_transform import PreviewData, PREVIEW_ROW_VOWELS, empty_preview_data, PreviewSegment
 from gui_wx.theme import ThemeManager
+from gui_wx.frame_grid import FrameGridTick, calculate_frame_grid_ticks
 
 
 _PAN_DRAG_SCALE = 0.5
@@ -195,7 +196,14 @@ class PreviewRenderer:
             "お": wx.Colour(171, 71, 188, 180), # Purple
         }
 
-    def render(self, gc: wx.GraphicsContext, rect: wx.Rect, font: wx.Font):
+    def render(
+        self,
+        gc: wx.GraphicsContext,
+        rect: wx.Rect,
+        font: wx.Font,
+        *,
+        frame_grid_enabled: bool = True,
+    ):
         palette = ThemeManager.get_palette()
         # 背景
         brush = wx.Brush(palette.preview_lane_bg)
@@ -205,9 +213,41 @@ class PreviewRenderer:
         if not self.model.is_valid or self.model.duration_sec <= 0.0:
             return
 
+        self._draw_frame_grid(gc, rect, frame_grid_enabled)
         self._draw_grid_and_labels(gc, rect, font)
         self._draw_lanes(gc, rect)
         self._draw_cursor(gc, rect)
+
+    def _draw_frame_grid(
+        self,
+        gc: wx.GraphicsContext,
+        rect: wx.Rect,
+        enabled: bool,
+    ) -> None:
+        frame_ticks: tuple[FrameGridTick, ...] = calculate_frame_grid_ticks(
+            self.model.viewport_start_sec,
+            self.model.viewport_end_sec,
+            self.model.duration_sec,
+            rect.width,
+            enabled=enabled,
+        )
+        if not frame_ticks:
+            return
+
+        minor_path = gc.CreatePath()
+        major_path = gc.CreatePath()
+        for tick in frame_ticks:
+            path = major_path if tick.is_major else minor_path
+            path.MoveToPoint(tick.x, 0)
+            path.AddLineToPoint(tick.x, rect.height)
+
+        palette = ThemeManager.get_palette()
+        if any(tick.is_minor for tick in frame_ticks):
+            gc.SetPen(wx.Pen(palette.waveform_grid, 1, wx.PENSTYLE_DOT))
+            gc.StrokePath(minor_path)
+        if any(tick.is_major for tick in frame_ticks):
+            gc.SetPen(wx.Pen(palette.waveform_grid, 1, wx.PENSTYLE_SOLID))
+            gc.StrokePath(major_path)
 
     def _draw_grid_and_labels(self, gc: wx.GraphicsContext, rect: wx.Rect, font: wx.Font):
         palette = ThemeManager.get_palette()
@@ -402,6 +442,7 @@ class PreviewPanel(wx.Panel):
         
         self.model = PreviewModel()
         self.renderer = PreviewRenderer(self.model)
+        self._frame_grid_enabled = True
         self.placeholder_msg: str = "[Placeholder] Preview エリア"
         self._loading_label = wx.StaticText(self, label="")
         self._loading_label.Hide()
@@ -510,6 +551,13 @@ class PreviewPanel(wx.Panel):
     def set_viewport_sec(self, start_sec: float, end_sec: float):
         """[MS15-B4] 表示範囲の更新"""
         self.model.set_viewport_sec(start_sec, end_sec)
+        self.Refresh()
+
+    def set_frame_grid_enabled(self, enabled: bool) -> None:
+        value = bool(enabled)
+        if self._frame_grid_enabled == value:
+            return
+        self._frame_grid_enabled = value
         self.Refresh()
 
     def clear_viewport_sec(self):
@@ -722,5 +770,10 @@ class PreviewPanel(wx.Panel):
             ThemeManager.draw_border(dc, rect, self)
             return
 
-        self.renderer.render(gc, rect, self.GetFont())
+        self.renderer.render(
+            gc,
+            rect,
+            self.GetFont(),
+            frame_grid_enabled=self._frame_grid_enabled,
+        )
         ThemeManager.draw_border(gc, rect, self)

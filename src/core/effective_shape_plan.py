@@ -24,11 +24,14 @@ from src.core.effective_shape_diagnostics import (
     ResolverDiagnosticsCollector,
     ensure_safe_failure_metadata,
 )
+from src.peak_value_resolver import (
+    MORPH_FRAME_OPEN_EPSILON,
+    resolve_close_peak_value,
+)
 
 
 VMD_FPS = 30
 SUPPORTED_MORPHS = ("あ", "い", "う", "え", "お")
-MORPH_FRAME_OPEN_EPSILON = 1e-9
 SILENCE_POLICY_ACOUSTIC_CORE_PRECEDENCE = "acoustic_core_precedence"
 NEARBY_GROUP_GAP_FRAMES = 4
 BOUNDARY_RELATIONS = frozenset(
@@ -58,6 +61,7 @@ class TimelinePointLike(Protocol):
 class ObservationLike(Protocol):
     event_index: int
     vowel: str
+    local_peak: float | None
     previous_non_zero_event_index: int | None
     next_non_zero_event_index: int | None
     span_start_index: int | None
@@ -149,6 +153,9 @@ class EffectiveShapeEvent:
     is_long_vowel_continuation: bool = False
     long_vowel_source_token_index: int | None = None
     long_vowel_role: str | None = None
+    closing_peak_value: float | None = None
+    closing_peak_used_observation: bool | None = None
+    closing_peak_fallback_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -156,6 +163,7 @@ class ShapeControlPoint:
     frame_no: int
     value: float
     point_kind: str
+    source_event_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1283,6 +1291,47 @@ def _apply_event_adjustments(
     return tuple(sorted(effective, key=lambda item: (item.peak_frame, item.base_event_index)))
 
 
+def _resolve_close_peak_values(
+    base_input: BaseTimingPlanInput,
+    events: tuple[EffectiveShapeEvent, ...],
+) -> tuple[EffectiveShapeEvent, ...]:
+    observations = base_input.observations
+    resolved: list[EffectiveShapeEvent] = []
+    for event in events:
+        peak_start_frame, peak_end_frame = _single_event_peak_frames(
+            event.start_frame,
+            event.peak_frame,
+            event.end_frame,
+        )
+        closing_peak_value = None
+        closing_peak_used_observation = None
+        closing_peak_fallback_reason = None
+        if peak_end_frame > peak_start_frame and peak_end_frame < event.end_frame:
+            observation = (
+                None
+                if observations is None
+                else observations[event.base_event_index]
+            )
+            resolution = resolve_close_peak_value(
+                observation,
+                peak_end_frame=peak_end_frame,
+                opening_peak=event.peak_value,
+                frame_rate=VMD_FPS,
+            )
+            closing_peak_value = resolution.value
+            closing_peak_used_observation = resolution.used_observation
+            closing_peak_fallback_reason = resolution.fallback_reason
+        resolved.append(
+            replace(
+                event,
+                closing_peak_value=closing_peak_value,
+                closing_peak_used_observation=closing_peak_used_observation,
+                closing_peak_fallback_reason=closing_peak_fallback_reason,
+            )
+        )
+    return tuple(resolved)
+
+
 def _candidate_handoffs(
     base_input: BaseTimingPlanInput,
     adjusted_indices: set[int],
@@ -2270,6 +2319,29 @@ def _next_same_vowel_boundary_event(
     )
 
 
+def _single_event_peak_frames(
+    start_frame: int,
+    peak_frame: int,
+    end_frame: int,
+) -> tuple[int, int]:
+    total_span = end_frame - start_frame
+    left_available = peak_frame - start_frame
+    right_available = end_frame - peak_frame
+    max_centered_half_width = min(left_available - 1, right_available - 1)
+    if peak_frame == start_frame:
+        return peak_frame, peak_frame
+    if total_span >= 4 and max_centered_half_width >= 1:
+        relative_half_width = min(left_available, right_available) // 2
+        top_half_width = max(1, min(relative_half_width, max_centered_half_width))
+        return peak_frame - top_half_width, peak_frame + top_half_width
+
+    peak_start = min(peak_frame, start_frame + 2)
+    peak_end = max(peak_frame, end_frame - 2)
+    if peak_end <= peak_start:
+        return peak_frame, peak_frame
+    return peak_start, peak_end
+
+
 def _shape_for_group(
     group: Sequence[EffectiveShapeEvent],
     *,
@@ -2300,34 +2372,35 @@ def _shape_for_group(
     )
     points: list[ShapeControlPoint] = [ShapeControlPoint(first.start_frame, 0.0, "start_zero")]
     if len(group) == 1:
-        total_span = first.end_frame - first.start_frame
-        left_available = first.peak_frame - first.start_frame
-        right_available = first.end_frame - first.peak_frame
-        max_centered_half_width = min(left_available - 1, right_available - 1)
+        peak_start, peak_end = _single_event_peak_frames(
+            first.start_frame,
+            first.peak_frame,
+            first.end_frame,
+        )
         if first.peak_frame == first.start_frame:
             # A source event can begin on its acoustic peak. In that case the
             # start-zero and peak occupy the same VMD frame; preserve the peak
             # so normalization does not erase the entire opening.
-            peak_start = peak_end = first.peak_frame
             points[0] = ShapeControlPoint(
                 first.peak_frame,
                 first.peak_value,
                 "top",
             )
-        elif total_span >= 4 and max_centered_half_width >= 1:
-            relative_half_width = min(left_available, right_available) // 2
-            top_half_width = max(1, min(relative_half_width, max_centered_half_width))
-            peak_start = first.peak_frame - top_half_width
-            peak_end = first.peak_frame + top_half_width
-        else:
-            peak_start = min(first.peak_frame, first.start_frame + 2)
-            peak_end = max(first.peak_frame, first.end_frame - 2)
-            if peak_end <= peak_start:
-                peak_start = peak_end = first.peak_frame
         if first.start_frame < peak_start < first.end_frame:
             points.append(ShapeControlPoint(peak_start, first.peak_value, "top"))
         if peak_end > peak_start and peak_end < first.end_frame:
-            points.append(ShapeControlPoint(peak_end, first.peak_value, "top"))
+            points.append(
+                ShapeControlPoint(
+                    peak_end,
+                    (
+                        first.peak_value
+                        if first.closing_peak_value is None
+                        else first.closing_peak_value
+                    ),
+                    "top",
+                    source_event_index=first.base_event_index,
+                )
+            )
     else:
         for index, event in enumerate(group):
             if index > 0:
@@ -2348,6 +2421,8 @@ def _shape_for_group(
 
     tail_anchor_frame = last.end_frame
     tail_anchor_value = last.peak_value
+    if len(group) == 1 and first.closing_peak_value is not None:
+        tail_anchor_value = first.closing_peak_value
     available_extension = None
     if manual_extension_limit_frame is not None:
         available_extension = max(0, manual_extension_limit_frame - last.end_frame)
@@ -3430,7 +3505,10 @@ def _build_effective_shape_plan(
     effective_events = _diagnostic_resolver_call(
         diagnostics,
         "handoff_apply",
-        lambda: _apply_cross_vowel_handoffs(raw_adjusted_events, handoffs),
+        lambda: _resolve_close_peak_values(
+            base_input,
+            _apply_cross_vowel_handoffs(raw_adjusted_events, handoffs),
+        ),
         fallback_code="unknown_contract_failure",
         field_code="observation",
     )
@@ -3544,9 +3622,12 @@ def _build_effective_shape_plan(
     comparison_effective_events = _diagnostic_resolver_call(
         diagnostics,
         "handoff_apply",
-        lambda: _apply_cross_vowel_handoffs(
-            comparison_raw_events,
-            comparison_handoffs,
+        lambda: _resolve_close_peak_values(
+            base_input,
+            _apply_cross_vowel_handoffs(
+                comparison_raw_events,
+                comparison_handoffs,
+            ),
         ),
         pass_kind="manual_comparison",
         fallback_code="unknown_contract_failure",

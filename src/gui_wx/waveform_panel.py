@@ -1,4 +1,5 @@
 import wx
+from gui_wx.frame_grid import FrameGridTick, calculate_frame_grid_ticks
 from gui_wx.theme import ThemeManager
 
 
@@ -24,6 +25,7 @@ class WaveformPanel(wx.Panel):
         self._playback_position_sec: float | None = None
         self._viewport_start_sec: float = 0.0
         self._viewport_end_sec: float = 0.0
+        self._frame_grid_enabled = True
         self._placeholder_msg: str = "WAVファイルが読み込まれていません"
         
         self.Bind(wx.EVT_PAINT, self._on_paint)
@@ -76,6 +78,22 @@ class WaveformPanel(wx.Panel):
         self._viewport_start_sec = 0.0
         self._viewport_end_sec = self._duration_sec
         self.Refresh()
+
+    def set_frame_grid_enabled(self, enabled: bool) -> None:
+        value = bool(enabled)
+        if self._frame_grid_enabled == value:
+            return
+        self._frame_grid_enabled = value
+        self.Refresh()
+
+    def _frame_grid_ticks(self, rect: wx.Rect) -> tuple[FrameGridTick, ...]:
+        return calculate_frame_grid_ticks(
+            self._viewport_start_sec,
+            self._viewport_end_sec,
+            self._duration_sec,
+            rect.width,
+            enabled=self._frame_grid_enabled,
+        )
 
     def _on_size(self, event):
         self.Refresh()
@@ -228,9 +246,10 @@ class WaveformPanel(wx.Panel):
             ThemeManager.draw_border(dc, rect, self)
             return
             
-        self._draw_grid(gc, rect)
+        frame_ticks = self._frame_grid_ticks(rect)
+        self._draw_grid(gc, rect, frame_ticks)
         self._draw_waveform(gc, rect)
-        self._draw_labels(gc, rect)
+        self._draw_labels(gc, rect, frame_ticks)
         self._draw_cursor(gc, rect)
         ThemeManager.draw_border(gc, rect, self)
         
@@ -244,14 +263,32 @@ class WaveformPanel(wx.Panel):
         y = max(0, (rect.height - text_h) // 2)
         dc.DrawText(self._placeholder_msg, x, y)
 
-    def _draw_grid(self, gc: wx.GraphicsContext, rect: wx.Rect):
-        path = gc.CreatePath()
-        path.MoveToPoint(0, rect.height / 2.0)
-        path.AddLineToPoint(rect.width, rect.height / 2.0)
+    def _draw_grid(
+        self,
+        gc: wx.GraphicsContext,
+        rect: wx.Rect,
+        frame_ticks: tuple[FrameGridTick, ...],
+    ):
+        minor_path = gc.CreatePath()
+        major_path = gc.CreatePath()
+        for tick in frame_ticks:
+            path = major_path if tick.is_major else minor_path
+            path.MoveToPoint(tick.x, 0)
+            path.AddLineToPoint(tick.x, rect.height)
+
         palette = ThemeManager.get_palette()
-        pen = wx.Pen(palette.waveform_grid, 1, wx.PENSTYLE_SOLID)
-        gc.SetPen(pen)
-        gc.StrokePath(path)
+        if any(tick.is_minor for tick in frame_ticks):
+            gc.SetPen(wx.Pen(palette.waveform_grid, 1, wx.PENSTYLE_DOT))
+            gc.StrokePath(minor_path)
+        if any(tick.is_major for tick in frame_ticks):
+            gc.SetPen(wx.Pen(palette.waveform_grid, 1, wx.PENSTYLE_SOLID))
+            gc.StrokePath(major_path)
+
+        center_path = gc.CreatePath()
+        center_path.MoveToPoint(0, rect.height / 2.0)
+        center_path.AddLineToPoint(rect.width, rect.height / 2.0)
+        gc.SetPen(wx.Pen(palette.waveform_grid, 1, wx.PENSTYLE_SOLID))
+        gc.StrokePath(center_path)
 
     def _draw_waveform(self, gc: wx.GraphicsContext, rect: wx.Rect):
         if not self._samples:
@@ -335,17 +372,41 @@ class WaveformPanel(wx.Panel):
         gc.SetPen(pen)
         gc.StrokePath(path)
 
-    def _draw_labels(self, gc: wx.GraphicsContext, rect: wx.Rect):
+    def _draw_labels(
+        self,
+        gc: wx.GraphicsContext,
+        rect: wx.Rect,
+        frame_ticks: tuple[FrameGridTick, ...],
+    ):
         palette = ThemeManager.get_palette()
         font = self.GetFont()
         gc.SetFont(font, palette.text_fg)
-        
+
         left_text = f"{self._viewport_start_sec:.2f} sec"
-        gc.DrawText(left_text, 5, rect.height - 20)
-        
+        left_x = 5
+        left_width, _ = gc.GetTextExtent(left_text)
+        gc.DrawText(left_text, left_x, rect.height - 20)
+
         right_text = f"{self._viewport_end_sec:.2f} sec"
-        tw, th = gc.GetTextExtent(right_text)
-        gc.DrawText(right_text, rect.width - tw - 5, rect.height - 20)
+        right_width, _ = gc.GetTextExtent(right_text)
+        right_x = rect.width - right_width - 5
+        gc.DrawText(right_text, right_x, rect.height - 20)
+
+        gc.SetFont(font, palette.muted_text)
+        previous_label_right = left_x + left_width + 4
+        for tick in frame_ticks:
+            if not tick.label_allowed:
+                continue
+            label = str(tick.frame_no)
+            label_width, _ = gc.GetTextExtent(label)
+            label_x = int(round(tick.x - label_width / 2.0))
+            label_right = label_x + label_width
+            if label_x < previous_label_right:
+                continue
+            if label_right + 4 > right_x:
+                continue
+            gc.DrawText(label, label_x, rect.height - 20)
+            previous_label_right = label_right + 4
 
     def _draw_cursor(self, gc: wx.GraphicsContext, rect: wx.Rect):
         if self._playback_position_sec is None:

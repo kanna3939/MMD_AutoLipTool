@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mmd-autolip-tool"
-version = "1.0.0"
+version = "1.2.1"
 description = "Desktop utility that generates MMD lip-motion VMD from UTF-8 text and wav/mp3/m4a audio."
 readme = "README.md"
 requires-python = ">=3.11"

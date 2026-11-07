@@ -6,12 +6,16 @@ from pathlib import Path
 import struct
 from typing import Iterable, Protocol, Sequence
 
+from src.peak_value_resolver import (
+    MORPH_FRAME_OPEN_EPSILON,
+    resolve_close_peak_value,
+)
+
 VMD_FPS = 30
 MAX_MORPH_VALUE = 0.5
 SUPPORTED_MORPHS = ("\u3042", "\u3044", "\u3046", "\u3048", "\u304a")
 PEAK_SIDE_FRAME_OFFSET = 2
 MAX_MORPH_FRAMES = 22000
-MORPH_FRAME_OPEN_EPSILON = 1e-9
 CONTINUITY_FLOOR_MORPH_VALUE = 0.1
 SAME_VOWEL_BURST_FLOOR_MORPH_VALUE = 0.1
 SAME_VOWEL_ZERO_SPAN_BRIDGE_RATIO = 0.65
@@ -3274,43 +3278,12 @@ def _resolve_peak_end_value_from_observation(
     observations: Sequence[ObservationLike] | None = None,
 ) -> float:
     observation = _observation_for_source_event_index(observations, source_event_index)
-    if observation is None:
-        return spec.peak_value
-
-    local_peak = getattr(observation, "local_peak", None)
-    times_sec = tuple(float(value) for value in getattr(observation, "rms_window_times_sec", ()))
-    values = tuple(float(value) for value in getattr(observation, "rms_window_values", ()))
-    if (
-        local_peak is None
-        or float(local_peak) <= 0.0
-        or not times_sec
-        or not values
-        or len(times_sec) != len(values)
-    ):
-        return spec.peak_value
-
-    target_sec = spec.peak_end_frame / VMD_FPS
-    forward_indices = [
-        index for index, time_sec in enumerate(times_sec)
-        if time_sec >= target_sec
-    ]
-    if forward_indices:
-        selected_index = min(forward_indices, key=lambda index: times_sec[index])
-    else:
-        selected_index = len(times_sec) - 1
-
-    selected_value = max(0.0, values[selected_index])
-    if selected_value <= 0.0:
-        return spec.peak_value
-
-    smoothed_value = selected_value
-    if selected_index + 1 < len(values):
-        support_value = max(0.0, values[selected_index + 1])
-        smoothed_value = (selected_value * 0.75) + (support_value * 0.25)
-
-    normalized_ratio = min(1.0, smoothed_value / float(local_peak))
-    decayed_value = round(spec.peak_value * normalized_ratio, 4)
-    return max(MORPH_FRAME_OPEN_EPSILON, min(spec.peak_value, decayed_value))
+    return resolve_close_peak_value(
+        observation,
+        peak_end_frame=spec.peak_end_frame,
+        opening_peak=spec.peak_value,
+        frame_rate=VMD_FPS,
+    ).value
 
 
 def _build_adjusted_trapezoid_spec(

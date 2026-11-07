@@ -18,6 +18,7 @@ from src.core.transition_acoustic import (
     sha256_file,
 )
 from src.core.morph_name_sets import JAPANESE_OUTPUT_NAMES, validate_output_morph_names
+from src.peak_value_resolver import MORPH_FRAME_OPEN_EPSILON
 from src.core.whisper_timing import (
     SpeechTimingAnchor,
     WhisperTimingError,
@@ -143,14 +144,14 @@ def _debug_rms_payload(
 _MIN_EVENT_DURATION_SEC = 1e-6
 _RMS_BOUNDARY_SEARCH_SEC = 0.08
 _TEXT_ANCHOR_TAIL_PAD_SEC = 0.16
-_RMS_THRESHOLD_RATIO = 0.35
+_RMS_INTERVAL_THRESHOLD_RATIO = 0.12
 _RMS_ABS_MIN_THRESHOLD = 0.01
 _RMS_MIN_REFINED_DURATION_SEC = 0.03
 _RMS_MAX_ADJACENT_OVERLAP_SEC = 0.02
 _PEAK_WINDOW_HALO_SEC = 0.03
 _RMS_UNAVAILABLE_FALLBACK_RATIO = 0.25
 _DEFAULT_MORPH_UPPER_LIMIT = 0.9
-_MORPH_FRAME_OPEN_EPSILON = 1e-9
+_MORPH_FRAME_OPEN_EPSILON = MORPH_FRAME_OPEN_EPSILON
 _SAME_VOWEL_BURST_LOW_POSITIVE_MAX = 0.2
 _SAME_VOWEL_MAX_CANDIDATE_SPAN_FRAMES = 2
 _SAME_VOWEL_MAX_CANDIDATE_OVERLAP_FRAMES = 1
@@ -2222,7 +2223,7 @@ def _refine_intervals_by_rms_series(
             )
             continue
 
-        threshold = max(local_peak * _RMS_THRESHOLD_RATIO, _RMS_ABS_MIN_THRESHOLD)
+        threshold = max(local_peak * _RMS_INTERVAL_THRESHOLD_RATIO, _RMS_ABS_MIN_THRESHOLD)
         start_candidate = _first_rms_above(
             times_sec=rms_series.times_sec,
             values=rms_series.values,
@@ -2464,7 +2465,6 @@ def _build_peak_value_evaluations(
             local_peak = selection.sample_value
             zero_reason = _classify_peak_zero_reason(
                 local_peak=local_peak,
-                global_peak=global_peak,
             )
         elif selection.source_frame_blocked and selection.reason == "silence_core_only":
             local_peak = selection.sample_value
@@ -2473,7 +2473,6 @@ def _build_peak_value_evaluations(
             local_peak = max(window_samples) if window_samples else None
             zero_reason = _classify_peak_zero_reason(
                 local_peak=local_peak,
-                global_peak=global_peak,
             )
         if zero_reason is None:
             normalized_peak = local_peak / global_peak
@@ -2876,7 +2875,6 @@ def reproject_peak_values_for_upper_limit(
             else:
                 reason = _classify_peak_zero_reason(
                     local_peak=local_peak,
-                    global_peak=normalized_global_peak,
                 )
                 if reason is not None:
                     peak_value = 0.0
@@ -3208,7 +3206,7 @@ def _resolve_bridge_candidate_reason(
 ) -> str | None:
     if observation.peak_value > 0.0:
         return None
-    if observation.reason in {"no_peak_in_window", "below_rel_threshold"}:
+    if observation.reason == "no_peak_in_window":
         return observation.reason
     return None
 
@@ -3939,14 +3937,11 @@ def _select_peak_sample_for_event(
 def _classify_peak_zero_reason(
     *,
     local_peak: float | None,
-    global_peak: float,
 ) -> str | None:
     if local_peak is None:
         return "no_peak_in_window"
     if local_peak < _RMS_ABS_MIN_THRESHOLD:
         return "below_abs_threshold"
-    if (local_peak / global_peak) < _RMS_THRESHOLD_RATIO:
-        return "below_rel_threshold"
     return None
 
 

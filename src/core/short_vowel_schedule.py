@@ -207,14 +207,125 @@ class _Option:
     short: bool
 
 
-def _replace_shape(shape, points, *, short=False):
+def _replace_shape(shape, points, *, resolved_tail=None):
     points = tuple(points)
-    tail = shape.resolved_tail
-    if tail is not None:
-        tail = replace(tail, effective_hold_frames=0, effective_softness_frames=0,
-                       has_slope_midpoint=False)
     return replace(shape, control_points=points, event_ranges=((points[0].frame_no,points[-1].frame_no),),
-                   resolved_tail=tail)
+                   resolved_tail=shape.resolved_tail if resolved_tail is None else resolved_tail)
+
+
+def _scheduled_tail(shape, event, end_frame, *, short=False):
+    tail = shape.resolved_tail
+    if tail is None:
+        return None
+    if short or end_frame < event.end_frame:
+        return replace(
+            tail,
+            effective_hold_frames=0,
+            effective_softness_frames=0,
+            has_slope_midpoint=False,
+        )
+    available = max(0, end_frame - event.end_frame)
+    if tail.available_extension_frames is not None:
+        available = min(available, tail.available_extension_frames)
+    effective_hold = min(tail.requested_hold_frames, available)
+    effective_softness = min(
+        tail.requested_softness_frames,
+        max(0, available - effective_hold),
+    )
+    return replace(
+        tail,
+        effective_hold_frames=effective_hold,
+        effective_softness_frames=effective_softness,
+        has_slope_midpoint=False,
+    )
+
+
+def _scheduled_control_points(shape, event, end_frame, *, short=False, peak_value=None):
+    if short:
+        peak_value = event.peak_value if peak_value is None else peak_value
+        return (
+            ShapeControlPoint(end_frame - 1, 0., "start_zero"),
+            ShapeControlPoint(end_frame, peak_value, "top"),
+            ShapeControlPoint(end_frame + 1, 0., "end_zero"),
+        ), _scheduled_tail(shape, event, end_frame - 1, short=True)
+
+    core_end = min(event.end_frame, end_frame)
+    points = [
+        point
+        for point in shape.control_points
+        if point.frame_no <= core_end
+        and point.point_kind not in {"hold", "slope_mid", "end_zero"}
+    ]
+    tail = _scheduled_tail(shape, event, end_frame)
+    if tail is None:
+        closing_point = ShapeControlPoint(end_frame, 0., "end_zero")
+        if points[-1].frame_no == end_frame:
+            points[-1] = closing_point
+        else:
+            points.append(closing_point)
+        return tuple(points), None
+
+    effective_hold = tail.effective_hold_frames
+    effective_softness = tail.effective_softness_frames
+    closing_frame = core_end + effective_hold + effective_softness
+    hold_frame = None
+    if effective_hold > 0:
+        hold_frame = max(core_end, closing_frame - effective_softness - 1)
+        if points[-1].frame_no < hold_frame < closing_frame:
+            points.append(ShapeControlPoint(hold_frame, event.peak_value, "hold"))
+    has_slope_midpoint = False
+    if effective_softness > 0:
+        midpoint = closing_frame - 1
+        minimum_midpoint = core_end if hold_frame is None else hold_frame + 1
+        midpoint = max(midpoint, minimum_midpoint)
+        if points[-1].frame_no < midpoint < closing_frame:
+            points.append(
+                ShapeControlPoint(
+                    midpoint,
+                    event.peak_value * tail.slope_ratio,
+                    "slope_mid",
+                )
+            )
+            has_slope_midpoint = True
+    closing_point = ShapeControlPoint(closing_frame, 0., "end_zero")
+    if points[-1].frame_no == closing_frame:
+        points[-1] = closing_point
+    else:
+        points.append(closing_point)
+    tail = replace(tail, has_slope_midpoint=has_slope_midpoint)
+    return tuple(points), tail
+
+
+def _schedule_change_reason(before, after, action):
+    before_tail = before.resolved_tail
+    after_tail = after.resolved_tail
+    if before_tail is None or after_tail is None:
+        return None
+    if action == "short_pulse" and (
+        after_tail.requested_hold_frames or after_tail.requested_softness_frames
+    ):
+        return "tail_not_applicable_to_short_pulse"
+    before_total = before_tail.effective_hold_frames + before_tail.effective_softness_frames
+    after_total = after_tail.effective_hold_frames + after_tail.effective_softness_frames
+    if after_total < before_total:
+        return "tail_reduced_for_schedule_overlap"
+    if (
+        after_tail.requested_softness_frames > 0
+        and after_tail.effective_softness_frames == 0
+        and not after_tail.has_slope_midpoint
+    ):
+        return "tail_slope_midpoint_unavailable"
+    return None
+
+
+def _tail_reduction_cost(before, after):
+    before_tail = before.resolved_tail
+    after_tail = after.resolved_tail
+    if before_tail is None or after_tail is None:
+        return 0
+    before_total = before_tail.effective_hold_frames + before_tail.effective_softness_frames
+    after_total = after_tail.effective_hold_frames + after_tail.effective_softness_frames
+    return max(0, before_total - after_total)
 
 
 def _options(prep, shape):
@@ -233,28 +344,47 @@ def _options(prep, shape):
         for k in sorted({round(base.time_sec*30)+d for d in (-1,0,1)},key=lambda k:(abs(k-base.time_sec*30),k)):
             if k-1 < 0 or k+1 > prep.base_input.source_duration_frames:
                 continue
-            points=(ShapeControlPoint(k-1,0.,"start_zero"),ShapeControlPoint(k,peak,"top"),ShapeControlPoint(k+1,0.,"end_zero"))
-            result.append(_Option(_replace_shape(shape,points,short=True),(abs(k-base.time_sec*30),0.,0),(k,k-1,k+1,k+1),True))
+            points, tail = _scheduled_control_points(
+                shape,
+                event,
+                k,
+                short=True,
+                peak_value=peak,
+            )
+            candidate = _replace_shape(shape, points, resolved_tail=tail)
+            result.append(_Option(
+                candidate,
+                (_tail_reduction_cost(shape,candidate),abs(k-base.time_sec*30),0),
+                (k,k-1,k+1,k+1),
+                True,
+            ))
         return tuple(result),True
     result=[]
-    # Moving an existing end zero earlier is the same operation as shortening
-    # the fall. Never move a normal peak or extend a normal terminal.
+    # Treat the selected zero frame as a joint event-end/tail candidate. The
+    # cost first minimizes lost effective tail frames so a feasible closing
+    # hold/softness is retained; overlap constraints can still force reduction.
     for end in range(shape.end_frame,max(event.peak_frame,shape.start_frame),-1):
         if end == shape.end_frame:
             candidate=shape
         else:
-            points=[p for p in shape.control_points if p.frame_no < event.peak_frame]
-            points.append(ShapeControlPoint(event.peak_frame,event.peak_value,"top"))
-            points.append(ShapeControlPoint(end,0.,"end_zero"))
-            candidate=_replace_shape(shape,points)
+            points, tail = _scheduled_control_points(shape, event, end)
+            candidate=_replace_shape(shape,points,resolved_tail=tail)
         if candidate.control_points[0].value > 0 and candidate.start_frame > 0:
             # A positive start after a distant same-morph terminal otherwise
             # interpolates across the entire gap in MMD.
             candidate=_replace_shape(candidate,(
                 ShapeControlPoint(candidate.start_frame-1,0.,"start_zero"),
                 *candidate.control_points))
-        result.append(_Option(candidate,(0.,abs(end-base.end_sec*30) if end!=shape.end_frame else 0.,shape.end_frame-end),
-                              (event.peak_frame,candidate.start_frame,end,end),False))
+        result.append(_Option(
+            candidate,
+            (
+                _tail_reduction_cost(shape,candidate),
+                abs(end-base.end_sec*30) if end!=shape.end_frame else 0.,
+                shape.end_frame-candidate.end_frame,
+            ),
+            (event.peak_frame,candidate.start_frame,end,candidate.end_frame),
+            False,
+        ))
     if not result:
         result=[_Option(shape,(0.,0.,0),(event.peak_frame,shape.start_frame,shape.end_frame,shape.end_frame),False)]
     return tuple(result),False
@@ -405,7 +535,8 @@ def schedule_vowels(preparation, baseline_shapes=None, *, cancelled: Callable[[]
     for i,(a,b) in enumerate(zip(shapes,selected)):
         if a!=b:
             action="short_pulse" if i in shorts else "early_release" if b.end_frame<a.end_frame else "closure_reposition"
-            changes.append(ScheduleChange(i,a.real_base_event_indices[0],action,a.control_points,b.control_points))
+            changes.append(ScheduleChange(i,a.real_base_event_indices[0],action,a.control_points,b.control_points,
+                                          _schedule_change_reason(a,b,action)))
     wire_shapes=_wire_shapes(selected)
     for i,s in enumerate(wire_shapes):
         if i not in mutable and any(len({t.vowel for t in wire_shapes if curve_value(t.control_points,x)>0})>2
@@ -422,7 +553,12 @@ def apply_schedule(preparation, resolution):
         shape=resolution.shapes[change.shape_index]
         e=events[change.owner]
         peak=max(shape.control_points,key=lambda p:p.value)
-        events[change.owner]=replace(e,start_frame=shape.start_frame,end_frame=shape.end_frame,
+        scheduled_end_frame = (
+            shape.end_frame
+            if change.action == "short_pulse"
+            else min(e.end_frame, shape.end_frame)
+        )
+        events[change.owner]=replace(e,start_frame=shape.start_frame,end_frame=scheduled_end_frame,
                                     peak_frame=peak.frame_no if change.action=="short_pulse" else e.peak_frame,
                                     peak_value=peak.value if change.action=="short_pulse" else e.peak_value)
     return replace(plan,shapes=resolution.shapes,effective_events=tuple(events),
@@ -448,7 +584,14 @@ def validate_schedule(preparation,resolution,baseline_shapes=None):
             if new not in tuple(o.shape for o in options):
                 raise ValueError("schedule contains an unauthorized placement")
             action="short_pulse" if short else "early_release" if new.end_frame<old.end_frame else "closure_reposition"
-            expected_changes.append(ScheduleChange(i,old.real_base_event_indices[0],action,old.control_points,new.control_points))
+            expected_changes.append(ScheduleChange(
+                i,
+                old.real_base_event_indices[0],
+                action,
+                old.control_points,
+                new.control_points,
+                _schedule_change_reason(old,new,action),
+            ))
     if tuple(expected_changes)!=resolution.changes or not _hard_valid(resolution.shapes,plan):
         raise ValueError("schedule changes or hard closure constraints are invalid")
     if resolution.closure_guards!=_closure_guards(resolution.shapes):
